@@ -33,8 +33,22 @@
       "edit": "Modifica",
       "copy": "Copia",
       "newFolder": "Cartella",
-      "move": "Sposta"
+      "move": "Sposta",
+      "copyHere": "Copia qui",
+      "rename": "Rinomina",
+      "deletePermanent": "Elimina definitivamente"
     }
+  },
+  "status": {
+    "selection_one": "{{count}} selezionato · {{size}}",
+    "selection_other": "{{count}} selezionati · {{size}}",
+    "selectionApprox_one": "{{count}} selezionato · ≥ {{size}}",
+    "selectionApprox_other": "{{count}} selezionati · ≥ {{size}}",
+    "files_one": "{{count}} file",
+    "files_other": "{{count}} file",
+    "folders_one": "{{count}} cartella",
+    "folders_other": "{{count}} cartelle",
+    "free": "{{drive}} {{size}} liberi"
   },
   "groups": {
     "drives": "Unità",

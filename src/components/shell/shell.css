@@ -101,22 +101,25 @@ body {
 .mc-splitter-x { top: 0; bottom: 0; right: -3px; width: 5px; cursor: col-resize; }
 .mc-splitter-y { left: 0; right: 0; top: -3px; height: 5px; cursor: row-resize; }
 
-/* Barra dei tasti funzione */
+/* Barra dei tasti funzione: vuota (Ctrl, combinazioni senza livello) resta alta uguale */
 .mc-fkeys {
-  display: flex; gap: 4px; padding: 4px 8px;
+  display: flex; gap: 4px; padding: 4px 8px; min-height: 29px; box-sizing: border-box;
   background: var(--mc-panel); border-top: 1px solid var(--mc-border);
 }
-.mc-fkey {
-  flex: 1; text-align: center; padding: 2px 0; font-size: 11px; color: var(--mc-muted);
+/* Due classi: batte `.mc-shell button` */
+.mc-fkeys .mc-fkey {
+  flex: 1; padding: 2px 0; font-size: 11px; color: var(--mc-muted); cursor: pointer;
   background: var(--mc-bg); border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
   white-space: nowrap; overflow: hidden;
 }
+.mc-fkeys .mc-fkey:hover { color: var(--mc-text); border-color: var(--mc-accent); }
 .mc-fkey b { color: var(--mc-text); font-weight: 600; margin-right: 6px; }
 
 .mc-status {
   display: flex; align-items: center; gap: 14px; padding: 0 10px; font-size: 11px; color: var(--mc-muted);
   background: var(--mc-panel); border-top: 1px solid var(--mc-border);
 }
-.mc-status-job { display: flex; align-items: center; gap: 6px; }
+.mc-status .mc-status-job { gap: 6px; cursor: pointer; }
+.mc-status-free { margin-left: auto; }
 .mc-status-prog { width: 70px; height: 3px; background: var(--mc-border); border-radius: var(--mc-radius); overflow: hidden; }
 .mc-status-prog i { display: block; height: 100%; background: var(--mc-accent); }

@@ -1,19 +1,70 @@
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useStatusJob } from "../../state/jobs";
-import { kindKey, progressOf } from "../panel/OperationsView";
+import { formatSize } from "../../lib/format";
+import { DRIVES } from "../../lib/paths";
+import { driveOf, summarize, summaryText } from "../../lib/status";
+import { useDrives } from "../../state/drives";
+import { activeJobs, kindKey, progressOf, useJobs } from "../../state/jobs";
+import { useLayout } from "../../state/layout";
+import { useTabViews } from "../../state/tabViews";
+import { useUi } from "../../state/ui";
 
-// Selezione e spazio libero arrivano nei task successivi (Task 20 rifinisce anche il job).
+const DRIVES_REFRESH_MS = 10_000;
+
+// Il git branch resta nascosto fino alla fase 5.
 export function StatusBar() {
-  const { t } = useTranslation();
-  const job = useStatusJob();
+  const { t, i18n } = useTranslation();
+  const lng = i18n.language;
+
+  const tabId = useLayout((s) => s.groups.find((g) => g.id === s.activeGroupId)?.activeTabId);
+  const path = useLayout((s) => (tabId ? s.tabs[tabId]?.path : undefined)) ?? DRIVES;
+  const view = useTabViews((s) => (tabId ? s.views[tabId] : undefined));
+  const drives = useDrives((s) => s.drives);
+  const order = useJobs((s) => s.order);
+  const jobs = useJobs((s) => s.jobs);
+
+  // Lo spazio libero cambia anche con la sidebar nascosta: la guardia contro le letture sovrapposte è in useDrives.refresh.
+  useEffect(() => {
+    const refresh = () => void useDrives.getState().refresh();
+    refresh();
+    const timer = setInterval(refresh, DRIVES_REFRESH_MS);
+    window.addEventListener("focus", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  // Il cursore non cambia rows/marked/dirSizes: spostarlo non rifà il conteggio (anche su 100.000 righe).
+  const summary = useMemo(
+    () => (view && path !== DRIVES ? summarize(view) : null),
+    [view?.rows, view?.marked, view?.dirSizes, path], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const running = useMemo(() => activeJobs(order, jobs), [order, jobs]);
+  const job = running[0];
   const pct = job ? Math.round(progressOf(job) * 100) : 0;
+  const drive = driveOf(path, drives);
+
   return (
     <footer className="mc-status">
+      {summary && <span>{summaryText(summary, t, lng)}</span>}
       {job && (
-        <span className="mc-status-job">
+        <button
+          type="button"
+          className="mc-status-job"
+          title={t("shell.panel.operations")}
+          onClick={() => useUi.setState({ bottomPanelVisible: true, bottomPanelTab: "operations" })}
+        >
           {t(kindKey(job.kind))}
+          {job.dest && ` → ${job.dest}`}
           <span className="mc-status-prog"><i style={{ width: `${pct}%` }} /></span>
           {pct}%
+          {running.length > 1 && ` +${running.length - 1}`}
+        </button>
+      )}
+      {drive && (
+        <span className="mc-status-free">
+          {t("status.free", { drive: drive.root.replace(/\\$/, ""), size: formatSize(drive.free, lng) })}
         </span>
       )}
     </footer>

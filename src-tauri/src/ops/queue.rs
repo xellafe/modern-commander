@@ -54,6 +54,8 @@ pub struct JobView {
     /// Media mobile sugli ultimi 2 s.
     pub speed_bps: u64,
     pub volumes: Vec<String>,
+    /// Cartella di destinazione di Copy/Move (per la barra di stato); `None` per le altre operazioni.
+    pub dest: Option<String>,
     /// Riepilogo finale: un errore per ogni elemento saltato dopo un errore.
     pub errors: Vec<AppError>,
     /// Prompt in attesa di risposta: `list_jobs` lo ripropone se l'evento `job-prompt` è andato perso.
@@ -258,6 +260,10 @@ impl Queue {
             current: None,
             speed_bps: 0,
             volumes,
+            dest: match spec.kind {
+                JobKind::Copy | JobKind::Move => spec.dest.as_ref().map(|d| d.to_string_lossy().into_owned()),
+                _ => None,
+            },
             errors: Vec::new(),
             prompt: None,
         };
@@ -551,6 +557,7 @@ mod tests {
             current: None,
             speed_bps: 0,
             volumes: v.iter().map(|s| s.to_string()).collect(),
+            dest: None,
             errors: vec![],
             prompt: None,
         }
@@ -698,6 +705,21 @@ mod tests {
         std::fs::write(a.join("x.txt"), b"x").unwrap();
         std::fs::write(a.join("s").join("y.txt"), b"y").unwrap();
         a
+    }
+
+    #[test]
+    fn view_carries_dest_for_copy_and_move_only() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("src"), d.path().join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("a.txt"), b"x").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let copy = q.enqueue(spec(JobKind::Copy, vec![src.join("a.txt")], Some(&dst), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, copy).dest.as_deref(), dst.to_str());
+        let mk = q.enqueue(spec(JobKind::Mkdir, vec![d.path().join("nuova")], None, ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, mk).dest, None);
+        assert_eq!(q.list().iter().map(|j| j.dest.clone()).collect::<Vec<_>>(), [dst.to_str().map(String::from), None]);
     }
 
     #[test]

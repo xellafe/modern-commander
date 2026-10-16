@@ -116,6 +116,8 @@ export interface JobView {
   /** Media mobile sugli ultimi 2 s. */
   speedBps: number;
   volumes: string[];
+  /** Cartella di destinazione di Copy/Move; null per le altre operazioni. */
+  dest: string | null;
   /** Un errore per ogni elemento saltato dopo un errore. */
   errors: AppError[];
   /** Prompt in attesa: da qui si recupera se l'evento `job-prompt` è andato perso. */

@@ -4,21 +4,12 @@ import { useTranslation } from "react-i18next";
 import { cancelJob, clearFinished, moveJob, pauseJob, resumeJob } from "../../ipc/api";
 import type { JobKind, JobView } from "../../ipc/types";
 import { formatEta, formatSize } from "../../lib/format";
-import { isFinished, useJobs } from "../../state/jobs";
+import { isFinished, kindKey, progressOf, useJobs } from "../../state/jobs";
 import "./panel.css";
 
 const ICONS: Record<JobKind["type"], LucideIcon> = {
   copy: Copy, move: FolderInput, delete: Trash2, mkdir: FolderPlus, rename: PencilLine,
 };
-
-export const kindKey = (k: JobKind) => (k.type === "delete" && k.permanent ? "ops.kind.deletePermanent" : `ops.kind.${k.type}`);
-
-/** Avanzamento da 0 a 1: per byte se ce ne sono, altrimenti per elementi. */
-export function progressOf(j: JobView): number {
-  if (j.state.type === "done") return 1;
-  if (j.bytesTotal > 0) return j.bytesDone / j.bytesTotal;
-  return j.filesTotal > 0 ? j.filesDone / j.filesTotal : 0;
-}
 
 const refresh = () => useJobs.getState().refresh().catch(console.error);
 

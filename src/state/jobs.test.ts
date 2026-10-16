@@ -10,7 +10,7 @@ test("conflictChoices on the same file offers only skip, rename and cancel", () 
 const job = (id: number, prompt: Prompt | null): JobView => ({
   id, kind: { type: "copy" }, state: { type: prompt ? "waiting" : "running" },
   filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0, current: null, speedBps: 0,
-  volumes: [], errors: [], prompt,
+  volumes: [], dest: null, errors: [], prompt,
 });
 const err = (promptId: number, jobId: number): Prompt => ({
   type: "error", promptId, jobId, error: { code: "IO", path: null, detail: null },

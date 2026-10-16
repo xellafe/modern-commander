@@ -1,12 +1,21 @@
 // Stato della coda delle operazioni (Task 15): job, ordine e prompt in attesa.
 import { create } from "zustand";
 import { listJobs, onJobPrompt, onJobUpdated, replyPrompt } from "../ipc/api";
-import type { JobId, JobView, Prompt, PromptReply } from "../ipc/types";
+import type { JobId, JobKind, JobView, Prompt, PromptReply } from "../ipc/types";
 import { joinPath } from "../lib/paths";
 import { parentPath } from "./tabView";
 import { useUi } from "./ui";
 
 export const isFinished = (j: JobView) => ["done", "failed", "cancelled"].includes(j.state.type);
+
+export const kindKey = (k: JobKind) => (k.type === "delete" && k.permanent ? "ops.kind.deletePermanent" : `ops.kind.${k.type}`);
+
+/** Avanzamento da 0 a 1: per byte se ce ne sono, altrimenti per elementi. */
+export function progressOf(j: JobView): number {
+  if (j.state.type === "done") return 1;
+  if (j.bytesTotal > 0) return j.bytesDone / j.bytesTotal;
+  return j.filesTotal > 0 ? j.filesDone / j.filesTotal : 0;
+}
 
 /** Prompt in attesa, il più vecchio per primo (gli id crescono nel backend). */
 export const pendingPrompts = (jobs: Record<JobId, JobView>, answered: Set<number>): Prompt[] =>
@@ -114,9 +123,6 @@ export function waitForJob(id: JobId): Promise<JobView> {
   });
 }
 
-/** Dato per la barra di stato: il primo job avviato e non finito, nell'ordine della coda. */
-export const useStatusJob = () =>
-  useJobs((s) => {
-    const id = s.order.find((i) => ["running", "waiting", "paused"].includes(s.jobs[i]?.state.type ?? ""));
-    return id === undefined ? null : s.jobs[id];
-  });
+/** Job avviati e non finiti (in corso, in attesa di risposta, in pausa), nell'ordine della coda: la barra di stato mostra il primo. */
+export const activeJobs = (order: JobId[], jobs: Record<JobId, JobView>): JobView[] =>
+  order.flatMap((i) => (["running", "waiting", "paused"].includes(jobs[i]?.state.type ?? "") ? [jobs[i]] : []));

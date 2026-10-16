@@ -33,8 +33,22 @@
       "edit": "Edit",
       "copy": "Copy",
       "newFolder": "New folder",
-      "move": "Move"
+      "move": "Move",
+      "copyHere": "Copy here",
+      "rename": "Rename",
+      "deletePermanent": "Delete permanently"
     }
+  },
+  "status": {
+    "selection_one": "{{count}} selected · {{size}}",
+    "selection_other": "{{count}} selected · {{size}}",
+    "selectionApprox_one": "{{count}} selected · ≥ {{size}}",
+    "selectionApprox_other": "{{count}} selected · ≥ {{size}}",
+    "files_one": "{{count}} file",
+    "files_other": "{{count}} files",
+    "folders_one": "{{count}} folder",
+    "folders_other": "{{count}} folders",
+    "free": "{{drive}} {{size}} free"
   },
   "groups": {
     "drives": "Drives",
