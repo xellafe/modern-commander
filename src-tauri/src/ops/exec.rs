@@ -24,7 +24,9 @@ pub const PART_SUFFIX: &str = ".mcpart";
 pub trait Executor: Send + Sync {
     /// `progress(byte_copiati)`; se restituisce `false` la copia si annulla.
     /// Con `overwrite` (come in `move_path`) si sostituisce anche una destinazione di sola lettura.
-    fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError>;
+    /// Con `flush` (o quando si sostituisce) la copia è scritta su disco prima di prendere il nome
+    /// finale: serve al Move tra volumi, che subito dopo elimina il sorgente.
+    fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, flush: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError>;
     /// Solo sulla stessa unità; tra unità diverse dà `NOT_SAME_DEVICE`.
     fn move_path(&self, src: &Path, dst: &Path, overwrite: bool) -> Result<(), AppError>;
     fn delete(&self, path: &Path, is_dir: bool, permanent: bool) -> Result<(), AppError>;
@@ -224,7 +226,7 @@ unsafe extern "system" fn on_progress(
 impl Executor for LocalExecutor {
     /// La copia si scrive in `dst.mcpart` e prende il nome finale solo quando è completa:
     /// una copia interrotta non lascia mai un `dst` troncato, e `dst` non viene mai riscritto sul posto.
-    fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, progress: Progress) -> Result<(), AppError> {
+    fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, flush: bool, progress: Progress) -> Result<(), AppError> {
         let dst_exists = exists(dst);
         if dst_exists && !overwrite {
             return Err(AppError::new(ErrorCode::AlreadyExists, Some(dst)));
@@ -234,9 +236,10 @@ impl Executor for LocalExecutor {
         }
         let part = part_path(dst);
         remove_part(&part); // residuo di un crash precedente: è nostro per nome
-        // Il flush serve solo quando si sostituisce: altrimenti un'interruzione di corrente
-        // non può far perdere una versione precedente.
-        let mut ctx = CopyCtx { progress, flush: dst_exists, flush_err: None };
+        // Il flush serve quando si sostituisce (si perderebbe la versione precedente) o quando il
+        // chiamante sta per eliminare il sorgente; altrimenti un'interruzione di corrente non può
+        // far perdere dati.
+        let mut ctx = CopyCtx { progress, flush: flush || dst_exists, flush_err: None };
         let data = &mut ctx as *mut CopyCtx as *const c_void;
         let copied = unsafe {
             CopyFileExW(&wide(src), &wide(&part), Some(on_progress), Some(data), None, COPY_FILE_FAIL_IF_EXISTS)
@@ -319,7 +322,7 @@ mod tests {
         let data: Vec<u8> = (0..3 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
         fs::write(&src, &data).unwrap();
         let mut seen = Vec::new();
-        X.copy_file(&src, &dst, false, &mut |n| {
+        X.copy_file(&src, &dst, false, false, &mut |n| {
             seen.push(n);
             true
         })
@@ -337,30 +340,35 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (src, dst) = (d.path().join("a.bin"), d.path().join("b.bin"));
         fs::write(&src, vec![7u8; 1024 * 1024]).unwrap();
-        let err = X.copy_file(&src, &dst, false, &mut |_| false).unwrap_err();
+        let err = X.copy_file(&src, &dst, false, false, &mut |_| false).unwrap_err();
         assert_eq!(err.code, ErrorCode::Cancelled);
         assert!(!exists(&dst) && !exists(&part_path(&dst)));
         // Un panico nel callback non attraversa l'FFI: diventa un annullamento.
-        let err = X.copy_file(&src, &dst, false, &mut |_| panic!("prova")).unwrap_err();
+        let err = X.copy_file(&src, &dst, false, false, &mut |_| panic!("prova")).unwrap_err();
         assert_eq!(err.code, ErrorCode::Cancelled);
         assert!(!exists(&dst) && !exists(&part_path(&dst)));
     }
 
     #[test]
-    fn overwrite_flushes_every_stream() {
+    fn overwrite_and_move_copy_flush_every_stream() {
         let d = tempfile::tempdir().unwrap();
         let (src, dst) = (d.path().join("scaricato.bin"), d.path().join("vecchio.bin"));
         fs::write(&src, vec![1u8; 64 * 1024]).unwrap();
         let mut ads = to_extended(&src).into_os_string();
         ads.push(":Zone.Identifier");
         fs::write(&ads, b"[ZoneTransfer]\r\nZoneId=3\r\n").unwrap();
-        // Senza dst da sostituire non si fa alcun flush.
+        // Senza dst da sostituire e senza `flush` non si fa alcun flush.
         FLUSHES.with(|c| c.set(0));
-        X.copy_file(&src, &dst, false, &mut |_| true).unwrap();
+        X.copy_file(&src, &dst, false, false, &mut |_| true).unwrap();
         assert_eq!(FLUSHES.with(|c| c.get()), 0);
         // Sostituendo, un flush per stream: dati principali + Zone.Identifier.
-        X.copy_file(&src, &dst, true, &mut |_| true).unwrap();
+        X.copy_file(&src, &dst, true, false, &mut |_| true).unwrap();
         assert_eq!(FLUSHES.with(|c| c.get()), 2);
+        // Copia per uno spostamento (dst nuovo, `flush`): ancora un flush per stream.
+        let moved = d.path().join("spostato.bin");
+        X.copy_file(&src, &moved, false, true, &mut |_| true).unwrap();
+        assert_eq!(FLUSHES.with(|c| c.get()), 4);
+        assert_eq!(fs::read(&moved).unwrap(), vec![1u8; 64 * 1024]);
         assert_eq!(fs::read(&dst).unwrap(), vec![1u8; 64 * 1024]);
         let mut dst_ads = to_extended(&dst).into_os_string();
         dst_ads.push(":Zone.Identifier");
@@ -373,7 +381,7 @@ mod tests {
         let (src, dst) = (d.path().join("a"), d.path().join("b"));
         fs::write(&src, b"nuovo").unwrap();
         fs::write(&dst, b"vecchio").unwrap();
-        let err = X.copy_file(&src, &dst, false, &mut |_| true).unwrap_err();
+        let err = X.copy_file(&src, &dst, false, false, &mut |_| true).unwrap_err();
         assert_eq!(err.code, ErrorCode::AlreadyExists);
         assert_eq!(fs::read(&dst).unwrap(), b"vecchio");
         assert!(!exists(&part_path(&dst)));
@@ -387,13 +395,13 @@ mod tests {
         fs::write(&dst, b"old").unwrap();
         // Un `.mcpart` rimasto da un crash precedente è nostro: si sostituisce.
         fs::write(part_path(&dst), b"residuo").unwrap();
-        X.copy_file(&src, &dst, true, &mut |_| true).unwrap();
+        X.copy_file(&src, &dst, true, false, &mut |_| true).unwrap();
         assert_eq!(fs::read(&dst).unwrap(), b"nuovi byte");
         assert!(!exists(&part_path(&dst)));
         // Sovrascrivere un file con se stesso (qui via hard link) è vietato.
         let link = d.path().join("link");
         fs::hard_link(&src, &link).unwrap();
-        assert_eq!(X.copy_file(&src, &link, true, &mut |_| true).unwrap_err().code, ErrorCode::SameFile);
+        assert_eq!(X.copy_file(&src, &link, true, false, &mut |_| true).unwrap_err().code, ErrorCode::SameFile);
         assert_eq!(fs::read(&link).unwrap(), b"nuovi byte");
         assert!(!exists(&part_path(&link)));
     }
@@ -410,7 +418,7 @@ mod tests {
             fs::set_permissions(p, perm).unwrap();
         };
         set_ro(&dst);
-        X.copy_file(&src, &dst, true, &mut |_| true).unwrap();
+        X.copy_file(&src, &dst, true, false, &mut |_| true).unwrap();
         assert_eq!(fs::read(&dst).unwrap(), b"nuovo");
         assert!(!fs::metadata(&dst).unwrap().permissions().readonly());
         fs::remove_file(&dst).unwrap();
@@ -431,7 +439,7 @@ mod tests {
         let src = d.path().join("s.txt");
         fs::write(&src, b"x").unwrap();
         let dst = dir.join("x.");
-        X.copy_file(&src, &dst, false, &mut |_| true).unwrap();
+        X.copy_file(&src, &dst, false, false, &mut |_| true).unwrap();
         assert_eq!(fs::read(to_extended(&dst)).unwrap(), b"x");
         X.delete(&dst, false, true).unwrap();
         assert!(!exists(&dst));
@@ -492,7 +500,7 @@ mod tests {
         assert_ne!(part_path(&d.path().join("n".repeat(251) + "m")), part);
         fs::write(&src, b"x").unwrap();
         fs::write(&part, b"residuo").unwrap();
-        X.copy_file(&src, &dst, false, &mut |_| true).unwrap();
+        X.copy_file(&src, &dst, false, false, &mut |_| true).unwrap();
         assert_eq!(fs::read(&dst).unwrap(), b"x");
         assert!(!exists(&part));
     }

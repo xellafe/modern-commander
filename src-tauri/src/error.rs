@@ -18,6 +18,8 @@ pub enum ErrorCode {
     /// Il volume non ha Cestino (rete, rimovibile, ...): serve la cancellazione definitiva.
     NoRecycleBin,
     InvalidName,
+    /// Elemento che l'operazione non sa trattare (per esempio una giunzione in Copy, detail `reparse_point`).
+    Unsupported,
     Cancelled,
     InvalidRequest,
     Io,

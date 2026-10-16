@@ -11,6 +11,7 @@ export type ErrorCode =
   | "NOT_SAME_DEVICE"
   | "NO_RECYCLE_BIN"
   | "INVALID_NAME"
+  | "UNSUPPORTED"
   | "CANCELLED"
   | "INVALID_REQUEST"
   | "IO";
@@ -102,10 +103,24 @@ export interface JobView {
   volumes: string[];
   /** Un errore per ogni elemento saltato dopo un errore. */
   errors: AppError[];
+  /** Prompt in attesa: da qui si recupera se l'evento `job-prompt` è andato perso. */
+  prompt: Prompt | null;
 }
 
 export type Prompt =
-  | { type: "conflict"; promptId: number; jobId: JobId; src: string; dst: string; srcMeta: Meta; dstMeta: Meta }
+  | {
+      type: "conflict";
+      promptId: number;
+      jobId: JobId;
+      src: string;
+      dst: string;
+      srcMeta: Meta;
+      dstMeta: Meta;
+      /** Sorgente e destinazione sono lo stesso file: niente "Sovrascrivi". */
+      sameFile: boolean;
+      /** Percorso completo libero da proporre per "Rinomina". */
+      suggestedName: string;
+    }
   | {
       type: "error";
       promptId: number;
@@ -126,5 +141,8 @@ export type ErrorAction = {
  * codice (solo `skip`; `deletePermanent` vale per i rifiuti del Cestino successivi; ignorato con `retry`).
  */
 export type PromptReply =
+  /** `rename`: percorso assoluto nella stessa cartella di `dst`, altrimenti INVALID_REQUEST. */
   | { type: "conflict"; decision: Decision; applyToAll: boolean }
+  /** Risolve il conflitto con una politica (non `ask`); con `applyToAll` vale per i successivi. */
+  | { type: "conflictPolicy"; policy: ConflictPolicy; applyToAll: boolean }
   | { type: "error"; action: ErrorAction; applyToAll: boolean };

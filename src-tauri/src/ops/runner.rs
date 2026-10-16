@@ -56,6 +56,7 @@ pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
         spec,
         items,
         bytes: 0,
+        policy: spec.policy.clone(),
         conflict_all: None,
         skip_all: Vec::new(),
         permanent_all: false,
@@ -77,6 +78,8 @@ struct Runner<'a> {
     items: Vec<FileItem>,
     /// Byte degli elementi già elaborati.
     bytes: u64,
+    /// Politica dei conflitti: quella del job, o quella scelta dall'utente "per tutti".
+    policy: ConflictPolicy,
     conflict_all: Option<Decision>,
     /// Codici di errore da saltare senza chiedere.
     skip_all: Vec<ErrorCode>,
@@ -226,7 +229,8 @@ impl Runner<'_> {
                 }
             }
             let (h, base) = (self.h, self.bytes);
-            self.exec.copy_file(src, &dst, overwrite, &mut |n| {
+            // Move: la copia deve essere su disco prima che si elimini il sorgente.
+            self.exec.copy_file(src, &dst, overwrite, is_move, &mut |n| {
                 h.update(|v| v.bytes_done = base + n);
                 h.checkpoint()
             })?;
@@ -241,10 +245,16 @@ impl Runner<'_> {
 
     /// Cartella di Copy/Move. Se è seguita dal proprio contenuto (espansa da `expand`) basta
     /// crearla; altrimenti (Move sulla stessa unità) si sposta in blocco con `move_path`.
+    /// Un collegamento a cartella (giunzione, symlink) si può solo spostare in blocco: copiarlo
+    /// darebbe una cartella vuota, quindi diventa un errore `UNSUPPORTED` (detail `reparse_point`).
     fn dir(&mut self, i: usize, item: &FileItem, a: &mut Attempt) -> Result<(), Fail> {
         let src = &item.src;
         let is_move = self.spec.kind == JobKind::Move;
         let expanded = self.items.get(i + 1).is_some_and(|n| n.src.starts_with(src));
+        let link = is_dir_link(src);
+        if link && !is_move {
+            return Err(unsupported_link(src).into());
+        }
         if a.created.is_none() {
             let mut dst = dst_of(item)?;
             let mut merge = false;
@@ -268,6 +278,9 @@ impl Runner<'_> {
                     Err(e) if e.code == ErrorCode::NotSameDevice => {}
                     r => return Ok(r?),
                 }
+            }
+            if link {
+                return Err(unsupported_link(src).into());
             }
             if !merge {
                 self.exec.mkdir(&dst)?;
@@ -301,8 +314,7 @@ impl Runner<'_> {
             policy: self.spec.policy.clone(),
         };
         // Le `dst` così costruite sono quelle originali dei figli (`dst` della cartella + nome).
-        let mut children = expand(&copy)?;
-        children.remove(0); // la cartella stessa
+        let children: Vec<FileItem> = expand(&copy)?.into_iter().skip(1).collect(); // senza la cartella stessa
         let (n, bytes) = (children.len() as u64, children.iter().map(|c| c.size).sum::<u64>());
         self.h.update(|v| {
             v.files_total += n;
@@ -319,11 +331,11 @@ impl Runner<'_> {
         let d = match self.conflict_all.clone() {
             Some(Decision::Rename(_)) => Decision::Rename(next_free_name(dst)),
             Some(d) => d,
-            None => match resolve(&self.spec.policy, src, dst, &sm, &dm) {
+            None => match resolve(&self.policy, src, dst, &sm, &dm) {
                 Ok(Some(d)) => d,
                 Ok(None) => self.ask_conflict(src, dst, sm, dm)?,
                 // Stesso file con Ask: l'utente può ancora rinominare o saltare.
-                Err(e) if e.code == ErrorCode::SameFile && self.spec.policy == ConflictPolicy::Ask => {
+                Err(e) if e.code == ErrorCode::SameFile && self.policy == ConflictPolicy::Ask => {
                     self.ask_conflict(src, dst, sm, dm)?
                 }
                 Err(e) => return Err(e.into()),
@@ -338,6 +350,8 @@ impl Runner<'_> {
 
     fn ask_conflict(&mut self, src: &Path, dst: &Path, src_meta: Meta, dst_meta: Meta) -> Result<Decision, Fail> {
         let job_id = self.h.job_id();
+        let same = same_file(src, dst);
+        let suggested = next_free_name(dst);
         let reply = self.h.ask(|prompt_id| Prompt::Conflict {
             prompt_id,
             job_id,
@@ -345,12 +359,26 @@ impl Runner<'_> {
             dst: dst.to_string_lossy().into_owned(),
             src_meta,
             dst_meta,
+            same_file: same,
+            suggested_name: suggested.to_string_lossy().into_owned(),
         });
-        let Some(PromptReply::Conflict { decision, apply_to_all }) = reply else { return Err(Fail::Stop) };
-        if apply_to_all && decision != Decision::Cancel {
-            self.conflict_all = Some(decision.clone());
+        match reply {
+            Some(PromptReply::Conflict { decision, apply_to_all }) => {
+                if apply_to_all && decision != Decision::Cancel {
+                    self.conflict_all = Some(decision.clone());
+                }
+                Ok(decision)
+            }
+            Some(PromptReply::ConflictPolicy { policy, apply_to_all }) => {
+                // `reply` rifiuta `Ask`: con le altre politiche `resolve` decide sempre.
+                let d = resolve(&policy, src, dst, &src_meta, &dst_meta)?.unwrap_or(Decision::Skip);
+                if apply_to_all {
+                    self.policy = policy;
+                }
+                Ok(d)
+            }
+            _ => Err(Fail::Stop),
         }
-        Ok(decision)
     }
 
     /// Crea `path` e le cartelle intermedie mancanti; se esiste già dà `ALREADY_EXISTS`.
@@ -384,6 +412,15 @@ fn exists(p: &Path) -> bool {
 /// Cartella vera: una giunzione o un symlink non si attraversano per unire.
 fn is_real_dir(p: &Path) -> bool {
     std::fs::symlink_metadata(to_extended(p)).is_ok_and(|m| m.is_dir())
+}
+
+/// Giunzione o collegamento simbolico (nella std di Windows `is_symlink` copre entrambi).
+fn is_dir_link(p: &Path) -> bool {
+    std::fs::symlink_metadata(to_extended(p)).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+fn unsupported_link(p: &Path) -> AppError {
+    AppError { detail: Some("reparse_point".into()), ..AppError::new(ErrorCode::Unsupported, Some(p)) }
 }
 
 fn is_empty_dir(p: &Path) -> bool {

@@ -123,6 +123,7 @@
     "NOT_SAME_DEVICE": "Source and destination are on different drives.",
     "NO_RECYCLE_BIN": "This drive has no Recycle Bin.",
     "INVALID_NAME": "The name is not valid.",
+    "UNSUPPORTED": "This item is not supported by the operation.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",
     "IO": "Input/output error."

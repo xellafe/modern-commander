@@ -7,12 +7,14 @@
 //! I job finiti restano in elenco finché il frontend non chiama `clear_finished`.
 
 use super::exec::Executor;
-use super::model::{Decision, JobKind, JobSpec, Meta};
+use super::model::{ConflictPolicy, Decision, JobKind, JobSpec, Meta};
 use super::runner;
 use crate::error::{AppError, ErrorCode};
-use crate::paths::{normalize_lexical, volume_key};
+use crate::paths::{normalize_lexical, same_path, volume_key};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -54,12 +56,25 @@ pub struct JobView {
     pub volumes: Vec<String>,
     /// Riepilogo finale: un errore per ogni elemento saltato dopo un errore.
     pub errors: Vec<AppError>,
+    /// Prompt in attesa di risposta: `list_jobs` lo ripropone se l'evento `job-prompt` è andato perso.
+    pub prompt: Option<Prompt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Prompt {
-    Conflict { prompt_id: u64, job_id: JobId, src: String, dst: String, src_meta: Meta, dst_meta: Meta },
+    /// `same_file`: sorgente e destinazione sono lo stesso file (la UI nasconde "Sovrascrivi");
+    /// `suggested_name`: percorso completo libero da proporre per "Rinomina".
+    Conflict {
+        prompt_id: u64,
+        job_id: JobId,
+        src: String,
+        dst: String,
+        src_meta: Meta,
+        dst_meta: Meta,
+        same_file: bool,
+        suggested_name: String,
+    },
     /// `can_delete_permanently`: il Cestino ha rifiutato l'elemento (`NO_RECYCLE_BIN`, oppure
     /// `INVALID_NAME` con detail `recycle_bin_unsupported_name`).
     Error { prompt_id: u64, job_id: JobId, error: AppError, can_elevate: bool, can_delete_permanently: bool },
@@ -79,7 +94,11 @@ impl Prompt {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PromptReply {
+    /// `Rename` deve essere un percorso assoluto nella stessa cartella di `dst`.
     Conflict { decision: Decision, apply_to_all: bool },
+    /// Risolve il conflitto con `resolve(policy, ..)` ("Solo se più recente", "Sovrascrivi se più
+    /// grande"...); con `apply_to_all` la politica vale per i conflitti successivi. Non `Ask`.
+    ConflictPolicy { policy: ConflictPolicy, apply_to_all: bool },
     Error { action: ErrorAction, apply_to_all: bool },
 }
 
@@ -119,8 +138,6 @@ struct Job {
     started: bool,
     pause: bool,
     cancel: bool,
-    /// Prompt in attesa: id e se è un conflitto.
-    prompt: Option<(u64, bool)>,
     reply: Option<PromptReply>,
     last_emit: Instant,
     samples: VecDeque<(Instant, u64)>,
@@ -207,7 +224,13 @@ impl Queue {
         self.set_state(job, JobState::Running);
         let h = Handle { q: self.clone(), id };
         std::thread::spawn(move || {
-            let end = runner::run(&h, &*h.q.0.exec, &spec);
+            // Un panico non deve lasciare il job `Running` con i volumi occupati per sempre.
+            // (Con `panic = "abort"` del profilo release l'app termina comunque.)
+            let end = catch_unwind(AssertUnwindSafe(|| runner::run(&h, &*h.q.0.exec, &spec))).unwrap_or_else(|_| {
+                let e = AppError { detail: Some("internal_panic".into()), ..AppError::new(ErrorCode::Io, None) };
+                h.update(|v| v.errors.push(e));
+                JobState::Failed
+            });
             h.finish(end);
         });
     }
@@ -232,6 +255,7 @@ impl Queue {
             speed_bps: 0,
             volumes,
             errors: Vec::new(),
+            prompt: None,
         };
         let job = Job {
             view,
@@ -239,7 +263,6 @@ impl Queue {
             started: false,
             pause: false,
             cancel: false,
-            prompt: None,
             reply: None,
             last_emit: Instant::now(),
             samples: VecDeque::new(),
@@ -306,16 +329,29 @@ impl Queue {
         Ok(())
     }
 
-    /// Un id sconosciuto o una risposta del tipo sbagliato danno `INVALID_REQUEST`.
+    /// Un id sconosciuto, una risposta del tipo sbagliato, una politica `Ask` o un `Rename` fuori
+    /// dalla cartella di `dst` danno `INVALID_REQUEST`, e il prompt resta in attesa.
     pub fn reply(&self, prompt_id: u64, reply: PromptReply) -> Result<(), AppError> {
+        let invalid = || AppError::new(ErrorCode::InvalidRequest, None);
         let mut st = self.lock();
-        let is_conflict = matches!(reply, PromptReply::Conflict { .. });
         let job = st
             .jobs
             .iter_mut()
-            .find(|j| j.prompt == Some((prompt_id, is_conflict)))
-            .ok_or_else(|| AppError::new(ErrorCode::InvalidRequest, None))?;
-        job.prompt = None;
+            .find(|j| j.view.prompt.as_ref().is_some_and(|p| p.prompt_id() == prompt_id))
+            .ok_or_else(invalid)?;
+        let valid = match (&job.view.prompt, &reply) {
+            (Some(Prompt::Conflict { dst, .. }), PromptReply::Conflict { decision: Decision::Rename(new), .. }) => {
+                valid_rename(new, Path::new(dst))
+            }
+            (Some(Prompt::Conflict { .. }), PromptReply::Conflict { .. }) => true,
+            (Some(Prompt::Conflict { .. }), PromptReply::ConflictPolicy { policy, .. }) => *policy != ConflictPolicy::Ask,
+            (Some(Prompt::Error { .. }), PromptReply::Error { .. }) => true,
+            _ => false,
+        };
+        if !valid {
+            return Err(invalid());
+        }
+        job.view.prompt = None;
         job.reply = Some(reply);
         self.0.cv.notify_all();
         Ok(())
@@ -328,6 +364,16 @@ impl Queue {
     pub fn clear_finished(&self) {
         self.lock().jobs.retain(|j| !j.view.state.is_finished());
     }
+}
+
+/// Nome nuovo scelto dall'utente: assoluto, nella stessa cartella di `dst` e diverso da `dst`.
+fn valid_rename(new: &Path, dst: &Path) -> bool {
+    let (n, d) = (normalize_lexical(new), normalize_lexical(dst));
+    let same_parent = match (n.parent(), d.parent()) {
+        (Some(a), Some(b)) => same_path(a, b),
+        _ => false,
+    };
+    new.is_absolute() && n.file_name().is_some() && same_parent && !same_path(&n, &d)
 }
 
 /// Lato worker di un job avviato.
@@ -386,36 +432,40 @@ impl Handle {
         }
     }
 
-    /// Invia il prompt e aspetta la risposta, senza timeout; `None` se il job viene annullato.
+    /// Invia il prompt (anche in `JobView.prompt`) e aspetta la risposta, senza timeout. Se il job
+    /// è stato messo in pausa nel frattempo, dopo la risposta aspetta anche la ripresa.
+    /// `None` se il job viene annullato.
     pub(crate) fn ask(&self, make: impl FnOnce(u64) -> Prompt) -> Option<PromptReply> {
         let mut st = self.q.lock();
         st.next_prompt += 1;
         let prompt = make(st.next_prompt);
         let job = st.job(self.id).expect("job del worker");
-        job.prompt = Some((prompt.prompt_id(), matches!(prompt, Prompt::Conflict { .. })));
+        job.view.prompt = Some(prompt.clone());
         job.reply = None;
         self.q.set_state(job, JobState::Waiting);
         (self.q.0.sink)(Event::Prompt(prompt));
-        loop {
+        let reply = loop {
             let job = st.job(self.id).expect("job del worker");
             if job.cancel {
-                job.prompt = None;
+                job.view.prompt = None;
                 return None;
             }
             if let Some(r) = job.reply.take() {
                 let s = if job.pause { JobState::Paused } else { JobState::Running };
                 self.q.set_state(job, s);
-                return Some(r);
+                break r;
             }
             st = self.q.wait(st);
-        }
+        };
+        drop(st);
+        self.checkpoint().then_some(reply)
     }
 
     fn finish(&self, end: JobState) {
         let mut st = self.q.lock();
         let job = st.job(self.id).expect("job del worker");
         job.view.current = None;
-        job.prompt = None;
+        job.view.prompt = None;
         self.q.set_state(job, end);
     }
 }
@@ -488,6 +538,7 @@ mod tests {
             speed_bps: 0,
             volumes: v.iter().map(|s| s.to_string()).collect(),
             errors: vec![],
+            prompt: None,
         }
     }
 
@@ -517,11 +568,24 @@ mod tests {
         cross_device: bool,
         /// Il Cestino rifiuta tutto con `NO_RECYCLE_BIN`.
         no_recycle: bool,
+        /// copy_file va in panico.
+        panic_copy: bool,
         copies: AtomicUsize,
+        /// Il parametro `flush` di ogni copy_file.
+        flushes: Mutex<Vec<bool>>,
     }
 
     impl Executor for Fake {
-        fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError> {
+        fn copy_file(
+            &self,
+            src: &Path,
+            dst: &Path,
+            overwrite: bool,
+            flush: bool,
+            progress: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<(), AppError> {
+            assert!(!self.panic_copy, "panico di prova");
+            self.flushes.lock().unwrap().push(flush);
             let n = self.copies.fetch_add(1, Ordering::SeqCst) + 1;
             if self.fail_copy_at == Some(n) {
                 return Err(AppError::new(ErrorCode::Io, Some(dst)));
@@ -535,7 +599,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
-            LocalExecutor.copy_file(src, dst, overwrite, progress)
+            LocalExecutor.copy_file(src, dst, overwrite, flush, progress)
         }
         fn move_path(&self, src: &Path, dst: &Path, overwrite: bool) -> Result<(), AppError> {
             if self.cross_device {
@@ -558,8 +622,12 @@ mod tests {
     }
 
     fn queue(exec: impl Executor + 'static) -> (Queue, mpsc::Receiver<Event>) {
+        queue_shared(Arc::new(exec))
+    }
+
+    fn queue_shared(exec: Arc<dyn Executor>) -> (Queue, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel();
-        let q = Queue::new(Arc::new(exec), Arc::new(move |e| {
+        let q = Queue::new(exec, Arc::new(move |e| {
             let _ = tx.send(e);
         }));
         (q, rx)
@@ -625,10 +693,16 @@ mod tests {
         let Prompt::Conflict { job_id, src: ps, dst: pd, src_meta, dst_meta, .. } = &p else { panic!("{p:?}") };
         assert_eq!((*job_id, ps.as_str(), pd.as_str()), (id, src.join("a.txt").to_str().unwrap(), dst.join("a.txt").to_str().unwrap()));
         assert_eq!((src_meta.size, dst_meta.size), (5, 7));
-        assert_eq!(q.list()[0].state, Waiting);
+        let Prompt::Conflict { same_file, suggested_name, .. } = &p else { unreachable!() };
+        assert!(!same_file);
+        assert_eq!(suggested_name.as_str(), dst.join("a (2).txt").to_str().unwrap());
+        // Il prompt si recupera anche da `list` (evento perso, webview ricaricata).
+        let listed = &q.list()[0];
+        assert_eq!((listed.state, listed.prompt.as_ref()), (Waiting, Some(&p)));
         reply_conflict(&q, &p, Decision::Skip, true);
+        assert_eq!(q.list()[0].prompt, None);
         let v = finish(&rx, id);
-        assert_eq!((v.state, v.files_done, v.files_total), (Done, 2, 2));
+        assert_eq!((v.state, v.files_done, v.files_total, v.prompt), (Done, 2, 2, None));
         assert!(v.errors.is_empty());
         for n in ["a.txt", "b.txt"] {
             assert_eq!(std::fs::read(dst.join(n)).unwrap(), b"vecchio");
@@ -646,8 +720,8 @@ mod tests {
         }
         let dest = d.path().join("D");
         std::fs::create_dir(&dest).unwrap();
-        let fake = Fake { fail_copy_at: Some(2), cross_device: true, ..Default::default() };
-        let (q, rx) = queue(fake);
+        let fake = Arc::new(Fake { fail_copy_at: Some(2), cross_device: true, ..Default::default() });
+        let (q, rx) = queue_shared(fake.clone());
         let id = q.enqueue(spec(JobKind::Move, vec![a.clone()], Some(&dest), ConflictPolicy::Ask));
         let p = next_prompt(&rx);
         let Prompt::Error { error, can_elevate, can_delete_permanently, .. } = &p else { panic!("{p:?}") };
@@ -665,6 +739,8 @@ mod tests {
         assert!(!exists(&a.join("s")));
         assert!(exists(&a));
         assert_eq!(v.files_done, v.files_total);
+        // Ogni copia di uno spostamento è scritta su disco prima di eliminare il sorgente.
+        assert_eq!(*fake.flushes.lock().unwrap(), vec![true; 3]);
     }
 
     #[test]
@@ -695,9 +771,19 @@ mod tests {
         // Copia nella propria cartella madre: la cartella è in conflitto con se stessa.
         let id = q.enqueue(spec(JobKind::Copy, vec![a.clone()], Some(d.path()), ConflictPolicy::Ask));
         let p = next_prompt(&rx);
-        let Prompt::Conflict { src, .. } = &p else { panic!("{p:?}") };
+        let Prompt::Conflict { src, same_file, suggested_name, .. } = &p else { panic!("{p:?}") };
         assert_eq!(src.as_str(), a.to_str().unwrap());
+        assert!(same_file);
         let new = next_free_name(&a);
+        assert_eq!(suggested_name.as_str(), new.to_str().unwrap());
+        // Un nome nuovo relativo, in un'altra cartella o uguale a dst è rifiutato; il prompt resta.
+        for bad in [PathBuf::from("a (2)"), d.path().join("altro").join("a (2)"), a.clone()] {
+            let r = q.reply(p.prompt_id(), PromptReply::Conflict { decision: Decision::Rename(bad.clone()), apply_to_all: false });
+            assert_eq!(r.unwrap_err().code, ErrorCode::InvalidRequest, "{bad:?}");
+        }
+        let r = q.reply(p.prompt_id(), PromptReply::ConflictPolicy { policy: ConflictPolicy::Ask, apply_to_all: false });
+        assert_eq!(r.unwrap_err().code, ErrorCode::InvalidRequest);
+        assert_eq!(q.list()[0].prompt.as_ref(), Some(&p));
         reply_conflict(&q, &p, Decision::Rename(new.clone()), false);
         let v = finish(&rx, id);
         assert_eq!((v.state, v.files_done, v.files_total), (Done, 4, 4));
@@ -796,6 +882,122 @@ mod tests {
         assert!(files.iter().all(|f| !exists(f)));
     }
 
+    /// src/{a.txt (più grande), b.txt (più piccolo)} contro dst/{a.txt, b.txt} = "vecchio", più vecchi.
+    fn policy_case() -> (tempfile::TempDir, Vec<PathBuf>, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("src"), d.path().join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("a.txt"), b"nuovo e grande").unwrap();
+        std::fs::write(src.join("b.txt"), b"n").unwrap();
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        for n in ["a.txt", "b.txt"] {
+            std::fs::write(dst.join(n), b"vecchio").unwrap();
+            std::fs::File::options().write(true).open(dst.join(n)).unwrap().set_modified(old).unwrap();
+        }
+        (d, vec![src.join("a.txt"), src.join("b.txt")], dst)
+    }
+
+    #[test]
+    fn conflict_policy_reply_applies_to_all() {
+        let (_d, srcs, dst) = policy_case();
+        let (q, rx) = queue(LocalExecutor);
+        let id = q.enqueue(spec(JobKind::Copy, srcs, Some(&dst), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        q.reply(p.prompt_id(), PromptReply::ConflictPolicy { policy: ConflictPolicy::OverwriteIfLarger, apply_to_all: true }).unwrap();
+        assert_eq!(finish(&rx, id).state, Done); // nessun secondo prompt
+        assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"nuovo e grande");
+        assert_eq!(std::fs::read(dst.join("b.txt")).unwrap(), b"vecchio");
+    }
+
+    #[test]
+    fn conflict_policy_reply_for_current_only() {
+        let (_d, srcs, dst) = policy_case();
+        let (q, rx) = queue(LocalExecutor);
+        let id = q.enqueue(spec(JobKind::Copy, srcs, Some(&dst), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        q.reply(p.prompt_id(), PromptReply::ConflictPolicy { policy: ConflictPolicy::OverwriteIfNewer, apply_to_all: false }).unwrap();
+        let p = next_prompt(&rx); // b.txt chiede di nuovo
+        let Prompt::Conflict { dst: pd, .. } = &p else { panic!("{p:?}") };
+        assert_eq!(pd.as_str(), dst.join("b.txt").to_str().unwrap());
+        reply_conflict(&q, &p, Decision::Skip, false);
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"nuovo e grande");
+        assert_eq!(std::fs::read(dst.join("b.txt")).unwrap(), b"vecchio");
+    }
+
+    #[test]
+    fn retry_after_pause_while_waiting_waits_for_resume() {
+        let d = tempfile::tempdir().unwrap();
+        let (f, dest) = (d.path().join("f.txt"), d.path().join("D"));
+        std::fs::write(&f, b"x").unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        let fake = Arc::new(Fake { fail_copy_at: Some(1), ..Default::default() });
+        let (q, rx) = queue_shared(fake.clone());
+        let id = q.enqueue(spec(JobKind::Copy, vec![f], Some(&dest), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        q.pause(id).unwrap();
+        assert_eq!(q.list()[0].state, Waiting);
+        reply_error(&q, &p, ErrorAction::Retry, false);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!((q.list()[0].state, fake.copies.load(Ordering::SeqCst)), (Paused, 1));
+        q.resume(id).unwrap();
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 2);
+        assert!(exists(&dest.join("f.txt")));
+    }
+
+    #[test]
+    fn worker_panic_fails_the_job_and_frees_its_volume() {
+        // Il panico di prova non deve sporcare l'output dei test.
+        static QUIET: std::sync::Once = std::sync::Once::new();
+        QUIET.call_once(|| {
+            let default = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                if !info.to_string().contains("panico di prova") {
+                    default(info);
+                }
+            }));
+        });
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("f.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let (q, rx) = queue(Fake { panic_copy: true, ..Default::default() });
+        let id = q.enqueue(spec(JobKind::Copy, vec![f], Some(&d.path().join("D")), ConflictPolicy::Ask));
+        let v = finish(&rx, id);
+        assert_eq!(v.state, Failed);
+        assert_eq!((v.errors[0].code, v.errors[0].detail.as_deref()), (ErrorCode::Io, Some("internal_panic")));
+        // Un job successivo sullo stesso volume parte.
+        let new = d.path().join("nuova");
+        let id = q.enqueue(spec(JobKind::Mkdir, vec![new.clone()], None, ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert!(new.is_dir());
+    }
+
+    #[test]
+    fn directory_link_in_copy_is_unsupported() {
+        let d = tempfile::tempdir().unwrap();
+        let target = tree(d.path());
+        let p = d.path().join("p");
+        std::fs::create_dir(&p).unwrap();
+        let link = p.join("link");
+        let ok = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&target).output().unwrap();
+        assert!(ok.status.success());
+        let dest = d.path().join("D");
+        std::fs::create_dir(&dest).unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let id = q.enqueue(spec(JobKind::Copy, vec![p], Some(&dest), ConflictPolicy::Ask));
+        let pr = next_prompt(&rx);
+        let Prompt::Error { error, .. } = &pr else { panic!("{pr:?}") };
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!((error.path.as_deref(), error.detail.as_deref()), (link.to_str(), Some("reparse_point")));
+        reply_error(&q, &pr, ErrorAction::Skip, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 1));
+        assert!(dest.join("p").is_dir());
+        assert!(!exists(&dest.join("p").join("link")));
+    }
+
     #[test]
     fn serde_shapes() {
         let p = Prompt::Error {
@@ -814,9 +1016,29 @@ mod tests {
         assert_eq!(r, PromptReply::Conflict { decision: Decision::Rename("x".into()), apply_to_all: true });
         let r: PromptReply = serde_json::from_value(json!({"type": "error", "action": {"type": "deletePermanent"}, "applyToAll": false})).unwrap();
         assert_eq!(r, PromptReply::Error { action: ErrorAction::DeletePermanent, apply_to_all: false });
+        let r: PromptReply = serde_json::from_value(
+            json!({"type": "conflictPolicy", "policy": {"type": "overwriteIfNewer"}, "applyToAll": true}),
+        )
+        .unwrap();
+        assert_eq!(r, PromptReply::ConflictPolicy { policy: ConflictPolicy::OverwriteIfNewer, apply_to_all: true });
+        let c = Prompt::Conflict {
+            prompt_id: 1,
+            job_id: 2,
+            src: "s".into(),
+            dst: "d".into(),
+            src_meta: Meta { size: 1, modified_ms: 2 },
+            dst_meta: Meta { size: 3, modified_ms: 4 },
+            same_file: true,
+            suggested_name: "d (2)".into(),
+        };
+        let cv = serde_json::to_value(&c).unwrap();
+        assert_eq!((&cv["type"], &cv["sameFile"], &cv["suggestedName"]), (&json!("conflict"), &json!(true), &json!("d (2)")));
+        assert_eq!(cv["srcMeta"], json!({"size": 1, "modifiedMs": 2}));
         let v = serde_json::to_value(view(3, &["C:"], Waiting)).unwrap();
         assert_eq!(v["state"], json!({"type": "waiting"}));
         assert_eq!(v["filesDone"], json!(0));
         assert_eq!(v["speedBps"], json!(0));
+        assert_eq!(v["prompt"], json!(null));
+        assert_eq!(serde_json::to_value(ErrorCode::Unsupported).unwrap(), json!("UNSUPPORTED"));
     }
 }
