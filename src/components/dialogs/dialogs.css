@@ -1,0 +1,11 @@
+/* Hotlist di cartelle (Ctrl+D): colonne a cascata, posizionate in fixed sul punto di apertura */
+.mc-hotlist { position: fixed; z-index: 30; display: flex; align-items: flex-start; width: max-content; outline: 0; }
+.mc-hotlist-col {
+  box-sizing: border-box; min-width: 220px; max-width: 420px; max-height: 70vh; overflow: auto; padding-bottom: 4px;
+  background: var(--mc-panel); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); box-shadow: var(--mc-shadow);
+}
+.mc-hotlist-col + .mc-hotlist-col { margin-left: -1px; }
+.mc-hotlist-label { display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+.mc-hotlist-sep { height: 1px; margin: 4px 0; background: var(--mc-border); }
+.mc-hotlist .mc-menu-item.open { background: var(--mc-selection-inactive); }
+.mc-hotlist .mc-menu-item.empty { color: var(--mc-muted); }

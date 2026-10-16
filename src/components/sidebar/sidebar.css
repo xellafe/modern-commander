@@ -1,0 +1,39 @@
+/* Vista Esplora e Preferiti */
+.mc-side-h {
+  padding: 8px 12px 4px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mc-muted);
+}
+.mc-side-empty { padding: 4px 12px; color: var(--mc-muted); }
+.mc-side-tools { display: flex; justify-content: flex-end; gap: 4px; padding: 0 8px 4px; }
+.mc-shell .mc-side-tools button { width: 22px; height: 20px; border-radius: var(--mc-radius); }
+.mc-shell .mc-side-tools button.on { color: var(--mc-text); border-color: var(--mc-border); background: var(--mc-bg); }
+
+.mc-tree-row {
+  display: flex; align-items: center; gap: 4px; box-sizing: border-box; min-width: 0;
+  height: var(--mc-row-height); padding-right: 8px; white-space: nowrap;
+  margin: 0 var(--mc-row-inset); border-radius: var(--mc-radius);
+}
+.mc-tree-row:hover { background: var(--mc-selection-inactive); }
+.mc-tree-row.on { background: var(--mc-selection); }
+.mc-tree-row.err { color: var(--mc-muted); }
+.mc-tree-chev { display: flex; flex: none; align-items: center; justify-content: center; width: 14px; color: var(--mc-muted); }
+.mc-tree-icon { flex: none; color: var(--mc-icon-folder); }
+.mc-tree-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mc-tree-detail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--mc-muted); font-size: 11px; }
+.mc-tree-actions { display: none; flex: none; gap: 2px; }
+.mc-tree-row:hover .mc-tree-actions { display: flex; }
+.mc-shell .mc-tree-actions button, .mc-shell .mc-tree-sep button { width: 18px; height: 18px; border-radius: var(--mc-radius); }
+.mc-shell .mc-tree-actions button:hover, .mc-shell .mc-tree-sep button:hover { background: var(--mc-selection); }
+.mc-tree-rename {
+  flex: 1; min-width: 0; height: 18px; padding: 0 4px; outline: 0;
+  border: 1px solid var(--mc-accent); border-radius: var(--mc-radius);
+  background: var(--mc-bg); color: var(--mc-text); font: inherit;
+}
+.mc-tree-sep { display: flex; justify-content: flex-end; height: 8px; margin: 4px 12px; border-top: 1px solid var(--mc-border); }
+
+/* Trascinamento nella vista Preferiti */
+.mc-fav.fill { min-height: calc(100% - 28px); }
+.mc-fav .dragging { opacity: 0.5; }
+.mc-fav .drop-before { box-shadow: inset 0 2px 0 var(--mc-accent); }
+.mc-fav .drop-after { box-shadow: inset 0 -2px 0 var(--mc-accent); }
+.mc-fav .drop-into { box-shadow: inset 0 0 0 1px var(--mc-accent); background: var(--mc-selection); }
+.mc-fav.drop-end { box-shadow: inset 0 -2px 0 var(--mc-accent); }

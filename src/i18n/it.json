@@ -55,6 +55,17 @@
       "attributes": "Attr."
     }
   },
+  "hotlist": {
+    "title": "Hotlist cartelle",
+    "addCurrent": "Aggiungi cartella corrente",
+    "configure": "Configura…",
+    "empty": "Nessun preferito",
+    "newSubmenu": "Nuovo sottomenu",
+    "rename": "Rinomina",
+    "delete": "Elimina",
+    "edit": "Modifica preferiti",
+    "done": "Fine"
+  },
   "commands": {
     "mc_CursorUp": "Cursore su",
     "mc_CursorDown": "Cursore giù",
@@ -76,6 +87,7 @@
     "cm_GotoPreviousDir": "Indietro",
     "cm_GotoNextDir": "Avanti",
     "cm_DirectoryHistory": "Cronologia cartelle",
+    "cm_DirectoryHotlist": "Hotlist cartelle",
     "cm_RereadSource": "Aggiorna",
     "cm_SrcOpenDrives": "Scegli unità",
     "cm_QuickFilter": "Filtro rapido",

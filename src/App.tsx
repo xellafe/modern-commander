@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { buildKeymap, loadKeymap } from "./commands/keymap";
 import { DEFAULT_KEYMAP } from "./commands/tcKeymap";
 import { useKeyboard } from "./commands/useKeyboard";
+import { HotlistMenu } from "./components/dialogs/HotlistMenu";
 import { GroupsArea } from "./components/groups/GroupsArea";
 import "./components/shell/shell.css";
 import { ActivityBar } from "./components/shell/ActivityBar";
@@ -33,6 +34,7 @@ export default function App() {
       {bottomPanelVisible && <BottomPanel />}
       <FKeyBar />
       <StatusBar />
+      <HotlistMenu />
     </div>
   );
 }

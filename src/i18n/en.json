@@ -55,6 +55,17 @@
       "attributes": "Attr"
     }
   },
+  "hotlist": {
+    "title": "Directory hotlist",
+    "addCurrent": "Add current folder",
+    "configure": "Configure…",
+    "empty": "No favorites yet",
+    "newSubmenu": "New submenu",
+    "rename": "Rename",
+    "delete": "Delete",
+    "edit": "Edit favorites",
+    "done": "Done"
+  },
   "commands": {
     "mc_CursorUp": "Cursor up",
     "mc_CursorDown": "Cursor down",
@@ -76,6 +87,7 @@
     "cm_GotoPreviousDir": "Back",
     "cm_GotoNextDir": "Forward",
     "cm_DirectoryHistory": "Folder history",
+    "cm_DirectoryHotlist": "Directory hotlist",
     "cm_RereadSource": "Refresh",
     "cm_SrcOpenDrives": "Choose drive",
     "cm_QuickFilter": "Quick filter",
