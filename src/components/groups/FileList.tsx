@@ -230,8 +230,8 @@ const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSi
           <span className="c-ext">{ext}</span>
           <span className={`c-size${sizing ? " sizing" : ""}`} title={sizing ? t("groups.sizing") : undefined}>
             {skipped > 0 && (
-              <span className="mc-skipped" title={t("groups.skipped", { count: skipped })}>
-                <TriangleAlert size={10} />
+              <span className="mc-skipped" title={t("groups.skipped", { count: skipped })} role="img" aria-label={t("groups.skipped", { count: skipped })}>
+                <TriangleAlert size={10} aria-hidden />
               </span>
             )}
             {sizeText(row, dirSize, sizing, lng, t)}

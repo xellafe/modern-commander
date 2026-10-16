@@ -64,6 +64,17 @@ fn entry_from(d: &WIN32_FIND_DATAW) -> Option<Entry> {
 
 /// Contenuto di `path` senza `.` e `..`. Un file al posto di una cartella dà `INVALID_REQUEST`.
 pub fn list_dir(path: &Path) -> Result<Vec<Entry>, AppError> {
+    let mut out = Vec::with_capacity(256);
+    walk_dir(path, &mut |e| {
+        out.push(e);
+        true
+    })?;
+    Ok(out)
+}
+
+/// Come `list_dir`, ma consegna le voci una alla volta a `visit` senza accumularle: se `visit`
+/// restituisce `false` la lettura si ferma e il risultato è `Ok(false)` (`Ok(true)` = letta tutta).
+pub(crate) fn walk_dir(path: &Path, visit: &mut dyn FnMut(Entry) -> bool) -> Result<bool, AppError> {
     let err = |e: &std::io::Error| AppError::from_io(e, path);
     let pattern = HSTRING::from(to_extended(path).join("*").as_os_str());
     let mut data = WIN32_FIND_DATAW::default();
@@ -85,24 +96,33 @@ pub fn list_dir(path: &Path) -> Result<Vec<Entry>, AppError> {
                 // Esiste ma non è una cartella.
                 Ok(m) if !m.is_dir() => Err(AppError::new(ErrorCode::InvalidRequest, Some(path))),
                 // Radice di unità senza voci: nessun errore.
-                Ok(_) if e.code() == ERROR_FILE_NOT_FOUND.to_hresult() => Ok(Vec::new()),
+                Ok(_) if e.code() == ERROR_FILE_NOT_FOUND.to_hresult() => Ok(true),
                 Ok(_) => Err(err(&std::io::Error::from_raw_os_error((e.code().0 & 0xFFFF) as i32))),
                 Err(io) => Err(err(&io)),
             };
         }
     };
-    let mut out = Vec::with_capacity(256);
-    out.extend(entry_from(&data));
+    if let Some(e) = entry_from(&data) {
+        if !visit(e) {
+            return Ok(false);
+        }
+    }
     loop {
         match unsafe { FindNextFileW(handle.0, &mut data) } {
-            Ok(()) => out.extend(entry_from(&data)),
+            Ok(()) => {
+                if let Some(e) = entry_from(&data) {
+                    if !visit(e) {
+                        return Ok(false);
+                    }
+                }
+            }
             Err(e) if e.code() == ERROR_NO_MORE_FILES.to_hresult() => break,
             Err(e) => {
                 return Err(err(&std::io::Error::from_raw_os_error((e.code().0 & 0xFFFF) as i32)));
             }
         }
     }
-    Ok(out)
+    Ok(true)
 }
 
 /// Antenato più vicino che esiste ed è una cartella (può essere `path` stesso).
@@ -147,6 +167,25 @@ mod tests {
         assert_eq!((v[0].name.as_str(), v[0].is_dir, v[0].size), ("a.txt", false, 5));
         assert!(v[1].is_dir && v[1].name == "sub");
         assert!(v[0].modified_ms > 0);
+    }
+
+    #[test]
+    fn walk_dir_stops_when_visitor_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..50 {
+            std::fs::write(d.path().join(format!("f{i}")), b"").unwrap();
+        }
+        let mut seen = 0;
+        let done = walk_dir(d.path(), &mut |_| {
+            seen += 1;
+            seen < 10
+        })
+        .unwrap();
+        assert!(!done);
+        assert_eq!(seen, 10); // la decima voce ferma la lettura: le altre 40 non vengono consegnate
+        let mut all = 0;
+        assert!(walk_dir(d.path(), &mut |_| { all += 1; true }).unwrap());
+        assert_eq!(all, 50);
     }
 
     #[test]

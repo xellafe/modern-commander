@@ -1,7 +1,7 @@
 //! Dimensione ricorsiva di una cartella (Spazio / Alt+Maiusc+Invio). Visita iterativa, annullabile,
 //! senza seguire i reparse point; le sottocartelle illeggibili si contano a parte.
 
-use super::listing::list_dir;
+use super::listing::walk_dir;
 use crate::error::{AppError, ErrorCode};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -25,26 +25,24 @@ pub struct DirSize {
 
 /// Somma file e cartelle sotto `path`. Solo la radice mancante o illeggibile è un errore.
 pub fn dir_size(path: &Path, cancel: &AtomicBool) -> Result<DirSize, AppError> {
-    let cancelled = || AppError::new(ErrorCode::Cancelled, Some(path));
+    dir_size_with(path, &mut || cancel.load(Ordering::Relaxed))
+}
+
+/// `cancelled` si interroga a ogni cartella e ogni `CANCEL_EVERY` voci, anche dentro una cartella enorme.
+fn dir_size_with(path: &Path, cancelled: &mut dyn FnMut() -> bool) -> Result<DirSize, AppError> {
+    let cancel_err = || AppError::new(ErrorCode::Cancelled, Some(path));
     let mut total = DirSize::default();
     let mut stack = vec![path.to_path_buf()];
     let mut is_root = true;
+    let mut seen = 0usize;
     while let Some(dir) = stack.pop() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(cancelled());
+        if cancelled() {
+            return Err(cancel_err());
         }
-        let entries = match list_dir(&dir) {
-            Ok(v) => v,
-            Err(e) if is_root => return Err(e),
-            Err(_) => {
-                total.skipped += 1;
-                continue;
-            }
-        };
-        is_root = false;
-        for (i, e) in entries.iter().enumerate() {
-            if i % CANCEL_EVERY == CANCEL_EVERY - 1 && cancel.load(Ordering::Relaxed) {
-                return Err(cancelled());
+        let walked = walk_dir(&dir, &mut |e| {
+            seen += 1;
+            if seen % CANCEL_EVERY == 0 && cancelled() {
+                return false;
             }
             if !e.is_dir {
                 total.files += 1;
@@ -55,7 +53,16 @@ pub fn dir_size(path: &Path, cancel: &AtomicBool) -> Result<DirSize, AppError> {
                     stack.push(dir.join(&e.name));
                 }
             }
+            true
+        });
+        match walked {
+            Ok(true) => {}
+            Ok(false) => return Err(cancel_err()),
+            Err(e) if is_root => return Err(e),
+            // Illeggibile (anche a metà lettura): quanto già sommato resta, la cartella si segnala.
+            Err(_) => total.skipped += 1,
         }
+        is_root = false;
     }
     Ok(total)
 }
@@ -63,6 +70,15 @@ pub fn dir_size(path: &Path, cancel: &AtomicBool) -> Result<DirSize, AppError> {
 /// Flag di annullamento dei calcoli in corso, per id di richiesta.
 #[derive(Default, Clone)]
 pub struct SizeJobs(Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>);
+
+/// Toglie la richiesta dal registro al drop, anche se il thread va in panic.
+struct Registered<'a>(&'a SizeJobs, u64);
+
+impl Drop for Registered<'_> {
+    fn drop(&mut self) {
+        self.0.finish(self.1);
+    }
+}
 
 impl SizeJobs {
     fn start(&self, id: u64) -> Arc<AtomicBool> {
@@ -98,8 +114,10 @@ pub fn calc_dir_size(app: AppHandle, jobs: State<'_, SizeJobs>, request_id: u64,
     let jobs = jobs.inner().clone();
     let cancel = jobs.start(request_id);
     tauri::async_runtime::spawn_blocking(move || {
-        let r = dir_size(&PathBuf::from(&path), &cancel);
-        jobs.finish(request_id);
+        let r = {
+            let _registered = Registered(&jobs, request_id);
+            dir_size(&PathBuf::from(&path), &cancel)
+        };
         let (result, error) = match r {
             Ok(v) => (Some(v), None),
             Err(e) => (None, Some(e)),
@@ -136,6 +154,37 @@ mod tests {
         let d = tree();
         let r = dir_size(d.path(), &AtomicBool::new(false)).unwrap();
         assert_eq!(r, DirSize { bytes: 6, files: 3, dirs: 2, skipped: 0 });
+    }
+
+    #[test]
+    fn cancel_mid_directory_stops_the_enumeration() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..3500 {
+            std::fs::write(d.path().join(format!("f{i}")), b"").unwrap();
+        }
+        // Chiamate: 1 = inizio cartella, 2 = alla 1000a voce (qui si annulla): le altre 2500 non si leggono
+        // (che la lettura si fermi davvero lo verifica `walk_dir_stops_when_visitor_says_so`).
+        let mut calls = 0;
+        let e = dir_size_with(d.path(), &mut || {
+            calls += 1;
+            calls >= 2
+        })
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Cancelled);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn registry_entry_is_removed_even_on_panic() {
+        let j = SizeJobs::default();
+        j.start(7);
+        let j2 = j.clone();
+        let r = std::panic::catch_unwind(move || {
+            let _g = Registered(&j2, 7);
+            panic!("simulato");
+        });
+        assert!(r.is_err());
+        assert!(j.0.lock().unwrap().is_empty());
     }
 
     #[test]

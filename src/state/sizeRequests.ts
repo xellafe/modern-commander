@@ -13,7 +13,8 @@ let nextId = 1;
 const pending = new Map<number, Pending>();
 let listening: Promise<unknown> | undefined;
 
-// Un solo ascoltatore per tutta l'app, registrato alla prima richiesta.
+// Un solo ascoltatore per tutta l'app, registrato alla prima richiesta. Se la registrazione
+// fallisce non si memorizza l'errore: la richiesta successiva riprova.
 const listen = () =>
   (listening ??= onDirSize(({ requestId, result, error }) => {
     const p = pending.get(requestId);
@@ -21,6 +22,9 @@ const listen = () =>
     pending.delete(requestId);
     if (result) p.resolve(result);
     else p.reject(error ?? { code: "IO", path: null, detail: null });
+  }).catch((e) => {
+    listening = undefined;
+    throw e;
   }));
 
 /** Dimensione di `path`. Si risolve con null se la richiesta viene annullata (`cancelTabSizes`), si rifiuta con l'AppError della radice. */
