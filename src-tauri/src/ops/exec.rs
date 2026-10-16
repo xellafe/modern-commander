@@ -11,7 +11,8 @@ use std::path::{Component, Path, PathBuf};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{
     COPY_FILE_FAIL_IF_EXISTS, COPYPROGRESSROUTINE_PROGRESS, CopyFileExW, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_READONLY, FILE_FLAGS_AND_ATTRIBUTES, FlushFileBuffers, GetDriveTypeW, LPPROGRESS_ROUTINE_CALLBACK_REASON,
+    FILE_ATTRIBUTE_READONLY, FILE_FLAGS_AND_ATTRIBUTES, FlushFileBuffers, GetDriveTypeW, GetVolumePathNameW,
+    LPPROGRESS_ROUTINE_CALLBACK_REASON,
     MOVE_FILE_FLAGS, MOVEFILE_REPLACE_EXISTING, MoveFileExW, PROGRESS_CANCEL, PROGRESS_CONTINUE,
     SetFileAttributesW,
 };
@@ -129,6 +130,16 @@ fn has_trailing_dot_or_space(p: &Path) -> bool {
     })
 }
 
+/// Radice del volume che contiene davvero `p`, con il `\` finale (`C:\` oppure `C:\mnt\usb\` per un
+/// volume montato in una cartella), senza prefisso esteso. `None` se il sistema non la risolve.
+fn volume_root(p: &Path) -> Option<String> {
+    let mut buf = vec![0u16; 32768];
+    unsafe { GetVolumePathNameW(&wide(p), &mut buf) }.ok()?;
+    let len = buf.iter().position(|&c| c == 0)?;
+    let root = String::from_utf16_lossy(&buf[..len]);
+    Some(root.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(root))
+}
+
 fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
     if has_trailing_dot_or_space(path) {
         return Err(AppError {
@@ -136,9 +147,9 @@ fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
             ..AppError::new(ErrorCode::InvalidName, Some(path))
         });
     }
-    let volume = volume_key(path);
-    // I percorsi UNC (`\\server\share`) non hanno Cestino.
-    let drive_type = if volume.len() == 2 { unsafe { GetDriveTypeW(&HSTRING::from(volume + "\\")) } } else { 0 };
+    // I percorsi UNC (`\\server\share`) non hanno Cestino: si rifiutano senza toccare la rete.
+    let root = if volume_key(path).len() == 2 { volume_root(path) } else { None };
+    let drive_type = root.map_or(0, |r| unsafe { GetDriveTypeW(&HSTRING::from(r)) });
     if !recycle_bin_supported(drive_type) {
         return Err(AppError::new(ErrorCode::NoRecycleBin, Some(path)));
     }
@@ -146,6 +157,18 @@ fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
         trash::Error::Os { code, description } => from_hresult(code, description, path),
         other => AppError { detail: Some(other.to_string()), ..AppError::new(ErrorCode::Io, Some(path)) },
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Numero di flush eseguiti sul thread corrente (il callback gira sul thread di CopyFileExW).
+    static FLUSHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn flush(h: HANDLE) -> windows::core::Result<()> {
+    #[cfg(test)]
+    FLUSHES.with(|c| c.set(c.get() + 1));
+    unsafe { FlushFileBuffers(h) }
 }
 
 /// Stato condiviso col callback di CopyFileExW.
@@ -157,10 +180,10 @@ struct CopyCtx<'a> {
 }
 
 unsafe extern "system" fn on_progress(
-    total: i64,
+    _total: i64,
     transferred: i64,
-    _stream_size: i64,
-    _stream_transferred: i64,
+    stream_size: i64,
+    stream_transferred: i64,
     _stream: u32,
     _reason: LPPROGRESS_ROUTINE_CALLBACK_REASON,
     _src: HANDLE,
@@ -173,11 +196,13 @@ unsafe extern "system" fn on_progress(
     if !matches!(catch_unwind(AssertUnwindSafe(|| (ctx.progress)(transferred as u64))), Ok(true)) {
         return PROGRESS_CANCEL;
     }
-    // Tutti i byte (di tutti gli stream) sono stati scritti: si usa l'handle di scrittura della
-    // copia, che funziona anche se il `.mcpart` ha ereditato la sola lettura.
+    // Fine di uno stream (dati principali o ADS come Zone.Identifier; uno stream vuoto è già
+    // completo al cambio di stream): `dst` è l'handle di scrittura dello stream corrente e
+    // FlushFileBuffers scrive solo quello, quindi va fatto per ogni stream. L'handle funziona
+    // anche se il `.mcpart` ha ereditato la sola lettura.
     if ctx.flush
-        && transferred == total
-        && let Err(e) = unsafe { FlushFileBuffers(dst) }
+        && stream_transferred == stream_size
+        && let Err(e) = flush(dst)
     {
         ctx.flush_err = Some(e);
         return PROGRESS_CANCEL;
@@ -304,6 +329,27 @@ mod tests {
     }
 
     #[test]
+    fn overwrite_flushes_every_stream() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("scaricato.bin"), d.path().join("vecchio.bin"));
+        fs::write(&src, vec![1u8; 64 * 1024]).unwrap();
+        let mut ads = to_extended(&src).into_os_string();
+        ads.push(":Zone.Identifier");
+        fs::write(&ads, b"[ZoneTransfer]\r\nZoneId=3\r\n").unwrap();
+        // Senza dst da sostituire non si fa alcun flush.
+        FLUSHES.with(|c| c.set(0));
+        X.copy_file(&src, &dst, false, &mut |_| true).unwrap();
+        assert_eq!(FLUSHES.with(|c| c.get()), 0);
+        // Sostituendo, un flush per stream: dati principali + Zone.Identifier.
+        X.copy_file(&src, &dst, true, &mut |_| true).unwrap();
+        assert_eq!(FLUSHES.with(|c| c.get()), 2);
+        assert_eq!(fs::read(&dst).unwrap(), vec![1u8; 64 * 1024]);
+        let mut dst_ads = to_extended(&dst).into_os_string();
+        dst_ads.push(":Zone.Identifier");
+        assert_eq!(fs::read(&dst_ads).unwrap(), b"[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+
+    #[test]
     fn copy_without_overwrite_fails_on_existing() {
         let d = tempfile::tempdir().unwrap();
         let (src, dst) = (d.path().join("a"), d.path().join("b"));
@@ -351,7 +397,10 @@ mod tests {
         assert!(!exists(&dst));
     }
 
+    // Manda un file vero nel Cestino dell'utente: si esegue a mano con
+    // `cargo test --manifest-path src-tauri/Cargo.toml delete_to_recycle_bin -- --ignored`.
     #[test]
+    #[ignore]
     fn delete_to_recycle_bin_removes_from_disk() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("cestino.txt");
@@ -381,6 +430,13 @@ mod tests {
         assert_eq!(allowed, vec![3]);
         let unc = Path::new(r"\\server\share\f.txt");
         assert_eq!(move_to_recycle_bin(unc).unwrap_err().code, ErrorCode::NoRecycleBin);
+        // La radice si risolve dal percorso (anche esteso e lungo), con il separatore finale.
+        let d = tempfile::tempdir().unwrap();
+        let mut deep = d.path().to_path_buf();
+        for _ in 0..30 {
+            deep.push("cartella_lunga");
+        }
+        assert_eq!(volume_root(&deep), Some(volume_key(d.path()) + "\\"));
     }
 
     #[test]
