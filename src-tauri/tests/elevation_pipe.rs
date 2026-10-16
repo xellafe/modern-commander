@@ -2,25 +2,34 @@
 //! `--elevated-helper` tramite `ElevatedExecutor::spawn_with` e un normale `Command`, quindi
 //! **senza** elevazione: si prova il protocollo e la sicurezza della pipe, non il prompt UAC
 //! (verifica manuale).
+//!
+//! Qui il server della pipe è l'eseguibile dei test, non `modern-commander.exe`: l'helper (build di
+//! debug) lo accetta solo perché `MC_TEST_SERVER_EXE` lo indica. In release il server deve essere
+//! sempre lo stesso eseguibile dell'helper.
 
-use modern_commander_lib::elevation::ElevatedExecutor;
+use modern_commander_lib::elevation::{ElevatedExecutor, shared_with};
 use modern_commander_lib::error::ErrorCode;
 use modern_commander_lib::ops::exec::Executor;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_modern-commander");
 const T: Duration = Duration::from_secs(10);
 
-fn helper(pipe: &str, token: &str, idle_ms: Option<u64>) -> Child {
+fn helper_expecting(pipe: &str, token: &str, idle_ms: Option<u64>, server: PathBuf) -> Child {
     let mut c = Command::new(BIN);
-    c.args(["--elevated-helper", pipe, token]);
+    c.args(["--elevated-helper", pipe, token]).env("MC_TEST_SERVER_EXE", server);
     if let Some(ms) = idle_ms {
         c.env("MC_HELPER_IDLE_MS", ms.to_string());
     }
     c.spawn().unwrap()
+}
+
+fn helper(pipe: &str, token: &str, idle_ms: Option<u64>) -> Child {
+    helper_expecting(pipe, token, idle_ms, std::env::current_exe().unwrap())
 }
 
 /// Helper avviato e autenticato: esecutore, processo, nome della pipe e token.
@@ -133,6 +142,85 @@ fn foreign_process_cannot_connect() {
     x.mkdir(&d.path().join("ancora")).unwrap();
     drop(x);
     assert!(wait_exit(&mut child, T).is_some());
+}
+
+#[test]
+fn helper_refuses_unknown_server() {
+    // Il server (questo processo) non è l'eseguibile atteso: l'helper esce senza mandare il token.
+    let mut child = None;
+    let res = ElevatedExecutor::spawn_with(|pipe, token| {
+        let c = helper_expecting(pipe, token, None, PathBuf::from(BIN));
+        let pid = c.id();
+        child = Some(c);
+        Ok(pid)
+    });
+    let err = res.err().expect("helper connesso a un server sconosciuto");
+    assert_eq!((err.code, err.detail.as_deref()), (ErrorCode::AccessDenied, Some("helper_auth_failed")));
+    assert_eq!(wait_exit(child.as_mut().unwrap(), T).and_then(|s| s.code()), Some(3));
+}
+
+#[test]
+fn helper_rejects_malformed_arguments() {
+    let token = "ab".repeat(32);
+    let uuid = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    let cases = [
+        (format!(r"\\.\pipe\mc-elev-{}", uuid.to_uppercase()), token.clone()), // uuid non canonico
+        (format!(r"\\.\pipe\mc-elev-{uuid}\x"), token.clone()),
+        (r"\\.\pipe\mc-elev-".to_owned(), token.clone()),
+        (format!(r"\\.\pipe\altro-{uuid}"), token.clone()),
+        (format!(r"\\srv\pipe\mc-elev-{uuid}"), token.clone()),
+        (format!(r"\\.\pipe\mc-elev-{uuid}"), "ab".repeat(31)), // token corto
+        (format!(r"\\.\pipe\mc-elev-{uuid}"), "zz".repeat(32)), // non esadecimale
+    ];
+    for (pipe, tok) in cases {
+        let mut c = Command::new(BIN).args(["--elevated-helper", &pipe, &tok]).spawn().unwrap();
+        assert_eq!(wait_exit(&mut c, T).and_then(|s| s.code()), Some(2), "{pipe} {tok}");
+    }
+    let mut c = Command::new(BIN).args(["--elevated-helper", "solo-uno"]).spawn().unwrap();
+    assert_eq!(wait_exit(&mut c, T).and_then(|s| s.code()), Some(2));
+}
+
+/// Un secondo job che chiede l'helper durante una copia lunga riceve lo stesso esecutore
+/// (nessun secondo avvio, quindi nessun secondo prompt UAC).
+#[test]
+fn shared_helper_is_reused_while_busy() {
+    let d = tempfile::tempdir().unwrap();
+    let (src, dst) = (d.path().join("a.bin"), d.path().join("b.bin"));
+    fs::write(&src, vec![1u8; 8 * 1024 * 1024]).unwrap();
+    let slot = Mutex::new(None);
+    let mut child = None;
+    let x = shared_with(&slot, || {
+        ElevatedExecutor::spawn_with(|pipe, token| {
+            let c = helper(pipe, token, None);
+            let pid = c.id();
+            child = Some(c);
+            Ok(pid)
+        })
+    })
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let copier = {
+        let (x, src, dst) = (x.clone(), src.clone(), dst.clone());
+        std::thread::spawn(move || {
+            let mut released = false;
+            x.copy_file(&src, &dst, false, false, &mut |_| {
+                if !released {
+                    let _ = started_tx.send(());
+                    released = go_rx.recv_timeout(T).is_ok();
+                }
+                true
+            })
+        })
+    };
+    started_rx.recv_timeout(T).expect("copia avviata");
+    let y = shared_with(&slot, || panic!("secondo helper avviato durante la copia")).unwrap();
+    assert!(Arc::ptr_eq(&x, &y));
+    go_tx.send(()).unwrap();
+    copier.join().unwrap().unwrap();
+    assert_eq!(fs::read(&dst).unwrap().len(), 8 * 1024 * 1024);
+    drop((x, y, slot));
+    assert!(wait_exit(child.as_mut().unwrap(), T).is_some());
 }
 
 #[test]

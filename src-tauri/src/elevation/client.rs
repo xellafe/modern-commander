@@ -4,13 +4,14 @@ use super::protocol::{MAX_LINE, Request, Response, read_msg, write_msg};
 use super::{PIPE_PREFIX, Pipe, event, is, os_code, owned, raw};
 use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::Executor;
+use std::ffi::c_void;
 use std::io::{self, BufReader};
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use windows::Win32::Foundation::{
-    ERROR_CANCELLED, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0,
+    ERROR_CANCELLED, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, HWND, LocalFree, WAIT_OBJECT_0,
     WAIT_TIMEOUT,
 };
 use windows::Win32::Security::Authorization::{
@@ -33,6 +34,14 @@ use windows::core::{HSTRING, PCWSTR, PWSTR, w};
 
 /// Tempo massimo tra l'avvio dell'helper e la sua connessione alla pipe.
 const CONNECT_TIMEOUT_MS: u32 = 30_000;
+
+/// Finestra principale (come intero: `HWND` non è `Sync`), proprietaria del prompt UAC.
+static OWNER: OnceLock<isize> = OnceLock::new();
+
+/// Da chiamare nel `setup` di Tauri: il prompt UAC compare sopra l'app invece che dietro.
+pub fn set_owner_window(hwnd: HWND) {
+    let _ = OWNER.set(hwnd.0 as isize);
+}
 
 type Progress<'a> = &'a mut dyn FnMut(u64) -> bool;
 
@@ -171,8 +180,9 @@ impl Conn {
 
 /// `Executor` che inoltra ogni primitiva all'helper elevato.
 pub struct ElevatedExecutor {
-    // ponytail: un'operazione elevata alla volta per tutta l'app (una copia in pausa blocca le
-    // altre elevate); più connessioni se servirà parallelismo.
+    // ponytail: un'operazione elevata alla volta per tutta l'app. Una copia in pausa blocca le
+    // altre elevate, e un job in attesa di questo lock non si annulla finché non lo ottiene;
+    // più connessioni se servirà parallelismo.
     conn: Mutex<Conn>,
     /// Connessione inutilizzabile: errore di I/O o scambio interrotto a metà (anche da un panico).
     broken: AtomicBool,
@@ -189,6 +199,7 @@ impl ElevatedExecutor {
             let mut info = SHELLEXECUTEINFOW {
                 cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
                 fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+                hwnd: HWND(OWNER.get().copied().unwrap_or(0) as *mut c_void),
                 lpVerb: w!("runas"),
                 lpFile: PCWSTR(file.as_ptr()),
                 lpParameters: PCWSTR(params.as_ptr()),
@@ -236,14 +247,31 @@ impl ElevatedExecutor {
         !self.broken.load(Ordering::SeqCst) && unsafe { WaitForSingleObject(raw(&self.process), 0) } == WAIT_TIMEOUT
     }
 
+    /// `broken` segna solo i guasti veri: durante uno scambio in corso l'helper resta "vivo" per
+    /// `shared`, che altrimenti ne avvierebbe un secondo (con un altro prompt UAC).
     fn call(&self, req: Request, progress: Option<Progress>) -> Result<(), AppError> {
         let mut conn = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
-        if self.broken.swap(true, Ordering::SeqCst) {
+        if self.broken.load(Ordering::SeqCst) {
             return Err(gone());
         }
+        let _guard = BreakOnPanic(&self.broken);
         let res = conn.exchange(&req, progress);
-        self.broken.store(res.is_err(), Ordering::SeqCst);
+        if res.is_err() {
+            self.broken.store(true, Ordering::SeqCst);
+        }
         res.unwrap_or_else(|_| Err(gone()))
+    }
+}
+
+/// Un panico (per esempio nel callback di avanzamento) interrompe lo scambio a metà: le risposte
+/// rimaste nella pipe desincronizzerebbero il protocollo, quindi la connessione non si usa più.
+struct BreakOnPanic<'a>(&'a AtomicBool);
+
+impl Drop for BreakOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.store(true, Ordering::SeqCst);
+        }
     }
 }
 
@@ -274,13 +302,24 @@ impl Executor for ElevatedExecutor {
 /// al primo uso dopo la sua uscita. Il lock copre l'avvio: due job non aprono due prompt.
 pub fn shared() -> Result<Arc<dyn Executor>, AppError> {
     static SHARED: Mutex<Option<Arc<ElevatedExecutor>>> = Mutex::new(None);
-    let mut g = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
+    Ok(shared_with(&SHARED, ElevatedExecutor::spawn)?)
+}
+
+/// `shared` con slot e avvio indicati dal chiamante (i test usano `spawn_with`, senza UAC).
+/// Un secondo job che chiede l'helper mentre un altro lo usa riceve lo stesso esecutore e poi
+/// attende il mutex della connessione: finché non lo ottiene non si può annullare.
+#[doc(hidden)]
+pub fn shared_with(
+    slot: &Mutex<Option<Arc<ElevatedExecutor>>>,
+    spawn: impl FnOnce() -> Result<ElevatedExecutor, AppError>,
+) -> Result<Arc<ElevatedExecutor>, AppError> {
+    let mut g = slot.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(x) = g.as_ref()
         && x.is_alive()
     {
         return Ok(x.clone());
     }
-    let x = Arc::new(ElevatedExecutor::spawn()?);
+    let x = Arc::new(spawn()?);
     *g = Some(x.clone());
     Ok(x)
 }

@@ -3,11 +3,14 @@
 //! dopo un messaggio non valido o dopo 60 s senza richieste (`MC_HELPER_IDLE_MS` nei test).
 
 use super::protocol::{Request, Response, read_msg, validate, write_msg};
-use super::{PIPE_PREFIX, Pipe, owned};
+use super::{PIPE_PREFIX, Pipe, owned, raw};
 use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::{Executor, LocalExecutor};
-use crate::paths::normalize_lexical;
+use crate::paths::{normalize_lexical, same_path};
+use std::ffi::OsString;
 use std::io::BufReader;
+use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -16,7 +19,9 @@ use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
-use windows::core::HSTRING;
+use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
+use windows::core::{HSTRING, PWSTR};
 
 const DEFAULT_IDLE_MS: u64 = 60_000;
 
@@ -42,12 +47,54 @@ fn open(name: &str) -> windows::core::Result<Pipe> {
     Ok(Pipe::new(unsafe { owned(h) }))
 }
 
-/// Codice d'uscita: 0 fine normale, 1 pipe non raggiungibile, 2 nome della pipe non valido.
+/// Solo `\\.\pipe\mc-elev-<uuid in forma canonica>` e token di 64 cifre esadecimali.
+fn valid_args(pipe_name: &str, token: &str) -> bool {
+    let uuid_ok = pipe_name
+        .strip_prefix(PIPE_PREFIX)
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok_and(|u| u.hyphenated().to_string() == id));
+    uuid_ok && token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Percorso dell'eseguibile del processo server della pipe.
+fn server_image(pipe: &Pipe) -> Option<PathBuf> {
+    let mut pid = 0;
+    unsafe { GetNamedPipeServerProcessId(pipe.handle(), &mut pid) }.ok()?;
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let h = unsafe { owned(h) };
+    let mut buf = vec![0u16; 32768];
+    let mut len = buf.len() as u32;
+    unsafe { QueryFullProcessImageNameW(raw(&h), PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) }.ok()?;
+    Some(PathBuf::from(OsString::from_wide(&buf[..len as usize])))
+}
+
+/// Il server deve eseguire questo stesso eseguibile. Solo nelle build di debug `MC_TEST_SERVER_EXE`
+/// indica un altro eseguibile atteso: serve ai test d'integrazione, dove il server è l'eseguibile
+/// dei test. Nelle build di release questo ramo non esiste e vale sempre `current_exe()`.
+fn expected_server_image() -> std::io::Result<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(p) = std::env::var_os("MC_TEST_SERVER_EXE") {
+        return Ok(p.into());
+    }
+    std::env::current_exe()
+}
+
+fn server_is_trusted(pipe: &Pipe) -> bool {
+    match (server_image(pipe), expected_server_image()) {
+        (Some(server), Ok(expected)) => same_path(&normalize_lexical(&server), &normalize_lexical(&expected)),
+        _ => false,
+    }
+}
+
+/// Codice d'uscita: 0 fine normale, 1 pipe non raggiungibile, 2 argomenti non validi, 3 server
+/// della pipe non riconosciuto (il token non viene inviato).
 pub fn run(pipe_name: &str, token: &str) -> i32 {
-    if !pipe_name.starts_with(PIPE_PREFIX) {
+    if !valid_args(pipe_name, token) {
         return 2;
     }
     let Ok(pipe) = open(pipe_name) else { return 1 };
+    if !server_is_trusted(&pipe) {
+        return 3;
+    }
     let mut out = pipe.clone();
     if write_msg(&mut out, &Request::Hello { token: token.to_owned() }).is_err() {
         return 1;

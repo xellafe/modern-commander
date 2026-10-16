@@ -10,12 +10,42 @@
 //!   messaggio deve portare il token (32 byte casuali, confronto a tempo costante);
 //! - l'helper apre la pipe con `SECURITY_IDENTIFICATION`: il server non può impersonarlo;
 //! - righe oltre `MAX_LINE` chiudono la connessione; il token non va mai nei log.
+//!
+//! ## Nota di sicurezza
+//!
+//! **Modello di minaccia.** L'helper gira con un token amministrativo e accetta comandi da una
+//! pipe: chi riuscisse a parlargli al posto dell'app otterrebbe operazioni su file come
+//! amministratore senza prompt UAC. Gli avversari considerati sono i processi non elevati di
+//! qualsiasi utente della macchina e i client remoti.
+//!
+//! **Cosa garantiscono i controlli.**
+//! - ACL (utente corrente + Administrators) e `PIPE_REJECT_REMOTE_CLIENTS`: altri utenti non
+//!   elevati e client di rete non aprono la pipe.
+//! - `FILE_FLAG_FIRST_PIPE_INSTANCE` e istanza unica: nessuno può creare la pipe prima dell'app o
+//!   aggiungere una seconda istanza; con l'helper connesso un altro client trova la pipe occupata.
+//! - PID del client = processo lanciato e token monouso: anche un processo dello stesso utente che
+//!   conosce nome e token non sostituisce l'helper.
+//! - L'helper verifica il server (`GetNamedPipeServerProcessId` + immagine = proprio eseguibile)
+//!   prima di inviare il token, valida in modo stretto nome della pipe e token e rifiuta percorsi
+//!   relativi, `.`/`..`, dispositivi e le condivisioni `pipe`/`IPC$`/`mailslot` (niente
+//!   richieste ad altre pipe tramite UNC).
+//!
+//! **Rischi residui.**
+//! - Le API Win32 seguono giunzioni e collegamenti nei componenti intermedi: un percorso valido può
+//!   finire in un'altra cartella. Chi controlla una cartella intermedia (anche tra la validazione
+//!   e l'esecuzione) può redirigere un'operazione elevata: in v1 non è mitigato.
+//! - Il codice che gira già con l'utente corrente può pilotare l'app (input, debug) e quindi le
+//!   operazioni elevate: è fuori dal confine, come per qualsiasi app che usa l'UAC.
+//! - L'eseguibile non deve essere scrivibile dall'utente, altrimenti il binario lanciato con
+//!   `runas` potrebbe essere sostituito: serve un'installazione per macchina (`Program Files`),
+//!   che il Task 22 configura con NSIS `perMachine`. Una copia portable in una cartella
+//!   dell'utente non ha questa garanzia.
 
 pub mod client;
 pub mod helper;
 pub mod protocol;
 
-pub use client::{ElevatedExecutor, shared};
+pub use client::{ElevatedExecutor, set_owner_window, shared, shared_with};
 pub use protocol::{Request, Response, validate};
 
 use std::io;

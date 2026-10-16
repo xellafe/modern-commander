@@ -6,6 +6,7 @@
 use crate::error::{AppError, ErrorCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf, Prefix};
 
@@ -14,7 +15,8 @@ use std::path::{Component, Path, PathBuf, Prefix};
 pub const MAX_LINE: usize = 64 * 1024;
 
 /// Solo primitive su file: nessuna richiesta esegue comandi o carica codice.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `Debug` è scritto a mano: il token di `Hello` non compare mai.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum Request {
     Hello { token: String },
     Copy { src: PathBuf, dst: PathBuf, overwrite: bool, flush: bool },
@@ -24,6 +26,30 @@ pub enum Request {
     Rename { src: PathBuf, dst: PathBuf },
     /// Interrompe la copia in corso; altrimenti non ha effetto.
     Cancel,
+}
+
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Request::Hello { .. } => f.debug_struct("Hello").field("token", &"<redacted>").finish(),
+            Request::Copy { src, dst, overwrite, flush } => f
+                .debug_struct("Copy")
+                .field("src", src)
+                .field("dst", dst)
+                .field("overwrite", overwrite)
+                .field("flush", flush)
+                .finish(),
+            Request::Move { src, dst, overwrite } => {
+                f.debug_struct("Move").field("src", src).field("dst", dst).field("overwrite", overwrite).finish()
+            }
+            Request::Delete { path, is_dir, permanent } => {
+                f.debug_struct("Delete").field("path", path).field("is_dir", is_dir).field("permanent", permanent).finish()
+            }
+            Request::Mkdir { path } => f.debug_struct("Mkdir").field("path", path).finish(),
+            Request::Rename { src, dst } => f.debug_struct("Rename").field("src", src).field("dst", dst).finish(),
+            Request::Cancel => f.write_str("Cancel"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,15 +74,21 @@ pub fn validate(req: &Request) -> Result<(), AppError> {
 
 /// Assoluto su unità (`C:\`) o UNC (`\\srv\share\`), anche in forma estesa `\\?\`; senza
 /// componenti `.`/`..` (con entrambi i separatori) e senza NUL. Rifiuta i percorsi di dispositivo
-/// (`\\.\`, `\\?\GLOBALROOT`, `\\?\Volume{…}`) e quelli relativi a un'unità (`C:x`).
+/// (`\\.\`, `\\?\GLOBALROOT`, `\\?\Volume{…}`), quelli relativi a un'unità (`C:x`) e le
+/// condivisioni speciali `pipe`, `IPC$` e `mailslot` di qualsiasi server (`\\localhost\pipe\…`).
 fn is_safe(p: &Path) -> bool {
     let s = p.as_os_str().to_string_lossy();
     if s.is_empty() || s.contains('\0') || s.split(['\\', '/']).any(|seg| seg == "." || seg == "..") {
         return false;
     }
     let mut comps = p.components();
-    let prefix_ok = matches!(comps.next(), Some(Component::Prefix(pc))
-        if matches!(pc.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_) | Prefix::UNC(..) | Prefix::VerbatimUNC(..)));
+    let prefix_ok = matches!(comps.next(), Some(Component::Prefix(pc)) if match pc.kind() {
+        Prefix::Disk(_) | Prefix::VerbatimDisk(_) => true,
+        Prefix::UNC(_, share) | Prefix::VerbatimUNC(_, share) => {
+            !["pipe", "ipc$", "mailslot"].iter().any(|s| share.eq_ignore_ascii_case(s))
+        }
+        _ => false,
+    });
     prefix_ok && comps.next() == Some(Component::RootDir) && comps.all(|c| matches!(c, Component::Normal(_)))
 }
 
@@ -97,6 +129,39 @@ mod tests {
         }
         assert!(validate(&Request::Mkdir { path: r"C:\Program Files\X".into() }).is_ok());
         assert!(validate(&Request::Mkdir { path: r"\\srv\share\x".into() }).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_tricky_paths() {
+        let unsafe_paths = [
+            "C:\\a\0b",              // NUL
+            r"C:x",                  // relativo all'unità
+            r"\\?\Volume{0a1b2c3d-0000-0000-0000-000000000000}\x",
+            r"C:/a/../b",            // `..` con `/`
+            r"\\?\C:\a\..\b",        // `..` in forma estesa
+            r"\\?\C:\a/../b",        // in forma estesa `/` non separa i componenti
+            r"\\localhost\pipe\x",
+            r"\\srv\IPC$\x",
+            r"\\?\UNC\srv\PIPE\x",
+            r"\\srv\mailslot\x",
+            r"\x",                   // radice senza unità
+        ];
+        for p in unsafe_paths {
+            let err = validate(&Request::Rename { src: r"C:\ok".into(), dst: p.into() })
+                .err()
+                .unwrap_or_else(|| panic!("accettato: {p:?}"));
+            assert_eq!((err.code, err.path.as_deref()), (ErrorCode::InvalidRequest, Some(p)), "{p:?}");
+        }
+        for p in [r"\\?\C:\a\b", r"\\?\UNC\srv\share\x", r"C:/a/b", r"C:\a\x."] {
+            assert!(validate(&Request::Mkdir { path: p.into() }).is_ok(), "{p}");
+        }
+    }
+
+    #[test]
+    fn debug_redacts_the_token() {
+        let s = format!("{:?}", Request::Hello { token: "segreto".into() });
+        assert!(!s.contains("segreto") && s.contains("Hello"), "{s}");
+        assert_eq!(format!("{:?}", Request::Mkdir { path: r"C:\x".into() }), r#"Mkdir { path: "C:\\x" }"#);
     }
 
     #[test]

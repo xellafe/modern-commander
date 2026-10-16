@@ -17,6 +17,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(fs::watch::Watchers::default())
         .setup(|app| {
+            if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
+                elevation::set_owner_window(hwnd);
+            }
             let handle = app.handle().clone();
             let sink = Arc::new(move |e: Event| {
                 let _ = match e {
