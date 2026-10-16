@@ -2,6 +2,7 @@
 
 pub mod drives;
 pub mod listing;
+pub mod size;
 pub mod watch;
 
 use crate::error::{AppError, ErrorCode};

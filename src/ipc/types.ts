@@ -45,6 +45,21 @@ export interface Drive {
   ready: boolean;
 }
 
+/** fs/size.rs. `skipped`: sottocartelle illeggibili, non comprese nei totali. */
+export interface DirSize {
+  bytes: number;
+  files: number;
+  dirs: number;
+  skipped: number;
+}
+
+export interface DirSizeEvent {
+  requestId: number;
+  path: string;
+  result: DirSize | null;
+  error: AppError | null;
+}
+
 // Operazioni sui file (ops/model.rs).
 
 export type JobKind =

@@ -2,10 +2,15 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import i18n from "../i18n";
 import { listDrives } from "../ipc/api";
+import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
 import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
 import { targetGroup, useLayout } from "../state/layout";
-import { invertMarks, markRange, parentPath, toggleMark, type SortKey, type TabView } from "../state/tabView";
+import {
+  finishSizing, hasSize, invertMarks, markRange, parentPath, sizable, startSizing, toggleMark,
+  type SortKey, type TabView,
+} from "../state/tabView";
+import { computeDirSize } from "../state/sizeRequests";
 import { activeTabContext, useTabViews, type LoadOpts } from "../state/tabViews";
 import { useUi } from "../state/ui";
 import { registerCommand, type Command } from "./registry";
@@ -35,6 +40,52 @@ function markAndMove(delta: number) {
     const marked = row ? toggleMark(v, row.name) : v;
     return { ...marked, cursor: clamp(v.cursor + delta, v.rows.length) };
   });
+}
+
+/** Calcoli di dimensione contemporanei per richiesta di gruppo (Alt+Maiusc+Invio): una cartella enorme non apre centinaia di thread. */
+const SIZE_CONCURRENCY = 4;
+
+/** Calcola la dimensione delle cartelle `names` di `dir` nella scheda; si ferma se la scheda cambia cartella. */
+async function measure(tabId: string, dir: string, names: string[]) {
+  const here = () => {
+    const v = views().views[tabId];
+    return !!v && v.history[v.historyIndex] === dir;
+  };
+  views().update(tabId, (v) => startSizing(v, names));
+  const queue = [...names];
+  const worker = async () => {
+    for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+      let size: DirSize | null = null;
+      try {
+        size = await computeDirSize(tabId, joinPath(dir, name));
+      } catch (e) {
+        if (here()) views().showNotice(tabId, e);
+      }
+      if (!here()) return; // annullato dalla navigazione: la vista nuova parte da zero
+      const done = name;
+      views().update(tabId, (v) => finishSizing(v, done, size));
+      // L'ordinamento per dimensione dipende dai valori appena arrivati.
+      if (views().views[tabId].sort.key === "size") views().rebuild(tabId, {});
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SIZE_CONCURRENCY, names.length) }, worker));
+}
+
+/** Spazio: marca la riga (il cursore resta fermo); se è una cartella che diventa marcata ne calcola la dimensione. */
+function markOrSize() {
+  const { tabId, path, view, cursorRow: row } = activeTabContext();
+  if (!row || row.isParent || row.drive) return;
+  updateActive((v) => toggleMark(v, row.name));
+  // Se si smarca la cartella, la dimensione già mostrata resta, come in TC.
+  if (sizable(row) && !view.marked.has(row.name) && !view.sizing.has(row.name)) void measure(tabId, path, [row.name]);
+}
+
+function countDirContent() {
+  const { tabId, path, view } = activeTabContext();
+  const names = view.rows
+    .filter((r) => sizable(r) && !hasSize(view.dirSizes, r.name) && !view.sizing.has(r.name))
+    .map((r) => r.name);
+  if (names.length) void measure(tabId, path, names);
 }
 
 export function sortBy(tabId: string, key: SortKey) {
@@ -107,6 +158,8 @@ const DEFS: Def[] = [
   ["cm_SelectAll", () => updateActive((v) => markRange(v, 0, v.rows.length - 1))],
   ["cm_ClearAll", () => updateActive((v) => ({ ...v, marked: new Set() }))],
   ["cm_ExchangeSelection", () => updateActive(invertMarks)],
+  ["mc_MarkOrSize", markOrSize],
+  ["cm_CountDirContent", countDirContent],
 
   // Navigazione
   ["cm_Return", () => {

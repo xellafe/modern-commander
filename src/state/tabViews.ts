@@ -5,6 +5,7 @@ import { quickFilterMask } from "../lib/mask";
 import { DRIVES } from "../lib/paths";
 import { setTabPath, useLayout } from "./layout";
 import { useSettings } from "./settings";
+import { cancelTabSizes } from "./sizeRequests";
 import { buildRows, emptyView, jumpTo, navigateTo, type Row, type TabView } from "./tabView";
 
 export interface Notice {
@@ -142,6 +143,7 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
         : opts.historyIndex !== undefined && samePlace
           ? jumpTo(base, opts.historyIndex)
           : navigateTo(base, res.path);
+      if (v !== base) cancelTabSizes(tabId); // cambio di cartella (anche nella history): `moved` ha azzerato `sizing`
       const rows = rowsFor(res.entries, res.path, v);
       const cursor = indexOrClamp(rows, reload ? base.rows[base.cursor]?.name : opts.focus, v.cursor);
       let marked = v.marked;
@@ -201,6 +203,7 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
     seq.set(tabId, (seq.get(tabId) ?? 0) + 1); // scarta le risposte in arrivo
     inFlight.delete(tabId);
     reloadAgain.delete(tabId);
+    cancelTabSizes(tabId);
     listings.delete(tabId);
     if (watched.delete(tabId)) queueWatcher(tabId, () => unwatchDir(tabId));
     set((s) => {

@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, TriangleAlert } from "lucide-react";
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { nameError, renameInPlace } from "../../commands/fileOps";
@@ -9,7 +9,7 @@ import { executeCommand } from "../../commands/registry";
 import { rowContextMenu, trackDragOut } from "../../commands/shell";
 import { formatAttrs, formatDate, formatSize, splitName } from "../../lib/format";
 import { useLayout } from "../../state/layout";
-import { markRange, toggleMark, type Row, type SortKey, type TabView } from "../../state/tabView";
+import { hasSize, markRange, toggleMark, type Row, type SortKey, type TabView } from "../../state/tabView";
 import { useTabViews } from "../../state/tabViews";
 import { FileIcon } from "./FileIcon";
 
@@ -122,9 +122,10 @@ export function FileList({ tabId, active }: { tabId: string; active: boolean }) 
   return view.view === "brief" ? <BriefList {...props} /> : <FullList {...props} />;
 }
 
-function sizeText(row: Row, dirSize: number | undefined, lng: string, t: TFunction): string {
+function sizeText(row: Row, dirSize: number | undefined, sizing: boolean, lng: string, t: TFunction): string {
   if (row.isParent) return "";
   if (!row.isDir) return formatSize(row.size, lng);
+  if (sizing) return "…";
   return dirSize === undefined ? t("groups.dir") : formatSize(dirSize, lng);
 }
 
@@ -179,7 +180,9 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
                 start={start}
                 height={rowHeight}
                 cls={rowClass(view, i, row)}
-                dirSize={view.dirSizes[row.name]}
+                dirSize={hasSize(view.dirSizes, row.name) ? view.dirSizes[row.name] : undefined}
+                sizing={view.sizing.has(row.name)}
+                skipped={hasSize(view.skipped, row.name) ? view.skipped[row.name] : 0}
                 lng={lng}
                 renaming={renaming === row.name}
               />
@@ -199,12 +202,14 @@ interface RowProps {
   height: number;
   cls: string;
   dirSize: number | undefined;
+  sizing: boolean;
+  skipped: number;
   lng: string;
   renaming: boolean;
 }
 
 // memo: spostando il cursore si ridisegnano solo le due righe che cambiano classe.
-const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSize, lng, renaming }: RowProps) {
+const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSize, sizing, skipped, lng, renaming }: RowProps) {
   const { t } = useTranslation();  const [base, ext] = row.isParent || row.drive ? [row.name, ""] : splitName(row.name, row.isDir);
   const d = row.drive;
   return (
@@ -223,7 +228,14 @@ const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSi
       ) : (
         <>
           <span className="c-ext">{ext}</span>
-          <span className="c-size">{sizeText(row, dirSize, lng, t)}</span>
+          <span className={`c-size${sizing ? " sizing" : ""}`} title={sizing ? t("groups.sizing") : undefined}>
+            {skipped > 0 && (
+              <span className="mc-skipped" title={t("groups.skipped", { count: skipped })}>
+                <TriangleAlert size={10} />
+              </span>
+            )}
+            {sizeText(row, dirSize, sizing, lng, t)}
+          </span>
           <span className="c-date">{row.isParent ? "" : formatDate(row.modifiedMs, lng)}</span>
           <span className="c-attr">{row.isParent ? "" : formatAttrs(row.attributes)}</span>
         </>

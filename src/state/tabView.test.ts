@@ -4,7 +4,9 @@ import {
   back,
   buildRows,
   emptyView,
+  finishSizing,
   forward,
+  hasSize,
   invertMarks,
   jumpTo,
   markRange,
@@ -12,6 +14,8 @@ import {
   parentPath,
   quickSearch,
   selectByMask,
+  sizable,
+  startSizing,
   toggleMark,
   type Row,
   type TabView,
@@ -81,9 +85,53 @@ describe("buildRows", () => {
     expect(names(rows)).toEqual(["b", "a"]);
   });
 
+  it("una cartella chiamata come una proprietà di Object non rompe l'ordinamento per dimensione", () => {
+    const dirs = [d("constructor"), d("toString"), d("b")];
+    const rows = buildRows(dirs, "C:\\", { key: "size", desc: true }, { ...opts, dirSizes: { b: 100 } });
+    expect(names(rows)).toEqual(["b", "constructor", "toString"]);
+    // e quando la dimensione è davvero stata calcolata
+    const own = buildRows(dirs, "C:\\", { key: "size", desc: false }, { ...opts, dirSizes: { b: 100, constructor: 50 } });
+    expect(names(own)).toEqual(["toString", "constructor", "b"]);
+  });
+
   it("none mantiene l'ordine del listing (con blocchi)", () => {
     const e = [f("z"), d("y"), f("a")];
     expect(names(buildRows(e, "C:\\", { key: "none", desc: false }, opts))).toEqual(["y", "z", "a"]);
+  });
+});
+
+describe("dimensione delle cartelle", () => {
+  const size = (bytes: number, skipped = 0) => ({ bytes, files: 1, dirs: 0, skipped });
+
+  it("sizable: solo cartelle vere, non '..' né unità", () => {
+    expect(sizable(d("x"))).toBe(true);
+    expect(sizable(f("x"))).toBe(false);
+    expect(sizable({ ...d(".."), isParent: true })).toBe(false);
+    expect(sizable({ ...d("C:\\"), drive: { root: "C:\\", label: "", kind: "fixed", total: 0, free: 0, ready: true } })).toBe(false);
+  });
+
+  it("startSizing / finishSizing: il risultato sostituisce il calcolo in corso", () => {
+    let v = startSizing(emptyView("C:\\"), ["a", "b"]);
+    expect([...v.sizing]).toEqual(["a", "b"]);
+    v = finishSizing(v, "a", size(7, 2));
+    expect([...v.sizing]).toEqual(["b"]);
+    expect(v.dirSizes).toEqual({ a: 7 });
+    expect(v.skipped).toEqual({ a: 2 });
+    // ricalcolo senza saltati: il marcatore sparisce
+    v = finishSizing(startSizing(v, ["a"]), "a", size(9));
+    expect([v.dirSizes, v.skipped]).toEqual([{ a: 9 }, {}]);
+  });
+
+  it("finishSizing con null (annullato o errore) toglie solo il calcolo in corso", () => {
+    const v = finishSizing(startSizing(emptyView("C:\\"), ["a"]), "a", null);
+    expect([v.sizing.size, v.dirSizes]).toEqual([0, {}]);
+  });
+
+  it("un nome come '__proto__' resta una proprietà propria", () => {
+    const v = finishSizing(emptyView("C:\\"), "__proto__", size(3));
+    expect(Object.keys(v.dirSizes)).toEqual(["__proto__"]);
+    expect(hasSize(v.dirSizes, "__proto__")).toBe(true);
+    expect(hasSize(v.dirSizes, "constructor")).toBe(false);
   });
 });
 
@@ -146,6 +194,12 @@ describe("history", () => {
     const v0: TabView = { ...view(["..", "a"]), cursor: 1, marked: new Set(["a"]), filter: "*.x", dirSizes: { a: 1 } };
     const v = navigateTo(v0, "C:\\y");
     expect([v.cursor, v.marked.size, v.filter, v.dirSizes]).toEqual([0, 0, "", {}]);
+  });
+
+  it("navigateTo azzera anche i calcoli di dimensione in corso e i saltati", () => {
+    const v0 = { ...emptyView("C:\\x"), sizing: new Set(["a"]), skipped: { a: 2 } };
+    const v = navigateTo(v0, "C:\\y");
+    expect([v.sizing.size, v.skipped]).toEqual([0, {}]);
   });
 
   it("stesso percorso: la history non cambia", () => {

@@ -15,6 +15,7 @@ use tauri::{Emitter, Manager};
 pub fn run() {
     tauri::Builder::default()
         .manage(fs::watch::Watchers::default())
+        .manage(fs::size::SizeJobs::default())
         .setup(|app| {
             if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
                 elevation::set_owner_window(hwnd);
@@ -36,6 +37,8 @@ pub fn run() {
             fs::normalize_paths,
             fs::watch::watch_dir,
             fs::watch::unwatch_dir,
+            fs::size::calc_dir_size,
+            fs::size::cancel_dir_size,
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
             shell::drag::start_drag,

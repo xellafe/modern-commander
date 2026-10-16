@@ -1,4 +1,4 @@
-import type { Drive, Entry } from "../ipc/types";
+import type { DirSize, Drive, Entry } from "../ipc/types";
 import { compileMask } from "../lib/mask";
 
 export type SortKey = "name" | "ext" | "size" | "date" | "none";
@@ -16,7 +16,12 @@ export interface TabView {
   historyIndex: number;
   filter: string;
   view: "full" | "brief";
+  /** Byte delle cartelle già misurate, per nome. Leggere con `hasSize`: un nome come "constructor" non è una chiave assente. */
   dirSizes: Record<string, number>;
+  /** Cartelle con il calcolo della dimensione in corso. */
+  sizing: Set<string>;
+  /** Sottocartelle illeggibili non comprese nella dimensione (solo se > 0). */
+  skipped: Record<string, number>;
 }
 interface BuildOpts {
   showHidden: boolean;
@@ -39,7 +44,12 @@ export const emptyView = (path: string): TabView => ({
   filter: "",
   view: "full",
   dirSizes: {},
+  sizing: new Set(),
+  skipped: {},
 });
+
+export const hasSize = (sizes: Record<string, number>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(sizes, name); // Object.hasOwn è ES2022, il target è ES2020
 
 export function parentPath(path: string): string | null {
   const p = path.replace(/\\+$/, "");
@@ -64,7 +74,8 @@ export function buildRows(
   sort: TabView["sort"],
   opts: BuildOpts,
 ): Row[] {
-  const sizeOf = (e: Entry) => (e.isDir ? (opts.dirSizes?.[e.name] ?? 0) : e.size);
+  const sizes = opts.dirSizes ?? {};
+  const sizeOf = (e: Entry) => (e.isDir ? (hasSize(sizes, e.name) ? sizes[e.name] : 0) : e.size);
   const key = (a: Entry, b: Entry): number => {
     switch (sort.key) {
       case "name": return collator.compare(a.name, b.name);
@@ -132,6 +143,28 @@ export function invertMarks(v: TabView): TabView {
   return { ...v, marked };
 }
 
+/** Cartelle di cui ha senso calcolare la dimensione: non '..' né le unità di `drives:`. */
+export const sizable = (r: Row): boolean => r.isDir && !r.isParent && !r.drive;
+
+export const startSizing = (v: TabView, names: string[]): TabView => ({
+  ...v,
+  sizing: new Set([...v.sizing, ...names]),
+});
+
+/** Chiude il calcolo di `name`; `size` null (annullato o fallito) lascia invariata la dimensione nota. */
+export function finishSizing(v: TabView, name: string, size: DirSize | null): TabView {
+  const sizing = new Set(v.sizing);
+  sizing.delete(name);
+  if (!size) return { ...v, sizing };
+  const { [name]: _old, ...skipped } = v.skipped;
+  return {
+    ...v,
+    sizing,
+    dirSizes: { ...v.dirSizes, [name]: size.bytes },
+    skipped: size.skipped > 0 ? { ...skipped, [name]: size.skipped } : skipped,
+  };
+}
+
 const moved = (v: TabView, history: string[], historyIndex: number): TabView => ({
   ...v,
   history,
@@ -140,6 +173,8 @@ const moved = (v: TabView, history: string[], historyIndex: number): TabView => 
   marked: new Set(),
   filter: "",
   dirSizes: {},
+  sizing: new Set(),
+  skipped: {},
 });
 
 export function navigateTo(v: TabView, path: string): TabView {

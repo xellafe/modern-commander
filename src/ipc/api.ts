@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Drive, Entry, JobId, JobSpec, JobView, Prompt, PromptReply } from "./types";
+import type { DirSizeEvent, Drive, Entry, JobId, JobSpec, JobView, Prompt, PromptReply } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -19,6 +19,15 @@ export const unwatchDir = (tabId: string) => invoke<void>("unwatch_dir", { tabId
 
 export const onFsChanged = (cb: (tabId: string) => void): Promise<UnlistenFn> =>
   listen<{ tabId: string }>("fs-changed", (e) => cb(e.payload.tabId));
+
+/** Risponde subito: il risultato arriva con l'evento `dir-size` (vedi `onDirSize`). */
+export const calcDirSize = (requestId: number, path: string) =>
+  invoke<void>("calc_dir_size", { requestId, path });
+
+export const cancelDirSize = (requestId: number) => invoke<void>("cancel_dir_size", { requestId });
+
+export const onDirSize = (cb: (e: DirSizeEvent) => void): Promise<UnlistenFn> =>
+  listen<DirSizeEvent>("dir-size", (e) => cb(e.payload));
 
 /** Menu contestuale della shell; `x`/`y` in pixel fisici, client della finestra. Stessa cartella padre per tutti. */
 export const showContextMenu = (paths: string[], x: number, y: number) =>

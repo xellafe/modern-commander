@@ -76,6 +76,11 @@
 .mc-row .c-size, .mc-row .c-date, .mc-row .c-attr { text-align: right; }
 .mc-row .c-attr { font-family: var(--mc-font-mono); font-size: 10px; font-variant-ligatures: none; } /* "--" di Cascadia Code */
 .mc-row .c-drive { grid-column: 3 / -1; }
+.mc-row .c-size.sizing { animation: mc-pulse 1s ease-in-out infinite; }
+.mc-skipped { margin-right: 4px; color: var(--mc-accent); }
+.mc-skipped svg { vertical-align: -1px; }
+@keyframes mc-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .mc-row .c-size.sizing { animation: none; } }
 
 .mc-brief-col { position: absolute; top: 0; left: 0; height: 100%; }
 .mc-brief-col .mc-row { position: static; display: flex; align-items: center; gap: 6px; padding: 0 8px; }
