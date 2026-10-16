@@ -1,3 +1,4 @@
+pub mod config;
 pub mod error;
 pub mod fs;
 pub mod paths;
@@ -17,6 +18,8 @@ pub fn run() {
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
             shell::drag::start_drag,
+            config::read_config,
+            config::write_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

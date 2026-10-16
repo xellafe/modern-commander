@@ -16,3 +16,8 @@ export const unwatchDir = (tabId: string) => invoke<void>("unwatch_dir", { tabId
 
 export const onFsChanged = (cb: (tabId: string) => void): Promise<UnlistenFn> =>
   listen<{ tabId: string }>("fs-changed", (e) => cb(e.payload.tabId));
+
+export const readConfig = (name: string) => invoke<unknown | null>("read_config", { name });
+
+export const writeConfig = (name: string, value: unknown) =>
+  invoke<void>("write_config", { name, value });

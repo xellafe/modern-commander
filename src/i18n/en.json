@@ -1,0 +1,16 @@
+{
+  "app": { "title": "Modern Commander" },
+  "errors": {
+    "NOT_FOUND": "Item not found.",
+    "ACCESS_DENIED": "Access denied.",
+    "ALREADY_EXISTS": "An item with this name already exists.",
+    "DISK_FULL": "Not enough free disk space.",
+    "NOT_READY": "The drive is not ready.",
+    "SAME_FILE": "Source and destination are the same file.",
+    "INTO_ITSELF": "A folder cannot be copied or moved into itself.",
+    "INVALID_NAME": "The name is not valid.",
+    "CANCELLED": "Operation cancelled.",
+    "INVALID_REQUEST": "Invalid request.",
+    "IO": "Input/output error."
+  }
+}

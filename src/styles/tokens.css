@@ -1,0 +1,27 @@
+[data-theme="dark"] {
+  --mc-bg: #0e1013;
+  --mc-panel: #15171c;
+  --mc-border: #262a32;
+  --mc-text: #d6d9e0;
+  --mc-muted: #7d8391;
+  --mc-accent: #e07a4f;
+  --mc-selection: rgba(224, 122, 79, 0.14);
+  --mc-row-height: 22px;
+  --mc-radius: 0;
+  --mc-font-ui: "Segoe UI Variable", "Segoe UI", sans-serif;
+  --mc-font-mono: "Cascadia Code", Consolas, monospace;
+}
+
+[data-theme="light"] {
+  --mc-bg: #faf9f5;
+  --mc-panel: #f0eee6;
+  --mc-border: #e3e0d6;
+  --mc-text: #2b2a27;
+  --mc-muted: #8a877e;
+  --mc-accent: #c96442;
+  --mc-selection: rgba(201, 100, 66, 0.12);
+  --mc-row-height: 26px;
+  --mc-radius: 6px;
+  --mc-font-ui: "Segoe UI Variable", "Segoe UI", sans-serif;
+  --mc-font-mono: "Cascadia Code", Consolas, monospace;
+}

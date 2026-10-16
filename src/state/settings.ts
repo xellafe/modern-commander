@@ -1,0 +1,55 @@
+import { create } from "zustand";
+import { readConfig, writeConfig } from "../ipc/api";
+
+export interface Settings {
+  theme: "dark" | "light" | "system";
+  language: "en" | "it";
+  showHidden: boolean;
+  showSystem: boolean;
+  confirmDelete: boolean;
+  externalEditor: string;
+}
+
+export const defaultSettings = (osLocale: string): Settings => ({
+  theme: "system",
+  language: osLocale.toLowerCase().startsWith("it") ? "it" : "en",
+  showHidden: false,
+  showSystem: false,
+  confirmDelete: true,
+  externalEditor: "notepad.exe",
+});
+
+export const resolveTheme = (theme: Settings["theme"], prefersDark: boolean): "dark" | "light" =>
+  theme === "system" ? (prefersDark ? "dark" : "light") : theme;
+
+interface SettingsState extends Settings {
+  load: () => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void>;
+}
+
+const pickSettings = (s: Settings): Settings => ({
+  theme: s.theme,
+  language: s.language,
+  showHidden: s.showHidden,
+  showSystem: s.showSystem,
+  confirmDelete: s.confirmDelete,
+  externalEditor: s.externalEditor,
+});
+
+export const useSettings = create<SettingsState>((set, get) => ({
+  ...defaultSettings(navigator.language),
+  load: async () => {
+    const defaults = defaultSettings(navigator.language);
+    const stored = (await readConfig("settings")) as Partial<Settings> | null;
+    // Si fondono solo le chiavi note: le sconosciute sono ignorate, le nuove prendono il default.
+    const merged = { ...defaults };
+    for (const k of Object.keys(defaults) as (keyof Settings)[]) {
+      if (stored && k in stored) (merged as Record<string, unknown>)[k] = stored[k];
+    }
+    set(merged);
+  },
+  update: async (patch) => {
+    set(patch);
+    await writeConfig("settings", pickSettings(get()));
+  },
+}));

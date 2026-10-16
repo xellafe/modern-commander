@@ -7,7 +7,7 @@ pub mod watch;
 use crate::error::{AppError, ErrorCode};
 use std::path::{Path, PathBuf};
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError {
         detail: Some(e.to_string()),
         ..AppError::new(ErrorCode::Io, None)
