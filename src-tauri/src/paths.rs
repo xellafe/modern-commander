@@ -41,6 +41,11 @@ pub fn is_within(child: &Path, parent: &Path) -> bool {
     c.starts_with(&p)
 }
 
+/// Stesso percorso per componenti, senza distinguere maiuscole e minuscole.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    is_within(a, b) && is_within(b, a)
+}
+
 /// Forma confrontabile di un percorso: assoluto, senza prefisso `\\?\` (`\\?\UNC\` diventa `\\`),
 /// con `.` e `..` risolti a livello testuale e senza separatori finali. Non tocca il disco
 /// (salvo `std::path::absolute` per i percorsi relativi) e non risolve i collegamenti.

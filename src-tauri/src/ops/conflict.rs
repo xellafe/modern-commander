@@ -2,21 +2,35 @@
 
 use super::model::{ConflictPolicy, Decision, Meta};
 use crate::error::{AppError, ErrorCode};
-use crate::paths::{is_within, normalize_lexical, to_extended};
+use crate::paths::{normalize_lexical, same_path, to_extended};
 use std::ffi::OsString;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
+};
 
-fn same_path(a: &Path, b: &Path) -> bool {
-    is_within(a, b) && is_within(b, a)
+/// Identità del file (numero di serie del volume, indice del file): è la stessa per tutti gli
+/// hard link e per un collegamento simbolico e il suo bersaglio. `None` se non si può aprire.
+fn file_id(p: &Path) -> Option<(u32, u64)> {
+    let f = std::fs::OpenOptions::new()
+        .access_mode(0) // nessun diritto di lettura/scrittura: bastano gli attributi
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0) // necessario per aprire anche le cartelle
+        .open(to_extended(p))
+        .ok()?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }.ok()?;
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Some((info.dwVolumeSerialNumber, index))
 }
 
-/// Stesso file: `canonicalize` di entrambi (risolve maiuscole, `..` e collegamenti simbolici);
-/// se uno dei due non esiste, confronto dei percorsi normalizzati.
-// ponytail: due hard link dello stesso file non vengono riconosciuti; servirebbe confrontare
-// volume serial + file index (GetFileInformationByHandle) se l'executor sovrascrive troncando.
+/// Stesso file: se esistono entrambi si confronta l'identità del file (copre maiuscole, `..`,
+/// collegamenti e hard link); altrimenti i percorsi normalizzati.
 fn same_file(src: &Path, dst: &Path) -> bool {
-    match (std::fs::canonicalize(to_extended(src)), std::fs::canonicalize(to_extended(dst))) {
-        (Ok(a), Ok(b)) => same_path(&a, &b),
+    match (file_id(src), file_id(dst)) {
+        (Some(a), Some(b)) => a == b,
         _ => same_path(&normalize_lexical(src), &normalize_lexical(dst)),
     }
 }
@@ -85,13 +99,25 @@ mod tests {
     }
 
     #[test]
-    fn same_existing_file_via_canonicalize() {
+    fn same_existing_file_via_alias_and_hard_link() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("f.txt");
         std::fs::write(&f, b"x").unwrap();
         let m = Meta { size: 1, modified_ms: 1 };
         let alias = d.path().join("sub").join("..").join("F.TXT");
         assert_eq!(resolve(&ConflictPolicy::Overwrite, &f, &alias, &m, &m).unwrap_err().code, ErrorCode::SameFile);
+
+        let b = d.path().join("b");
+        std::fs::create_dir(&b).unwrap();
+        let link = b.join("f.txt");
+        std::fs::hard_link(&f, &link).unwrap();
+        assert_eq!(resolve(&ConflictPolicy::Overwrite, &f, &link, &m, &m).unwrap_err().code, ErrorCode::SameFile);
+        // Due file distinti con lo stesso contenuto restano diversi; anche due cartelle.
+        let other = b.join("g.txt");
+        std::fs::write(&other, b"x").unwrap();
+        assert_eq!(resolve(&ConflictPolicy::Overwrite, &f, &other, &m, &m).unwrap(), Some(Decision::Overwrite));
+        assert_eq!(resolve(&ConflictPolicy::Skip, d.path(), &b, &m, &m).unwrap(), Some(Decision::Skip));
+        assert_eq!(resolve(&ConflictPolicy::Skip, &b, &b.join("."), &m, &m).unwrap_err().code, ErrorCode::SameFile);
     }
 
     #[test]

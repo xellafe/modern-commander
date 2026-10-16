@@ -3,7 +3,7 @@
 use super::model::{FileItem, JobKind, JobSpec};
 use crate::error::{AppError, ErrorCode};
 use crate::mask::match_mask;
-use crate::paths::{is_within, normalize_lexical, to_extended, volume_key};
+use crate::paths::{is_within, normalize_lexical, same_path, to_extended, volume_key};
 use std::fs::Metadata;
 use std::os::windows::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -24,10 +24,6 @@ fn is_dir_like(m: &Metadata) -> bool {
 fn item(src: &Path, dst: Option<PathBuf>, m: &Metadata) -> FileItem {
     let is_dir = is_dir_like(m);
     FileItem { src: src.to_path_buf(), dst, is_dir, size: if is_dir { 0 } else { m.len() } }
-}
-
-fn same_path(a: &Path, b: &Path) -> bool {
-    is_within(a, b) && is_within(b, a)
 }
 
 struct Walker<'a> {
@@ -105,11 +101,15 @@ pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
             if is_within(&nd, &ns) && !same_path(&nd, &ns) {
                 return Err(AppError::new(ErrorCode::IntoItself, Some(first)));
             }
-            Ok(vec![item(first, Some(dest), &m)])
+            Ok(vec![item(first, Some(nd), &m)])
         }
         JobKind::Delete { .. } => {
             walker.post_order = true;
             for s in &spec.sources {
+                // Mai un'intera unità o condivisione.
+                if normalize_lexical(s).file_name().is_none() {
+                    return Err(invalid(Some(s)));
+                }
                 walker.visit(s, None, &stat(s)?)?;
             }
             Ok(walker.out)
@@ -117,7 +117,8 @@ pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
         JobKind::Copy | JobKind::Move => {
             let is_move = spec.kind == JobKind::Move;
             let dest = spec.dest.as_ref().ok_or_else(|| invalid(Some(first)))?;
-            // Forma comune (assoluta, senza `\\?\`, `..` risolti) prima di ogni confronto.
+            // Forma comune (assoluta, senza `\\?\`, `..` risolti) per i confronti e per costruire
+            // le destinazioni: in un percorso `\\?\` Windows non risolve `..`.
             let ndest = normalize_lexical(dest);
             let mut checked = Vec::with_capacity(spec.sources.len());
             for s in &spec.sources {
@@ -134,7 +135,7 @@ pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
                 // cartella o un'unità `subst` danno ERROR_NOT_SAME_DEVICE e l'executor ripiega su copia.
                 let vol = volume_key(&ns);
                 let rename = is_move && filter.is_none() && !vol.is_empty() && vol == volume_key(&ndest);
-                checked.push((s, m, dest.join(name), rename));
+                checked.push((s, m, ndest.join(name), rename));
             }
             for (s, m, dst, rename) in checked {
                 if rename {
@@ -213,6 +214,20 @@ mod tests {
         let a = tree(d.path());
         let items = expand(&spec(JobKind::Copy, vec![a.clone()], Some(d.path().to_path_buf()), None)).unwrap();
         assert_eq!(items[0].dst.as_deref(), Some(a.as_path()));
+    }
+
+    #[test]
+    fn destinations_are_built_from_normalized_dest() {
+        let d = tempfile::tempdir().unwrap();
+        let a = tree(d.path());
+        let dest = to_extended(d.path()).join("x").join("..").join("D");
+        let items = expand(&spec(JobKind::Copy, vec![a.clone()], Some(dest), None)).unwrap();
+        let da = d.path().join("D").join("a");
+        assert_eq!(items[0].dst.as_deref(), Some(da.as_path()));
+        assert_eq!(items[3].dst, Some(da.join("s").join("y.txt")));
+        let renamed = d.path().join("x").join("..").join("b");
+        let items = expand(&spec(JobKind::Rename, vec![a], Some(renamed), None)).unwrap();
+        assert_eq!(items[0].dst, Some(d.path().join("b")));
     }
 
     #[test]
@@ -326,6 +341,9 @@ mod tests {
             spec(JobKind::Rename, vec![a.clone(), a.clone()], Some(d.path().join("b")), None),
             spec(JobKind::Mkdir, vec![], None, None),
             spec(JobKind::Copy, vec![PathBuf::from(r"C:\")], Some(d.path().join("D")), None),
+            spec(JobKind::Delete { permanent: true }, vec![PathBuf::from(r"C:\")], None, None),
+            spec(JobKind::Delete { permanent: false }, vec![PathBuf::from(r"\\?\C:\")], None, None),
+            spec(JobKind::Delete { permanent: true }, vec![PathBuf::from(r"\\srv\sh\")], None, None),
         ];
         for s in bad {
             assert_eq!(expand(&s).unwrap_err().code, ErrorCode::InvalidRequest, "{s:?}");
