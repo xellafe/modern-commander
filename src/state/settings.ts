@@ -36,6 +36,9 @@ const pickSettings = (s: Settings): Settings => ({
   externalEditor: s.externalEditor,
 });
 
+// Le scritture partono in ordine di chiamata: l'ultimo update() vince sempre.
+let pending: Promise<unknown> = Promise.resolve();
+
 export const useSettings = create<SettingsState>((set, get) => ({
   ...defaultSettings(navigator.language),
   load: async () => {
@@ -50,6 +53,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
   update: async (patch) => {
     set(patch);
-    await writeConfig("settings", pickSettings(get()));
+    const snapshot = pickSettings(get());
+    const run = pending.then(() => writeConfig("settings", snapshot));
+    pending = run.catch(() => {}); // un errore non blocca le scritture successive
+    return run;
   },
 }));
