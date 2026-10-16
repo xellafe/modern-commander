@@ -23,6 +23,7 @@ pub const PART_SUFFIX: &str = ".mcpart";
 
 pub trait Executor: Send + Sync {
     /// `progress(byte_copiati)`; se restituisce `false` la copia si annulla.
+    /// Con `overwrite` (come in `move_path`) si sostituisce anche una destinazione di sola lettura.
     fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError>;
     /// Solo sulla stessa unità; tra unità diverse dà `NOT_SAME_DEVICE`.
     fn move_path(&self, src: &Path, dst: &Path, overwrite: bool) -> Result<(), AppError>;
@@ -64,6 +65,16 @@ fn clear_readonly(p: &Path, attrs: u32) -> Result<(), AppError> {
     let keep = attrs & 0x3126;
     let new = if keep == 0 { FILE_ATTRIBUTE_NORMAL } else { FILE_FLAGS_AND_ATTRIBUTES(keep) };
     unsafe { SetFileAttributesW(&wide(p), new) }.map_err(|e| from_win(&e, p))
+}
+
+/// Prima di sostituire `dst`: MoveFileExW rifiuta di sostituire un file di sola lettura. Gli
+/// attributi del file nuovo vengono comunque dalla sorgente. Su una cartella la sola lettura è
+/// un marcatore della Shell e la sostituzione fallirebbe comunque: non si tocca.
+fn clear_readonly_of(dst: &Path) -> Result<(), AppError> {
+    match std::fs::symlink_metadata(to_extended(dst)) {
+        Ok(m) if !m.is_dir() => clear_readonly(dst, m.file_attributes()),
+        _ => Ok(()),
+    }
 }
 
 /// Cancella il `.mcpart`, anche se ha ereditato la sola lettura dalla sorgente; assente = ok.
@@ -244,6 +255,10 @@ impl Executor for LocalExecutor {
             remove_part(&part);
             return Err(AppError::new(ErrorCode::SameFile, Some(src)));
         }
+        if overwrite && let Err(e) = clear_readonly_of(dst) {
+            remove_part(&part);
+            return Err(e);
+        }
         let flags = if overwrite { MOVEFILE_REPLACE_EXISTING } else { MOVE_FILE_FLAGS(0) };
         move_file(&part, dst, flags).map_err(|e| {
             remove_part(&part);
@@ -252,8 +267,11 @@ impl Executor for LocalExecutor {
     }
 
     fn move_path(&self, src: &Path, dst: &Path, overwrite: bool) -> Result<(), AppError> {
-        if overwrite && same_file(src, dst) {
-            return Err(AppError::new(ErrorCode::SameFile, Some(src)));
+        if overwrite {
+            if same_file(src, dst) {
+                return Err(AppError::new(ErrorCode::SameFile, Some(src)));
+            }
+            clear_readonly_of(dst)?;
         }
         // Senza MOVEFILE_COPY_ALLOWED: tra unità diverse fallisce con NOT_SAME_DEVICE.
         move_file(src, dst, if overwrite { MOVEFILE_REPLACE_EXISTING } else { MOVE_FILE_FLAGS(0) })
@@ -378,6 +396,28 @@ mod tests {
         assert_eq!(X.copy_file(&src, &link, true, &mut |_| true).unwrap_err().code, ErrorCode::SameFile);
         assert_eq!(fs::read(&link).unwrap(), b"nuovi byte");
         assert!(!exists(&part_path(&link)));
+    }
+
+    #[test]
+    fn overwrite_replaces_readonly_destination() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("a"), d.path().join("ro"));
+        fs::write(&src, b"nuovo").unwrap();
+        let set_ro = |p: &Path| {
+            fs::write(p, b"vecchio").unwrap();
+            let mut perm = fs::metadata(p).unwrap().permissions();
+            perm.set_readonly(true);
+            fs::set_permissions(p, perm).unwrap();
+        };
+        set_ro(&dst);
+        X.copy_file(&src, &dst, true, &mut |_| true).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"nuovo");
+        assert!(!fs::metadata(&dst).unwrap().permissions().readonly());
+        fs::remove_file(&dst).unwrap();
+        set_ro(&dst);
+        X.move_path(&src, &dst, true).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"nuovo");
+        assert!(!exists(&src));
     }
 
     #[test]

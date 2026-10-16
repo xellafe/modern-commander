@@ -16,7 +16,7 @@ use windows::core::HSTRING;
 const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
 const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
 /// Millisecondi tra l'epoca FILETIME (1601) e l'epoca Unix (1970).
-const FILETIME_UNIX_DIFF_MS: i64 = 11_644_473_600_000;
+pub(crate) const FILETIME_UNIX_DIFF_MS: i64 = 11_644_473_600_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
