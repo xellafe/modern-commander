@@ -10,7 +10,7 @@ Stack: Tauri 2, backend Rust, frontend React + TypeScript (Vite). Solo Windows 1
 - Node.js 22 e npm
 - Rust stable (toolchain `x86_64-pc-windows-msvc`)
 - Visual Studio Build Tools (carico di lavoro "Sviluppo di applicazioni desktop con C++")
-- WebView2 (incluso in Windows 11)
+- WebView2 (incluso in Windows 11; su Windows 10 va installato se manca)
 
 ## Sviluppo
 
@@ -31,8 +31,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 ## Build
 
 Prerequisiti: Rust stable (`x86_64-pc-windows-msvc`), Visual Studio Build Tools con il carico di
-lavoro C++, Node.js e npm. WebView2 è dato per presente (incluso in Windows 11): né l'installer né
-il pacchetto portable lo installano.
+lavoro C++, Node.js e npm. Requisito: Windows 10 o 11 x64 con WebView2. L'installer NSIS usa la
+modalità di default di Tauri (`webviewInstallMode` = `downloadBootstrapper`, silenziosa): se WebView2
+manca scarica e installa il bootstrapper di Microsoft, quindi serve la connessione. Il pacchetto
+portable non lo installa: su un Windows 10 senza WebView2 va installato a parte.
 
 ```powershell
 npm install
