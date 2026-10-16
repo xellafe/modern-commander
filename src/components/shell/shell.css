@@ -1,0 +1,113 @@
+html, body, #root { height: 100%; margin: 0; }
+body {
+  overflow: hidden;
+  background: var(--mc-bg);
+  color: var(--mc-text);
+  font: 12px/1.45 var(--mc-font-ui);
+  user-select: none;
+}
+
+.mc-shell {
+  display: grid;
+  grid-template-rows: 30px minmax(0, 1fr) auto auto 22px;
+  height: 100vh;
+  background: var(--mc-bg);
+}
+
+/* Pulsanti icona condivisi */
+.mc-shell button {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; border: 1px solid transparent; background: none;
+  color: var(--mc-muted); font: inherit; cursor: default;
+}
+.mc-shell button:hover { color: var(--mc-text); }
+
+/* Barra del titolo */
+.mc-title {
+  display: flex; align-items: center; gap: 10px; padding-left: 10px;
+  background: var(--mc-panel); border-bottom: 1px solid var(--mc-border);
+}
+.mc-title-name { color: var(--mc-muted); font-size: 11px; pointer-events: none; }
+.mc-title-search {
+  flex: 0 0 42%; margin: 0 auto; height: 20px; display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; box-sizing: border-box;
+  border: 1px solid var(--mc-border); border-radius: calc(var(--mc-radius) + 2px);
+  background: var(--mc-bg); color: var(--mc-muted);
+}
+.mc-title-search > * { pointer-events: none; }
+.mc-title-search input {
+  flex: 1; min-width: 0; border: 0; background: none; outline: 0; padding: 0;
+  color: var(--mc-muted); font: inherit; font-size: 11px; text-align: center;
+}
+.mc-title-search input::placeholder { color: var(--mc-muted); opacity: 1; }
+.mc-title-toggles { display: flex; gap: 4px; }
+.mc-title-toggles button {
+  width: 24px; height: 20px; border-radius: var(--mc-radius);
+}
+.mc-title-toggles button.on { color: var(--mc-text); border-color: var(--mc-border); background: var(--mc-bg); }
+.mc-title-window { display: flex; height: 100%; }
+.mc-title-window button { width: 44px; height: 100%; border: 0; border-radius: 0; }
+.mc-title-window button:hover { background: var(--mc-selection); }
+.mc-title-window button.close:hover { background: #e81123; color: #fff; }
+
+/* Riga centrale */
+.mc-main { display: flex; min-height: 0; }
+
+.mc-activity {
+  flex: 0 0 38px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding-top: 6px;
+  background: var(--mc-panel); border-right: 1px solid var(--mc-border);
+}
+.mc-activity button { position: relative; width: 32px; height: 32px; border-radius: var(--mc-radius); }
+.mc-activity button.on { color: var(--mc-text); }
+.mc-activity button.on::before {
+  content: ""; position: absolute; left: -3px; top: 6px; bottom: 6px; width: 2px;
+  background: var(--mc-accent);
+}
+
+.mc-sidebar {
+  position: relative; flex: none; display: flex; flex-direction: column; min-width: 0;
+  background: var(--mc-panel); border-right: 1px solid var(--mc-border);
+}
+.mc-sidebar-head {
+  padding: 8px 12px 4px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mc-muted);
+}
+.mc-sidebar-body { flex: 1; min-height: 0; overflow: auto; }
+
+.mc-groups { flex: 1; min-width: 0; background: var(--mc-bg); }
+
+/* Pannello in basso */
+.mc-panel {
+  position: relative; box-sizing: border-box; display: flex; flex-direction: column;
+  min-height: 0; max-height: 60vh;
+  background: var(--mc-panel); border-top: 1px solid var(--mc-border);
+}
+.mc-panel-head {
+  display: flex; align-items: center; gap: 14px; padding: 4px 12px;
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mc-muted);
+}
+.mc-panel-head .on { color: var(--mc-text); border-bottom: 1px solid var(--mc-accent); }
+.mc-panel-body { flex: 1; min-height: 0; overflow: auto; }
+
+/* Splitter: maniglia di 5px a cavallo del bordo */
+.mc-splitter { position: absolute; z-index: 5; touch-action: none; }
+.mc-splitter:hover, .mc-splitter:active { background: var(--mc-accent); opacity: 0.6; }
+.mc-splitter-x { top: 0; bottom: 0; right: -3px; width: 5px; cursor: col-resize; }
+.mc-splitter-y { left: 0; right: 0; top: -3px; height: 5px; cursor: row-resize; }
+
+/* Barra dei tasti funzione */
+.mc-fkeys {
+  display: flex; gap: 4px; padding: 4px 8px;
+  background: var(--mc-panel); border-top: 1px solid var(--mc-border);
+}
+.mc-fkey {
+  flex: 1; text-align: center; padding: 2px 0; font-size: 11px; color: var(--mc-muted);
+  background: var(--mc-bg); border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
+  white-space: nowrap; overflow: hidden;
+}
+.mc-fkey b { color: var(--mc-text); font-weight: 600; margin-right: 6px; }
+
+.mc-status {
+  display: flex; align-items: center; gap: 14px; padding: 0 10px; font-size: 11px; color: var(--mc-muted);
+  background: var(--mc-panel); border-top: 1px solid var(--mc-border);
+}

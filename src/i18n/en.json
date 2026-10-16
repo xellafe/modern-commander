@@ -1,5 +1,40 @@
 {
-  "app": { "title": "Modern Commander" },
+  "app": {
+    "title": "Modern Commander"
+  },
+  "shell": {
+    "search": {
+      "placeholder": "Search files or commands…"
+    },
+    "toggle": {
+      "sidebar": "Show/hide sidebar",
+      "panel": "Show/hide bottom panel"
+    },
+    "window": {
+      "close": "Close",
+      "minimize": "Minimize",
+      "maximize": "Maximize"
+    },
+    "views": {
+      "explorer": "Explorer",
+      "favorites": "Favorites",
+      "search": "Search",
+      "git": "Git",
+      "settings": "Settings"
+    },
+    "panel": {
+      "operations": "Operations"
+    },
+    "fkeys": {
+      "exit": "Exit",
+      "view": "View",
+      "delete": "Delete",
+      "edit": "Edit",
+      "copy": "Copy",
+      "newFolder": "New folder",
+      "move": "Move"
+    }
+  },
   "errors": {
     "NOT_FOUND": "Item not found.",
     "ACCESS_DENIED": "Access denied.",

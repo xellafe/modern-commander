@@ -1,51 +1,32 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import "./components/shell/shell.css";
+import { ActivityBar } from "./components/shell/ActivityBar";
+import { BottomPanel } from "./components/shell/BottomPanel";
+import { FKeyBar } from "./components/shell/FKeyBar";
+import { Sidebar } from "./components/shell/Sidebar";
+import { StatusBar } from "./components/shell/StatusBar";
+import { TitleBar } from "./components/shell/TitleBar";
+import { useUi } from "./state/ui";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
-  return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
-  );
+// Slot riempito dal Task 11 (gruppi di schede e pannelli file).
+function GroupsArea() {
+  return <main className="mc-groups" />;
 }
 
-export default App;
+export default function App() {
+  const sidebarVisible = useUi((s) => s.sidebarVisible);
+  const bottomPanelVisible = useUi((s) => s.bottomPanelVisible);
+
+  return (
+    <div className="mc-shell">
+      <TitleBar />
+      <div className="mc-main">
+        <ActivityBar />
+        {sidebarVisible && <Sidebar />}
+        <GroupsArea />
+      </div>
+      {bottomPanelVisible && <BottomPanel />}
+      <FKeyBar />
+      <StatusBar />
+    </div>
+  );
+}

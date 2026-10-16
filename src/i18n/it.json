@@ -1,5 +1,40 @@
 {
-  "app": { "title": "Modern Commander" },
+  "app": {
+    "title": "Modern Commander"
+  },
+  "shell": {
+    "search": {
+      "placeholder": "Cerca file o comando…"
+    },
+    "toggle": {
+      "sidebar": "Mostra/nascondi barra laterale",
+      "panel": "Mostra/nascondi pannello in basso"
+    },
+    "window": {
+      "close": "Chiudi",
+      "minimize": "Riduci a icona",
+      "maximize": "Ingrandisci"
+    },
+    "views": {
+      "explorer": "Esplora",
+      "favorites": "Preferiti",
+      "search": "Cerca",
+      "git": "Git",
+      "settings": "Impostazioni"
+    },
+    "panel": {
+      "operations": "Operazioni"
+    },
+    "fkeys": {
+      "exit": "Esci",
+      "view": "Vedi",
+      "delete": "Elimina",
+      "edit": "Modifica",
+      "copy": "Copia",
+      "newFolder": "Cartella",
+      "move": "Sposta"
+    }
+  },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",
     "ACCESS_DENIED": "Accesso negato.",

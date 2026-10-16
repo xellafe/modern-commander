@@ -10,6 +10,9 @@ const applyTheme = () => {
   document.documentElement.dataset.theme = resolveTheme(useSettings.getState().theme, media.matches);
 };
 
+// Tema di default subito, prima di qualsiasi await: niente flash non stilizzato.
+applyTheme();
+
 async function bootstrap() {
   // Se la lettura fallisce l'app parte comunque con i valori di default.
   await useSettings.getState().load().catch(() => {});
