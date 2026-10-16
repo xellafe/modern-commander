@@ -4,12 +4,12 @@ use super::conflict::same_file;
 use super::model::ListEntry;
 use super::plan::read_entries;
 use crate::error::{AppError, ErrorCode};
-use crate::paths::{to_extended, volume_key};
+use crate::paths::{has_trailing_dot_or_space, to_extended, volume_key};
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{
     COPY_FILE_FAIL_IF_EXISTS, COPYPROGRESSROUTINE_PROGRESS, CopyFileExW, FILE_ATTRIBUTE_NORMAL,
@@ -147,14 +147,6 @@ fn recycle_bin_supported(drive_type: u32) -> bool {
     drive_type == 3 // DRIVE_FIXED
 }
 
-/// Componente che termina con `.` o spazio: la Shell lo normalizza e cestinerebbe un altro file.
-fn has_trailing_dot_or_space(p: &Path) -> bool {
-    p.components().any(|c| match c {
-        Component::Normal(n) => n.to_string_lossy().ends_with(['.', ' ']),
-        _ => false,
-    })
-}
-
 /// Radice del volume che contiene davvero `p`, con il `\` finale (`C:\` oppure `C:\mnt\usb\` per un
 /// volume montato in una cartella), senza prefisso esteso. `None` se il sistema non la risolve.
 fn volume_root(p: &Path) -> Option<String> {
@@ -166,6 +158,7 @@ fn volume_root(p: &Path) -> Option<String> {
 }
 
 fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
+    // La Shell normalizza il nome e cestinerebbe un altro file.
     if has_trailing_dot_or_space(path) {
         return Err(AppError {
             detail: Some("recycle_bin_unsupported_name".into()),

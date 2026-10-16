@@ -1,6 +1,6 @@
 //! Apertura dei file: programma associato (verbo "open" della shell) o eseguibile scelto.
 
-use super::{detail_error, hr_error};
+use super::{check_shell_name, detail_error, hr_error};
 use crate::error::{AppError, ErrorCode};
 use std::path::Path;
 use std::process::Command;
@@ -36,6 +36,7 @@ pub async fn open_path(window: tauri::Window, path: String) -> Result<(), AppErr
 /// `SEE_MASK_FLAG_NO_UI`: niente finestre d'errore della shell, l'unica segnalazione è il notice del
 /// frontend. Senza associazione si riprova col verbo `openas`, cioè la finestra "Apri con".
 fn open_on_sta(owner: HWND, path: &str) -> Result<(), AppError> {
+    check_shell_name(path)?;
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         let res = match shell_execute(owner, w!("open"), path) {
@@ -83,6 +84,7 @@ fn editor_command(exe: &str, path: &str) -> Result<Command, AppError> {
     if exe.is_empty() || path.is_empty() {
         return Err(AppError::new(ErrorCode::InvalidRequest, None));
     }
+    check_shell_name(path)?; // anche l'editor aprirebbe il "gemello"
     let mut cmd = Command::new(exe);
     cmd.arg(path);
     Ok(cmd)
@@ -102,6 +104,17 @@ mod tests {
         let cmd = editor_command(" notepad.exe ", "C:\\con spazi\\a b.txt").unwrap();
         assert_eq!(cmd.get_program(), "notepad.exe");
         assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["C:\\con spazi\\a b.txt"]);
+    }
+
+    /// "a.exe." aperto dalla shell (o dall'editor) diventerebbe "a.exe": si rifiuta prima.
+    #[test]
+    fn names_the_shell_would_alter_are_refused() {
+        for path in ["C:\\x\\a.exe.", "C:\\x\\a.txt ", "C:\\x.\\a.txt"] {
+            let e = editor_command("notepad.exe", path).err().unwrap();
+            assert_eq!((e.code, e.detail.as_deref()), (ErrorCode::InvalidName, Some("shell_unsupported_name")), "{path}");
+            let e = open_on_sta(HWND::default(), path).err().unwrap();
+            assert_eq!((e.code, e.detail.as_deref(), e.path.as_deref()), (ErrorCode::InvalidName, Some("shell_unsupported_name"), Some(path)));
+        }
     }
 
     /// Con `FLAG_NO_UI` un file mancante torna come errore senza finestre della shell (che qui,

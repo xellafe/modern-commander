@@ -11,6 +11,7 @@ pub mod open;
 pub mod properties;
 
 use crate::error::{AppError, ErrorCode};
+use crate::paths::has_trailing_dot_or_space;
 use std::path::Path;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::IDataObject;
@@ -36,6 +37,18 @@ pub(crate) fn hr_error(err: &windows::core::Error, path: Option<&Path>) -> AppEr
         detail: Some(format!("HRESULT 0x{hr:08X}")),
         ..AppError::new(code, path)
     }
+}
+
+/// La shell toglie punto e spazio finali dai nomi: "x." diventerebbe "x", e il menu, le Proprietà,
+/// il drag o l'apertura agirebbero sul "gemello". Questi percorsi si rifiutano.
+pub(crate) fn check_shell_name(path: &str) -> Result<(), AppError> {
+    if has_trailing_dot_or_space(Path::new(path)) {
+        return Err(AppError {
+            detail: Some("shell_unsupported_name".into()),
+            ..AppError::new(ErrorCode::InvalidName, Some(Path::new(path)))
+        });
+    }
+    Ok(())
 }
 
 fn detail_error(detail: impl ToString) -> AppError {
@@ -86,6 +99,7 @@ impl Selection {
         let items = paths
             .iter()
             .map(|p| {
+                check_shell_name(p)?;
                 let mut pidl = std::ptr::null_mut();
                 unsafe { SHParseDisplayName(&HSTRING::from(p.as_str()), None, &mut pidl, 0, None) }
                     .map(|_| Pidl(pidl))
@@ -166,6 +180,21 @@ mod tests {
             Selection::parse(&[]).err().unwrap().code,
             ErrorCode::InvalidRequest
         );
+    }
+
+    /// La shell toglie punto o spazio finale: "x." diventerebbe "x", un altro file.
+    #[test]
+    fn names_the_shell_would_alter_are_refused() {
+        com();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("x"), "gemello").unwrap();
+        for odd in ["x.", "x "] {
+            let p = dir.path().join(odd);
+            std::fs::write(crate::paths::to_extended(&p), "strano").unwrap();
+            let err = Selection::parse(&[s(&dir.path().join("x")), s(&p)]).err().unwrap();
+            assert_eq!((err.code, err.detail.as_deref()), (ErrorCode::InvalidName, Some("shell_unsupported_name")));
+            assert_eq!(err.path.as_deref(), Some(s(&p).as_str()));
+        }
     }
 
     #[test]

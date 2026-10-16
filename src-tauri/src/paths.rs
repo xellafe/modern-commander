@@ -96,6 +96,15 @@ pub fn normalize_lexical(p: &Path) -> PathBuf {
     PathBuf::from(out)
 }
 
+/// Un componente termina con `.` o spazio: le API della Shell (e senza `\\?\` anche Win32) lo
+/// normalizzano togliendoli, e agirebbero su un altro file ("x." → "x").
+pub fn has_trailing_dot_or_space(p: &Path) -> bool {
+    p.components().any(|c| match c {
+        Component::Normal(n) => n.to_string_lossy().ends_with(['.', ' ']),
+        _ => false,
+    })
+}
+
 /// Chiave del volume (`C:` oppure `\\SERVER\SHARE`) in maiuscolo; stringa vuota senza prefisso.
 pub fn volume_key(p: &Path) -> String {
     match p.components().next() {
