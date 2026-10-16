@@ -5,14 +5,23 @@ import { writeConfig } from '../ipc/api';
 import { useSettings } from './settings';
 
 const write = vi.mocked(writeConfig);
-beforeEach(() => write.mockReset());
+beforeEach(() => {
+  write.mockReset(); // niente return: vitest lo tratterebbe come funzione di cleanup
+});
 
 test('updates are persisted in call order, last one wins', async () => {
   const delays = [30, 0];
-  write.mockImplementation(() => new Promise((r) => setTimeout(r, delays.shift())));
+  const events: string[] = [];
+  write.mockImplementation((_, v) => {
+    const id = (v as { showHidden: boolean }).showHidden ? 'A' : 'B';
+    events.push(`start ${id}`);
+    return new Promise((r) => setTimeout(() => { events.push(`end ${id}`); r(undefined); }, delays.shift()));
+  });
   const a = useSettings.getState().update({ showHidden: true });
   const b = useSettings.getState().update({ showHidden: false });
   await Promise.all([a, b]);
+  // la seconda scrittura parte solo dopo la fine della prima
+  expect(events).toEqual(['start A', 'end A', 'start B', 'end B']);
   expect(write).toHaveBeenCalledTimes(2);
   expect(write.mock.calls[0][1]).toMatchObject({ showHidden: true });
   expect(write.mock.calls[1][1]).toMatchObject({ showHidden: false });
