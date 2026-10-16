@@ -11,6 +11,7 @@ export type ErrorCode =
   | "NOT_SAME_DEVICE"
   | "NO_RECYCLE_BIN"
   | "INVALID_NAME"
+  | "FILE_IN_USE"
   | "UNSUPPORTED"
   | "CANCELLED"
   | "INVALID_REQUEST"

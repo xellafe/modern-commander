@@ -18,6 +18,8 @@ pub enum ErrorCode {
     /// Il volume non ha Cestino (rete, rimovibile, ...): serve la cancellazione definitiva.
     NoRecycleBin,
     InvalidName,
+    /// File aperto o bloccato da un altro programma (violazione di condivisione o di blocco).
+    FileInUse,
     /// Elemento che l'operazione non sa trattare (per esempio una giunzione in Copy, detail `reparse_point`).
     Unsupported,
     Cancelled,
@@ -51,6 +53,7 @@ impl AppError {
             Some(112) => ErrorCode::DiskFull,
             Some(21) => ErrorCode::NotReady,
             Some(123) => ErrorCode::InvalidName,
+            Some(32 | 33) => ErrorCode::FileInUse,
             Some(17) => ErrorCode::NotSameDevice,
             Some(1235) => ErrorCode::Cancelled,
             _ => ErrorCode::Io,
@@ -79,6 +82,9 @@ mod tests {
         assert_eq!(e(123), ErrorCode::InvalidName);
         assert_eq!(e(17), ErrorCode::NotSameDevice);
         assert_eq!(e(1235), ErrorCode::Cancelled);
+        assert_eq!(e(32), ErrorCode::FileInUse); // ERROR_SHARING_VIOLATION
+        assert_eq!(e(33), ErrorCode::FileInUse); // ERROR_LOCK_VIOLATION
+        assert_eq!(serde_json::to_value(ErrorCode::FileInUse).unwrap(), "FILE_IN_USE");
         assert_eq!(e(9999), ErrorCode::Io);
     }
 

@@ -15,7 +15,7 @@ use windows::Win32::Storage::FileSystem::{
     COPY_FILE_FAIL_IF_EXISTS, COPYPROGRESSROUTINE_PROGRESS, CopyFileExW, FILE_ATTRIBUTE_NORMAL,
     FILE_ATTRIBUTE_READONLY, FILE_FLAGS_AND_ATTRIBUTES, FlushFileBuffers, GetDriveTypeW, GetVolumePathNameW,
     LPPROGRESS_ROUTINE_CALLBACK_REASON,
-    MOVE_FILE_FLAGS, MOVEFILE_REPLACE_EXISTING, MoveFileExW, PROGRESS_CANCEL, PROGRESS_CONTINUE,
+    MOVE_FILE_FLAGS, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, PROGRESS_CANCEL, PROGRESS_CONTINUE,
     SetFileAttributesW,
 };
 use windows::core::HSTRING;
@@ -100,6 +100,13 @@ fn move_file(src: &Path, dst: &Path, flags: MOVE_FILE_FLAGS) -> Result<(), AppEr
             _ => err,
         }
     })
+}
+
+/// Rinomina finale del `.mcpart`. Con `flush` (Move tra volumi, sostituzione) anche la rinomina va
+/// su disco prima di tornare: subito dopo si elimina il sorgente o si è persa la versione precedente.
+fn final_move_flags(overwrite: bool, flush: bool) -> MOVE_FILE_FLAGS {
+    let replace = if overwrite { MOVEFILE_REPLACE_EXISTING } else { MOVE_FILE_FLAGS(0) };
+    if flush { replace | MOVEFILE_WRITE_THROUGH } else { replace }
 }
 
 /// Limite NTFS di un singolo componente, in unità UTF-16.
@@ -267,8 +274,7 @@ impl Executor for LocalExecutor {
             remove_part(&part);
             return Err(e);
         }
-        let flags = if overwrite { MOVEFILE_REPLACE_EXISTING } else { MOVE_FILE_FLAGS(0) };
-        move_file(&part, dst, flags).map_err(|e| {
+        move_file(&part, dst, final_move_flags(overwrite, ctx.flush)).map_err(|e| {
             remove_part(&part);
             AppError { path: Some(dst.to_string_lossy().into_owned()), ..e }
         })
@@ -386,6 +392,14 @@ mod tests {
         let mut dst_ads = to_extended(&dst).into_os_string();
         dst_ads.push(":Zone.Identifier");
         assert_eq!(fs::read(&dst_ads).unwrap(), b"[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+
+    #[test]
+    fn final_rename_is_written_through_when_flushing() {
+        assert_eq!(final_move_flags(false, false), MOVE_FILE_FLAGS(0));
+        assert_eq!(final_move_flags(true, false), MOVEFILE_REPLACE_EXISTING);
+        assert_eq!(final_move_flags(false, true), MOVEFILE_WRITE_THROUGH);
+        assert_eq!(final_move_flags(true, true), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
     }
 
     #[test]

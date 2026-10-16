@@ -158,6 +158,7 @@
     "NOT_SAME_DEVICE": "Source and destination are on different drives.",
     "NO_RECYCLE_BIN": "This drive has no Recycle Bin.",
     "INVALID_NAME": "The name is not valid.",
+    "FILE_IN_USE": "The file is in use by another program.",
     "UNSUPPORTED": "This item is not supported by the operation.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",

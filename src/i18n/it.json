@@ -158,6 +158,7 @@
     "NOT_SAME_DEVICE": "Origine e destinazione sono su unità diverse.",
     "NO_RECYCLE_BIN": "Questa unità non ha un Cestino.",
     "INVALID_NAME": "Il nome non è valido.",
+    "FILE_IN_USE": "Il file è in uso da un altro programma.",
     "UNSUPPORTED": "L'operazione non supporta questo elemento.",
     "CANCELLED": "Operazione annullata.",
     "INVALID_REQUEST": "Richiesta non valida.",

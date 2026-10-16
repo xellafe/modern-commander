@@ -23,7 +23,13 @@ fn file_id(p: &Path) -> Option<(u32, u64)> {
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }.ok()?;
     let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-    Some((info.dwVolumeSerialNumber, index))
+    known_id(info.dwVolumeSerialNumber, index)
+}
+
+/// Un numero di serie o un indice 0 non identificano niente (file system che non li forniscono):
+/// due file diversi sembrerebbero lo stesso.
+fn known_id(serial: u32, index: u64) -> Option<(u32, u64)> {
+    (serial != 0 && index != 0).then_some((serial, index))
 }
 
 /// Stesso file: se esistono entrambi si confronta l'identità del file (copre maiuscole, `..`,
@@ -118,6 +124,14 @@ mod tests {
         assert_eq!(resolve(&ConflictPolicy::Overwrite, &f, &other, &m, &m).unwrap(), Some(Decision::Overwrite));
         assert_eq!(resolve(&ConflictPolicy::Skip, d.path(), &b, &m, &m).unwrap(), Some(Decision::Skip));
         assert_eq!(resolve(&ConflictPolicy::Skip, &b, &b.join("."), &m, &m).unwrap_err().code, ErrorCode::SameFile);
+    }
+
+    #[test]
+    fn zero_volume_serial_or_file_index_is_an_unknown_identity() {
+        // Alcuni file system (rete, FAT, driver di terze parti) danno 0: si confrontano i percorsi.
+        assert_eq!(known_id(0, 7), None);
+        assert_eq!(known_id(7, 0), None);
+        assert_eq!(known_id(1, 2), Some((1, 2)));
     }
 
     #[test]
