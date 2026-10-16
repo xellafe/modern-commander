@@ -1,4 +1,7 @@
+import i18next from "i18next";
 import { expect, test } from "vitest";
+import en from "../i18n/en.json";
+import it from "../i18n/it.json";
 import type { Drive, JobView } from "../ipc/types";
 import { activeJobs } from "../state/jobs";
 import type { Row } from "../state/tabView";
@@ -63,4 +66,21 @@ test("activeJobs: in corso, in attesa e in pausa nell'ordine della coda; accodat
   const jobs = { 1: j(1, "done"), 2: j(2, "running"), 3: j(3, "queued"), 4: j(4, "paused") };
   expect(activeJobs([1, 2, 3, 4], jobs).map((x) => x.id)).toEqual([2, 4]);
   expect(activeJobs([4, 2], jobs).map((x) => x.id)).toEqual([4, 2]);
+});
+
+test("summaryText con le traduzioni reali (en/it, plurali e forma approssimata)", async () => {
+  const make = async (lng: "en" | "it") => {
+    const i = i18next.createInstance();
+    await i.init({ lng, resources: { en: { translation: en }, it: { translation: it } }, interpolation: { escapeValue: false } });
+    return i.t;
+  };
+  const [tEn, tIt] = [await make("en"), await make("it")];
+  const one = { kind: "marked", count: 1, bytes: 1500, approx: false } as const;
+  const two = { kind: "marked", count: 2, bytes: 1500, approx: true } as const;
+  expect(summaryText(one, tIt, "it")).toBe("1 selezionato · 1,5 KB");
+  expect(summaryText(two, tIt, "it")).toBe("2 selezionati · ≥ 1,5 KB");
+  expect(summaryText(one, tEn, "en")).toBe("1 selected · 1.5 KB");
+  expect(summaryText(two, tEn, "en")).toBe("2 selected · ≥ 1.5 KB");
+  expect(summaryText({ kind: "contents", files: 1, folders: 3 }, tIt, "it")).toBe("1 file, 3 cartelle");
+  expect(summaryText({ kind: "contents", files: 2, folders: 1 }, tEn, "en")).toBe("2 files, 1 folder");
 });

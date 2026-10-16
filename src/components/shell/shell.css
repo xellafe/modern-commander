@@ -117,9 +117,10 @@ body {
 
 .mc-status {
   display: flex; align-items: center; gap: 14px; padding: 0 10px; font-size: 11px; color: var(--mc-muted);
-  background: var(--mc-panel); border-top: 1px solid var(--mc-border);
+  background: var(--mc-panel); border-top: 1px solid var(--mc-border); overflow: hidden;
 }
-.mc-status .mc-status-job { gap: 6px; cursor: pointer; }
-.mc-status-free { margin-left: auto; }
+.mc-status .mc-status-job { gap: 6px; cursor: pointer; min-width: 0; white-space: nowrap; }
+.mc-status-free { margin-left: auto; white-space: nowrap; }
+.mc-status-dest { min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-status-prog { width: 70px; height: 3px; background: var(--mc-border); border-radius: var(--mc-radius); overflow: hidden; }
 .mc-status-prog i { display: block; height: 100%; background: var(--mc-accent); }

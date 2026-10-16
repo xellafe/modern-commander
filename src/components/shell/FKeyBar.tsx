@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { executeCommand, getCommands } from "../../commands/registry";
+import { focusInTextOrDialog } from "../../commands/useKeyboard";
+import { executeCommand, getCommand, getCommands, shouldExecute } from "../../commands/registry";
 import { fkeyLabels, type Mods } from "../../lib/fkeys";
 
 const NO_MODS: Mods = { shift: false, ctrl: false, alt: false };
@@ -14,12 +15,14 @@ export function FKeyBar() {
       setMods((m) => (m.shift === e.shiftKey && m.ctrl === e.ctrlKey && m.alt === e.altKey ? m : { shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey }));
     // Alt+Tab: il keyup dell'Alt non arriva alla finestra, senza questo il livello resterebbe bloccato.
     const reset = () => setMods(NO_MODS);
-    window.addEventListener("keydown", sync);
-    window.addEventListener("keyup", sync);
+    // In cattura: i gestori React (campo di rinomina, breadcrumb...) fermano la propagazione e il livello resterebbe bloccato.
+    const capture = { capture: true };
+    window.addEventListener("keydown", sync, capture);
+    window.addEventListener("keyup", sync, capture);
     window.addEventListener("blur", reset);
     return () => {
-      window.removeEventListener("keydown", sync);
-      window.removeEventListener("keyup", sync);
+      window.removeEventListener("keydown", sync, capture);
+      window.removeEventListener("keyup", sync, capture);
       window.removeEventListener("blur", reset);
     };
   }, []);
@@ -35,7 +38,12 @@ export function FKeyBar() {
           aria-label={`${s.key} ${t(s.labelKey)}`}
           // La lista file tiene il fuoco: il clic non deve portarglielo via.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void executeCommand(s.commandId)}
+          onClick={() => {
+            // Stessa guardia della tastiera: con il fuoco in un campo o in una finestra solo i comandi globali.
+            if (shouldExecute(getCommand(s.commandId), { repeat: false, focusInText: focusInTextOrDialog() })) {
+              executeCommand(s.commandId).catch(console.error);
+            }
+          }}
         >
           <b>{s.key}</b>
           {t(s.labelKey)}

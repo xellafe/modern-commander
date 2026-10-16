@@ -1,15 +1,13 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { formatSize } from "../../lib/format";
-import { DRIVES } from "../../lib/paths";
+import { DRIVES, folderName } from "../../lib/paths";
 import { driveOf, summarize, summaryText } from "../../lib/status";
-import { useDrives } from "../../state/drives";
+import { useDrives, useDrivesPolling } from "../../state/drives";
 import { activeJobs, kindKey, progressOf, useJobs } from "../../state/jobs";
 import { useLayout } from "../../state/layout";
 import { useTabViews } from "../../state/tabViews";
 import { useUi } from "../../state/ui";
-
-const DRIVES_REFRESH_MS = 10_000;
 
 // Il git branch resta nascosto fino alla fase 5.
 export function StatusBar() {
@@ -23,17 +21,7 @@ export function StatusBar() {
   const order = useJobs((s) => s.order);
   const jobs = useJobs((s) => s.jobs);
 
-  // Lo spazio libero cambia anche con la sidebar nascosta: la guardia contro le letture sovrapposte è in useDrives.refresh.
-  useEffect(() => {
-    const refresh = () => void useDrives.getState().refresh();
-    refresh();
-    const timer = setInterval(refresh, DRIVES_REFRESH_MS);
-    window.addEventListener("focus", refresh);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-    };
-  }, []);
+  useDrivesPolling(); // unico punto di lettura delle unità (la sidebar legge solo lo store)
 
   // Il cursore non cambia rows/marked/dirSizes: spostarlo non rifà il conteggio (anche su 100.000 righe).
   const summary = useMemo(
@@ -56,7 +44,7 @@ export function StatusBar() {
           onClick={() => useUi.setState({ bottomPanelVisible: true, bottomPanelTab: "operations" })}
         >
           {t(kindKey(job.kind))}
-          {job.dest && ` → ${job.dest}`}
+          {job.dest && <span className="mc-status-dest" title={job.dest}>{` → ${folderName(job.dest)}`}</span>}
           <span className="mc-status-prog"><i style={{ width: `${pct}%` }} /></span>
           {pct}%
           {running.length > 1 && ` +${running.length - 1}`}

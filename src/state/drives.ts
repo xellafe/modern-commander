@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { create } from "zustand";
 import { listDrives } from "../ipc/api";
 import type { Drive } from "../ipc/types";
@@ -26,3 +27,19 @@ export const useDrives = create<DrivesState>((set) => ({
     }
   },
 }));
+
+const DRIVES_REFRESH_MS = 10_000;
+
+/** Rilettura periodica delle unità (ogni 10 s e al ritorno in primo piano). Da montare una sola volta: la barra di stato. */
+export function useDrivesPolling() {
+  useEffect(() => {
+    const refresh = () => void useDrives.getState().refresh();
+    refresh();
+    const timer = setInterval(refresh, DRIVES_REFRESH_MS);
+    window.addEventListener("focus", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+}

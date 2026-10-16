@@ -1,28 +1,12 @@
-import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { formatSize } from "../../lib/format";
 import { useDrives } from "../../state/drives";
 import { FavoritesList } from "./FavoritesView";
 import { FolderTree } from "./FolderTree";
 
-const DRIVES_REFRESH_MS = 10_000;
-
 export function ExplorerView() {
   const { t, i18n } = useTranslation();
   const drives = useDrives((s) => s.drives);
-
-  // Unità: ogni 10 s e quando la finestra torna in primo piano (la guardia contro le letture
-  // sovrapposte è in useDrives.refresh).
-  useEffect(() => {
-    const refresh = () => void useDrives.getState().refresh();
-    refresh();
-    const timer = setInterval(refresh, DRIVES_REFRESH_MS);
-    window.addEventListener("focus", refresh);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-    };
-  }, []);
 
   const roots = drives.map((d) => ({
     path: d.root,

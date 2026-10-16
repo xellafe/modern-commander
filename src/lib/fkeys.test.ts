@@ -1,4 +1,6 @@
 import { expect, test } from "vitest";
+import en from "../i18n/en.json";
+import it from "../i18n/it.json";
 import { fkeyLabels } from "./fkeys";
 
 const ALL = new Set([
@@ -36,6 +38,12 @@ test("un comando non registrato non compare", () => {
   expect(fkeyLabels({ ...none, shift: true }, without)).toEqual([]);
 });
 
-test("ogni slot porta una chiave i18n", () => {
-  expect(fkeyLabels(none, ALL).every((s) => s.labelKey.startsWith("shell.fkeys."))).toBe(true);
+test("ogni etichetta dei tre livelli esiste in en.json e it.json", () => {
+  const all = [none, { ...none, shift: true }, { ...none, alt: true }].flatMap((m) => fkeyLabels(m, ALL));
+  expect(all.length).toBe(7 + 3 + 1);
+  const lookup = (res: object, key: string) => key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], res);
+  for (const { labelKey } of all) {
+    expect(typeof lookup(en, labelKey), `en ${labelKey}`).toBe("string");
+    expect(typeof lookup(it, labelKey), `it ${labelKey}`).toBe("string");
+  }
 });
