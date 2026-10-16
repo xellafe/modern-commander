@@ -24,6 +24,12 @@ export function compileMask(mask: string): (name: string) => boolean {
 
 export const matchMask = (name: string, mask: string): boolean => compileMask(mask)(name);
 
-/** Filtro rapido (Ctrl+S): un testo senza jolly cerca una sottostringa, come in TC. */
+/**
+ * Filtro rapido (Ctrl+S): un testo senza jolly cerca sottostringhe, come in TC.
+ * Ogni parola (separata da spazio o `;`) è una sottostringa a sé, in OR come nelle maschere TC:
+ * "my file" → `*my*;*file*`, così "my file.txt" resta visibile.
+ */
 export const quickFilterMask = (text: string): string =>
-  !text || /[*?|;]/.test(text) ? text : `*${text}*`;
+  !text || /[*?|]/.test(text)
+    ? text
+    : text.split(/[; ]+/).filter(Boolean).map((t) => `*${t}*`).join(";");

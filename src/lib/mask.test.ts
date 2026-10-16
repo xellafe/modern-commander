@@ -42,4 +42,12 @@ describe("compileMask e quickFilterMask", () => {
     expect(quickFilterMask("*.md")).toBe("*.md");
     expect(quickFilterMask("")).toBe("");
   });
+
+  it("il filtro rapido con spazi tratta ogni parola come sottostringa", () => {
+    const names = ["my file.txt", "Nuovo documento di testo.txt", "altro.md"];
+    const visible = (text: string) => names.filter(compileMask(quickFilterMask(text)));
+    expect(visible("my file")).toContain("my file.txt");
+    expect(visible("documento testo")).toEqual(["Nuovo documento di testo.txt"]);
+    expect(quickFilterMask("  my ; file ")).toBe("*my*;*file*");
+  });
 });

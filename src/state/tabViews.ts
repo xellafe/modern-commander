@@ -91,11 +91,23 @@ const indexOrClamp = (rows: Row[], name: string | undefined, fallback: number) =
   return i >= 0 ? i : Math.max(0, Math.min(fallback, rows.length - 1));
 };
 
+// watch_dir è asincrono nel backend (registra il watcher solo alla fine), unwatch_dir no: le chiamate
+// di una scheda vanno in fila, altrimenti una watch lenta può arrivare dopo un'altra watch o dopo l'unwatch.
+const watchQueue = new Map<string, Promise<void>>();
+
+function queueWatcher(tabId: string, op: () => Promise<void>) {
+  // Se il watcher fallisce la lista funziona lo stesso, senza aggiornamento automatico (Ctrl+R).
+  const next = (watchQueue.get(tabId) ?? Promise.resolve()).then(op).catch(() => {});
+  watchQueue.set(tabId, next);
+  void next.then(() => {
+    if (watchQueue.get(tabId) === next) watchQueue.delete(tabId);
+  });
+}
+
 function syncWatcher(tabId: string, path: string) {
   if (watched.get(tabId) === path) return;
   watched.set(tabId, path);
-  // Se il watcher fallisce la lista funziona lo stesso, senza aggiornamento automatico (Ctrl+R).
-  (path === DRIVES ? unwatchDir(tabId) : watchDir(tabId, path)).catch(() => {});
+  queueWatcher(tabId, () => (path === DRIVES ? unwatchDir(tabId) : watchDir(tabId, path)));
 }
 
 export const useTabViews = create<TabViewsState>((set, get) => ({
@@ -188,7 +200,7 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
     inFlight.delete(tabId);
     reloadAgain.delete(tabId);
     listings.delete(tabId);
-    if (watched.delete(tabId)) unwatchDir(tabId).catch(() => {});
+    if (watched.delete(tabId)) queueWatcher(tabId, () => unwatchDir(tabId));
     set((s) => {
       const { [tabId]: _gone, ...views } = s.views;
       return { views, overlay: s.overlay?.tabId === tabId ? null : s.overlay };

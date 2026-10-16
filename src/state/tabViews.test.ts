@@ -80,6 +80,31 @@ test("a change notified during a load is reread afterwards, without cancelling t
   expect(listDir).toHaveBeenLastCalledWith("D:\\b");
 });
 
+// Le chiamate al watcher registrano il loro completamento; watchDir su "slow" è lento.
+function recordWatcher() {
+  const done: string[] = [];
+  vi.mocked(api.watchDir).mockImplementation((_tab, path) =>
+    new Promise((r) => setTimeout(() => { done.push(`watch ${path}`); r(); }, path.includes("slow") ? 40 : 0)));
+  vi.mocked(api.unwatchDir).mockImplementation(async () => { done.push("unwatch"); });
+  return done;
+}
+
+test("closing a tab right after navigating never leaks a watcher", async () => {
+  const done = recordWatcher();
+  listDir.mockResolvedValue([]);
+  await useTabViews.getState().load("t1", "\\\\slow\\share");
+  useTabViews.getState().dispose("t1");
+  await vi.waitFor(() => expect(done).toEqual(["watch \\\\slow\\share", "unwatch"]));
+});
+
+test("a slow watch does not overwrite the watch of a later folder", async () => {
+  const done = recordWatcher();
+  listDir.mockResolvedValue([]);
+  await useTabViews.getState().load("t1", "\\\\slow\\share");
+  await useTabViews.getState().load("t1", "C:\\x");
+  await vi.waitFor(() => expect(done).toEqual(["watch \\\\slow\\share", "watch C:\\x"]));
+});
+
 test("going up puts the cursor on the folder we came from", async () => {
   listDir.mockResolvedValueOnce([f("x"), { ...f("sub"), isDir: true }]);
   await useTabViews.getState().load("t1", "D:\\a", { focus: "sub" });
