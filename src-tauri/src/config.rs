@@ -3,8 +3,9 @@
 //! altrimenti `%APPDATA%\ModernCommander`.
 
 use crate::error::{AppError, ErrorCode};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 pub fn config_dir(exe_dir: &Path, appdata: &Path) -> PathBuf {
     if exe_dir.join("portable").exists() {
@@ -30,21 +31,59 @@ fn current_config_dir() -> Result<PathBuf, AppError> {
 }
 
 fn read(name: &str) -> Result<Option<serde_json::Value>, AppError> {
+    read_in(&current_config_dir()?, name)
+}
+
+fn read_in(dir: &Path, name: &str) -> Result<Option<serde_json::Value>, AppError> {
     validate_name(name)?;
-    let path = current_config_dir()?.join(format!("{name}.json"));
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(AppError::from_io(&e, &path)),
+    let path = dir.join(format!("{name}.json"));
+    let res = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| AppError {
+            detail: Some(e.to_string()),
+            ..AppError::new(ErrorCode::Io, Some(&path))
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AppError::from_io(&e, &path)),
     };
-    serde_json::from_str(&text).map(Some).map_err(|e| AppError {
-        detail: Some(e.to_string()),
-        ..AppError::new(ErrorCode::Io, Some(&path))
-    })
+    if res.is_err() {
+        lock(&READ_FAILED).insert(path);
+    }
+    res
 }
 
 /// Serializza le scritture: tutte usano lo stesso `<name>.json.tmp`.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// File che in questa sessione non si sono potuti leggere: il frontend è partito con i default.
+static READ_FAILED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+/// I lock non proteggono invarianti: si ignora l'avvelenamento.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Prima di sostituire un file che non è JSON valido, o che in questa sessione non si è potuto
+/// leggere, lo si copia in `<name>.json.bak` (resta il più recente): la prima modifica fatta
+/// partendo dai default non deve far perdere il file dell'utente. Se la copia non riesce la
+/// scrittura fallisce.
+fn backup_if_unreadable(path: &Path) -> Result<(), AppError> {
+    let mut failed = lock(&READ_FAILED);
+    let unreadable = match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).is_err(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    };
+    if unreadable || failed.contains(path) {
+        let mut bak = path.as_os_str().to_owned();
+        bak.push(".bak");
+        match std::fs::copy(path, &bak) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(AppError::from_io(&e, path)),
+        }
+    }
+    failed.remove(path);
+    Ok(())
+}
 
 fn write_in(dir: &Path, name: &str, value: &serde_json::Value) -> Result<(), AppError> {
     validate_name(name)?;
@@ -54,9 +93,9 @@ fn write_in(dir: &Path, name: &str, value: &serde_json::Value) -> Result<(), App
         detail: Some(e.to_string()),
         ..AppError::new(ErrorCode::Io, Some(&path))
     })?;
-    // Il lock non protegge dati: si ignora l'avvelenamento.
-    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = lock(&WRITE_LOCK);
     std::fs::create_dir_all(dir).map_err(|e| AppError::from_io(&e, dir))?;
+    backup_if_unreadable(&path)?;
     // Scrittura su file temporaneo e rinomina: il file di destinazione non resta mai a metà.
     std::fs::write(&tmp, text).map_err(|e| AppError::from_io(&e, &tmp))?;
     std::fs::rename(&tmp, &path).map_err(|e| AppError::from_io(&e, &path))
@@ -92,6 +131,40 @@ mod tests {
     fn rejects_unknown_config_names() {
         assert_eq!(validate_name("../evil").unwrap_err().code, ErrorCode::InvalidRequest);
         assert!(validate_name("settings").is_ok());
+    }
+
+    #[test]
+    fn malformed_file_is_backed_up_before_the_first_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, bak) = (dir.path().join("hotlist.json"), dir.path().join("hotlist.json.bak"));
+        std::fs::write(&path, "[{\"rotto\"").unwrap();
+        assert!(read_in(dir.path(), "hotlist").is_err());
+        write_in(dir.path(), "hotlist", &serde_json::json!([])).unwrap();
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "[{\"rotto\"");
+        assert_eq!(read_in(dir.path(), "hotlist").unwrap(), Some(serde_json::json!([])));
+        // Il file ora è il nostro: le scritture successive non toccano la copia dell'utente.
+        write_in(dir.path(), "hotlist", &serde_json::json!([1])).unwrap();
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "[{\"rotto\"");
+    }
+
+    #[test]
+    fn file_unreadable_at_startup_is_backed_up_even_if_valid_later() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (path, bak) = (dir.path().join("settings.json"), dir.path().join("settings.json.bak"));
+        std::fs::write(&path, "{\"theme\":\"dark\"}").unwrap();
+        // Un altro programma lo tiene aperto in esclusiva (antivirus, sincronizzazione): il frontend
+        // parte con i default.
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert_eq!(read_in(dir.path(), "settings").unwrap_err().code, ErrorCode::FileInUse);
+        drop(lock);
+        write_in(dir.path(), "settings", &serde_json::json!({"theme": "light"})).unwrap();
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "{\"theme\":\"dark\"}");
+        // Un file valido letto senza errori non si copia.
+        std::fs::remove_file(&bak).unwrap();
+        assert!(read_in(dir.path(), "settings").unwrap().is_some());
+        write_in(dir.path(), "settings", &serde_json::json!({})).unwrap();
+        assert!(!bak.exists());
     }
 
     #[test]
