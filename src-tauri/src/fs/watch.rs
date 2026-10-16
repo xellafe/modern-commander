@@ -7,8 +7,8 @@ use notify::{ErrorKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
@@ -16,8 +16,8 @@ const DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Un watcher per chiave (id del tab). Eliminare il watcher chiude il canale e
 /// termina il suo thread di debounce.
-#[derive(Default)]
-pub struct Watchers(Mutex<HashMap<String, RecommendedWatcher>>);
+#[derive(Default, Clone)]
+pub struct Watchers(Arc<Mutex<HashMap<String, RecommendedWatcher>>>);
 
 impl Watchers {
     /// Osserva `path` per conto di `key`, sostituendo l'eventuale watcher precedente.
@@ -83,9 +83,14 @@ pub async fn watch_dir(
     tab_id: String,
     path: String,
 ) -> Result<(), AppError> {
-    watchers.watch(tab_id, PathBuf::from(path), move |tab_id| {
-        let _ = app.emit("fs-changed", FsChanged { tab_id });
+    // metadata, add_watch e spawn possono bloccarsi (UNC lenti, unità rimovibili): thread dedicato.
+    let watchers = watchers.inner().clone();
+    super::blocking(move || {
+        watchers.watch(tab_id, PathBuf::from(path), move |tab_id| {
+            let _ = app.emit("fs-changed", FsChanged { tab_id });
+        })
     })
+    .await?
 }
 
 #[tauri::command]
