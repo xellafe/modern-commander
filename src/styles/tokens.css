@@ -6,6 +6,8 @@
   --mc-muted: #7d8391;
   --mc-accent: #e07a4f;
   --mc-selection: rgba(224, 122, 79, 0.14);
+  --mc-danger: #e81123;
+  --mc-on-danger: #ffffff;
   --mc-row-height: 22px;
   --mc-radius: 0;
   --mc-font-ui: "Segoe UI Variable", "Segoe UI", sans-serif;
@@ -20,6 +22,8 @@
   --mc-muted: #8a877e;
   --mc-accent: #c96442;
   --mc-selection: rgba(201, 100, 66, 0.12);
+  --mc-danger: #c42b1c;
+  --mc-on-danger: #ffffff;
   --mc-row-height: 26px;
   --mc-radius: 6px;
   --mc-font-ui: "Segoe UI Variable", "Segoe UI", sans-serif;

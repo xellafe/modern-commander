@@ -48,10 +48,16 @@ body {
 .mc-title-window { display: flex; height: 100%; }
 .mc-title-window button { width: 44px; height: 100%; border: 0; border-radius: 0; }
 .mc-title-window button:hover { background: var(--mc-selection); }
-.mc-title-window button.close:hover { background: #e81123; color: #fff; }
+.mc-title-window button.close:hover { background: var(--mc-danger); color: var(--mc-on-danger); }
 
 /* Riga centrale */
 .mc-main { display: flex; min-height: 0; }
+/* Righe esplicite: nascondere il pannello non sposta le altre regioni. */
+.mc-title { grid-row: 1; }
+.mc-main { grid-row: 2; }
+.mc-panel { grid-row: 3; }
+.mc-fkeys { grid-row: 4; }
+.mc-status { grid-row: 5; }
 
 .mc-activity {
   flex: 0 0 38px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center;
