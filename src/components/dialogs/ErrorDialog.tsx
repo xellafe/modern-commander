@@ -13,7 +13,8 @@ export function ErrorDialog({ prompt }: { prompt: ErrorPrompt }) {
   const [all, setAll] = useState(false);
   const act = (type: ErrorAction["type"]) => void send({ type: "error", action: { type }, applyToAll: all });
   const button = (type: ErrorAction["type"], key: string, autofocus = false) => (
-    <button disabled={busy} onClick={() => act(type)} data-autofocus={autofocus || undefined}>{t(key)}</button>
+    // `aria-disabled`: con `disabled` il focus uscirebbe dalla finestra (vedi ConflictDialog).
+    <button aria-disabled={busy || undefined} onClick={() => act(type)} data-autofocus={autofocus || undefined}>{t(key)}</button>
   );
   const e = prompt.error;
 

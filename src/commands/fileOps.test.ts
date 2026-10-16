@@ -1,6 +1,14 @@
 import { expect, test } from "vitest";
 import { activateGroup, initialLayout } from "../state/layout";
-import { copyTargets, mkdirTarget, nameError, resolveDest } from "./fileOps";
+import { copyTargets, mkdirTarget, mustChangeDest, nameError, resolveDest } from "./fileOps";
+
+test("mustChangeDest blocks the source folder for a single group or a move, not for a copy", () => {
+  const req = (move: boolean, requireChange: boolean) => ({ from: "C:\\a", move, requireChange });
+  expect(mustChangeDest(req(false, false), "c:\\A")).toBe(false);
+  expect(mustChangeDest(req(false, true), "c:\\A")).toBe(true);
+  expect(mustChangeDest(req(true, false), "C:\\a")).toBe(true);
+  expect(mustChangeDest(req(true, false), "C:\\b")).toBe(false);
+});
 
 test("copyTargets with one group proposes the current folder and requires a change", () => {
   const l = initialLayout(["C:\\a"]);

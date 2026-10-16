@@ -53,3 +53,4 @@
 .mc-target { display: flex; gap: 8px; padding: 2px 6px; }
 .mc-target.sel { background: var(--mc-selection); }
 .mc-target kbd { min-width: 12px; color: var(--mc-accent); font-family: var(--mc-font-mono); }
+.mc-dialog button[aria-disabled="true"] { opacity: 0.45; }

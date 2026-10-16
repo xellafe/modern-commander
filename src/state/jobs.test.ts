@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import type { JobView, Prompt } from "../ipc/types";
-import { conflictReply, pendingPrompts, renamePath } from "./jobs";
+import { conflictChoices, conflictReply, pendingPrompts, renamePath } from "./jobs";
+
+test("conflictChoices on the same file offers only skip, rename and cancel", () => {
+  expect(conflictChoices(true)).toEqual(["skip", "rename", "cancel"]);
+  expect(conflictChoices(false)).toEqual(["overwrite", "skip", "rename", "newer", "larger", "cancel"]);
+});
 
 const job = (id: number, prompt: Prompt | null): JobView => ({
   id, kind: { type: "copy" }, state: { type: prompt ? "waiting" : "running" },

@@ -16,6 +16,10 @@ export const pendingPrompts = (jobs: Record<JobId, JobView>, answered: Set<numbe
 
 export type ConflictChoice = "overwrite" | "skip" | "rename" | "newer" | "larger" | "cancel";
 
+/** Pulsanti del conflitto: sullo stesso file sovrascrivere (anche per data o dimensione) darebbe solo `SAME_FILE`. */
+export const conflictChoices = (sameFile: boolean): ConflictChoice[] =>
+  sameFile ? ["skip", "rename", "cancel"] : ["overwrite", "skip", "rename", "newer", "larger", "cancel"];
+
 export function conflictReply(choice: ConflictChoice, applyToAll: boolean, renameTo = ""): PromptReply {
   switch (choice) {
     case "newer": return { type: "conflictPolicy", policy: { type: "overwriteIfNewer" }, applyToAll };

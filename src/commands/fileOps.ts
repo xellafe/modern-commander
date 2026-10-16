@@ -2,7 +2,7 @@
 import { enqueueJob, normalizePaths } from "../ipc/api";
 import type { ConflictPolicy, JobId, JobSpec } from "../ipc/types";
 import { DRIVES, joinPath, normalizePath } from "../lib/paths";
-import { waitForJob } from "../state/jobs";
+import { useJobs, waitForJob } from "../state/jobs";
 import { targetGroup, useLayout, type LayoutState } from "../state/layout";
 import { useSettings } from "../state/settings";
 import { parentPath, selectByMask } from "../state/tabView";
@@ -59,6 +59,10 @@ export function resolveDest(base: string, input: string): string | null {
   return base === DRIVES ? null : joinPath(base, p);
 }
 
+/** OK disattivato: destinazione uguale alla cartella delle sorgenti con un solo gruppo o per uno spostamento. */
+export const mustChangeDest = (req: { from: string; move: boolean; requireChange: boolean }, dest: string | null) =>
+  (req.requireChange || req.move) && dest?.toLowerCase() === req.from.toLowerCase();
+
 const views = () => useTabViews.getState();
 const ui = () => useUi.getState();
 
@@ -108,7 +112,8 @@ export function startCopyMove(
 export async function dropOnGroup(groupId: string, paths: string[]) {
   const l = useLayout.getState();
   const g = l.groups.find((x) => x.id === groupId);
-  if (!g || !paths.length || ui().dialog) return;
+  // Con una finestra o un prompt aperti il drop si ignora: non si perde ciò che l'utente sta scrivendo.
+  if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length) return;
   const sources = await normalizePaths(paths);
   const dest = l.tabs[g.activeTabId].path;
   ui().openDialog({

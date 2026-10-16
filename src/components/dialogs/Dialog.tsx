@@ -40,8 +40,10 @@ export function Dialog({ title, onCancel, onConfirm, children, actions }: Dialog
     };
   }, []);
 
+  // Si fermano solo i tasti gestiti qui o dai figli (`preventDefault`): gli altri arrivano a useKeyboard,
+  // che col focus nella finestra esegue solo i comandi `global` (Alt+F4…).
   const onKeyDown = (e: KeyboardEvent) => {
-    e.stopPropagation(); // niente comandi della lista né ricerca rapida
+    if (e.defaultPrevented || ["Escape", "Enter", "Tab"].includes(e.key)) e.stopPropagation();
     if (e.key === "Escape") {
       e.preventDefault();
       onCancel();

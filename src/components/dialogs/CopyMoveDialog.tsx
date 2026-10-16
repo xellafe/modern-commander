@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { resolveDest, startCopyMove } from "../../commands/fileOps";
+import { mustChangeDest, resolveDest, startCopyMove } from "../../commands/fileOps";
 import type { ConflictPolicy } from "../../ipc/types";
 import { useUi, type DialogRequest } from "../../state/ui";
 import { Dialog, useWhat } from "./Dialog";
@@ -16,7 +16,7 @@ export function CopyMoveDialog({ req }: { req: Extract<DialogRequest, { kind: "c
   const [policy, setPolicy] = useState(req.policy);
   const close = useUi.getState().closeDialog;
   const resolved = resolveDest(req.from, dest);
-  const unchanged = req.requireChange && resolved?.toLowerCase() === req.from.toLowerCase();
+  const unchanged = mustChangeDest(req, resolved);
   const ok = resolved !== null && !unchanged;
 
   const confirm = () => {

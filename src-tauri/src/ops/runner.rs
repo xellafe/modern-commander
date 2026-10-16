@@ -53,7 +53,15 @@ pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
         renamed: Vec::new(),
         src_dirs: Vec::new(),
     };
-    // Come TC, una cartella di destinazione mancante si crea (con le intermedie) all'avvio.
+    let items = match expand(spec) {
+        Ok(items) => items,
+        Err(e) => {
+            h.update(|v| v.errors.push(e));
+            return JobState::Failed;
+        }
+    };
+    // Come TC, una cartella di destinazione mancante si crea (con le intermedie) all'avvio; solo
+    // dopo `expand`, che rifiuta per esempio la copia dentro se stessa: un job fallito non crea nulla.
     if let (JobKind::Copy | JobKind::Move, Some(dest)) = (&spec.kind, &spec.dest)
         && !exists(dest)
     {
@@ -65,13 +73,6 @@ pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
             return JobState::Done; // saltata: l'errore resta nel riepilogo
         }
     }
-    let items = match expand(spec) {
-        Ok(items) => items,
-        Err(e) => {
-            h.update(|v| v.errors.push(e));
-            return JobState::Failed;
-        }
-    };
     h.update(|v| {
         v.files_total = items.len() as u64;
         v.bytes_total = items.iter().map(|i| i.size).sum();

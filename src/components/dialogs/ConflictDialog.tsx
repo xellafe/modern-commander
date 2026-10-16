@@ -3,11 +3,16 @@ import { useTranslation } from "react-i18next";
 import { nameError } from "../../commands/fileOps";
 import type { AppError, Meta, Prompt, PromptReply } from "../../ipc/types";
 import { formatDate, formatSize, splitName } from "../../lib/format";
-import { conflictReply, renamePath, useJobs, type ConflictChoice } from "../../state/jobs";
+import { conflictChoices, conflictReply, renamePath, useJobs, type ConflictChoice } from "../../state/jobs";
 import { parentPath } from "../../state/tabView";
 import { Dialog } from "./Dialog";
 
 type ConflictPrompt = Extract<Prompt, { type: "conflict" }>;
+
+const CHOICE_KEYS: Record<ConflictChoice, string> = {
+  overwrite: "ops.overwrite", skip: "ops.skip", rename: "ops.rename",
+  newer: "ops.overwriteIfNewer", larger: "ops.overwriteIfLarger", cancel: "ops.cancel",
+};
 
 /** Una risposta alla volta; un rifiuto del backend resta visibile nella finestra. */
 export function useAnswer(prompt: Prompt) {
@@ -61,8 +66,11 @@ export function ConflictDialog({ prompt }: { prompt: ConflictPrompt }) {
     }
     void send(conflictReply(c, all, renamePath(prompt.suggestedName, name.trim())));
   };
-  const button = (c: ConflictChoice, key: string, autofocus = false) => (
-    <button disabled={busy} onClick={() => choose(c)} data-autofocus={autofocus || undefined}>{t(key)}</button>
+  // `aria-disabled` e non `disabled`: un pulsante disattivato perde il focus, che finirebbe su <body>
+  // fuori dalla finestra (la lista riceverebbe i tasti). Il doppio invio lo blocca `send`.
+  const button = (c: ConflictChoice) => (
+    <button key={c} aria-disabled={busy || undefined} onClick={() => choose(c)}
+      data-autofocus={(!prompt.sameFile && c === "skip") || undefined}>{t(CHOICE_KEYS[c])}</button>
   );
 
   return (
@@ -70,12 +78,7 @@ export function ConflictDialog({ prompt }: { prompt: ConflictPrompt }) {
       title={t("ops.conflictTitle")}
       onCancel={() => choose("cancel")}
       actions={<>
-        {!prompt.sameFile && button("overwrite", "ops.overwrite")}
-        {button("skip", "ops.skip", !prompt.sameFile)}
-        {button("rename", "ops.rename")}
-        {button("newer", "ops.overwriteIfNewer")}
-        {button("larger", "ops.overwriteIfLarger")}
-        {button("cancel", "ops.cancel")}
+        {conflictChoices(prompt.sameFile).map(button)}
       </>}
     >
       <p>{t(prompt.sameFile ? "ops.conflictSameFile" : "ops.conflictExists")}</p>

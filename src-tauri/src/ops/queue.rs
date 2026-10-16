@@ -964,13 +964,27 @@ mod tests {
         assert_eq!(std::fs::read(dest.join("f.txt")).unwrap(), b"x");
 
         // Una destinazione che non si può creare passa dal prompt d'errore; "Salta" chiude il job.
-        let bad = f.join("sub");
+        let g = d.path().join("g.txt");
+        std::fs::write(&g, b"g").unwrap();
+        let bad = g.join("sub"); // un file al posto della cartella intermedia
         let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(&bad), ConflictPolicy::Ask));
         let p = next_prompt(&rx);
         assert!(matches!(p, Prompt::Error { .. }), "{p:?}");
         reply_error(&q, &p, ErrorAction::Skip, false);
         let v = finish(&rx, id);
         assert_eq!((v.state, v.errors.len(), v.files_total), (Done, 1, 0));
+    }
+
+    #[test]
+    fn failed_expand_does_not_create_the_destination() {
+        let d = tempfile::tempdir().unwrap();
+        let a = tree(d.path());
+        let (q, rx) = queue(LocalExecutor);
+        let into = a.join("nuova");
+        let id = q.enqueue(spec(JobKind::Move, vec![a.clone()], Some(&into), ConflictPolicy::Ask));
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors[0].code), (Failed, ErrorCode::IntoItself));
+        assert!(!exists(&into), "il job fallito non deve toccare la sorgente");
     }
 
     #[test]
