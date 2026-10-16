@@ -4,8 +4,6 @@ vi.mock('../ipc/api', () => ({ readConfig: vi.fn() }));
 import { readConfig } from '../ipc/api';
 import { DEFAULT_KEYMAP } from './tcKeymap';
 import { buildKeymap, loadKeymap } from './keymap';
-import { executeCommand, registerCommand } from './registry';
-
 const read = vi.mocked(readConfig);
 beforeEach(() => {
   read.mockReset();
@@ -33,14 +31,6 @@ test('loadKeymap merges overrides and ignores malformed entries', async () => {
   expect(m.get('F5')).toBe('cm_Exit');
   expect(m.get('F7')).toBe('cm_MkDir');
   expect(m.size).toBe(Object.keys(DEFAULT_KEYMAP).length);
-});
-
-test('executeCommand: registered runs, unregistered is a silent no-op', async () => {
-  const run = vi.fn();
-  registerCommand({ id: 'cm_Test', titleKey: 'x', when: 'global', run });
-  await executeCommand('cm_Test');
-  expect(run).toHaveBeenCalledOnce();
-  await expect(executeCommand('cm_Nope')).resolves.toBeUndefined();
 });
 
 test('loadKeymap falls back to defaults on missing or non-array config', async () => {

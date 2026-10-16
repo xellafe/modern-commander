@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { chordFromEvent } from './keys';
-import { executeCommand, getCommand } from './registry';
+import { executeCommand, getCommand, shouldExecute } from './registry';
 
 // Focus in un campo di testo o dentro una finestra di dialogo: solo i comandi 'global'.
 function focusInTextOrDialog(): boolean {
@@ -14,10 +14,12 @@ export function useKeyboard(keymap: Map<string, string>): void {
     const onKeyDown = (e: KeyboardEvent) => {
       const id = keymap.get(chordFromEvent(e));
       const cmd = id === undefined ? undefined : getCommand(id);
-      if (!cmd) return; // nessun binding o comando non registrato: lascia l'evento al browser
-      if (cmd.when !== 'global' && focusInTextOrDialog()) return;
+      const focusInText = focusInTextOrDialog();
+      // nessun binding, comando non registrato o focus in un campo: lascia l'evento al browser
+      if (!cmd || !shouldExecute(cmd, { repeat: false, focusInText })) return;
       e.preventDefault(); // anche Alt+F4, che deve passare da cm_Exit
-      executeCommand(cmd.id).catch(console.error);
+      // l'auto-repeat è consumato ma non riesegue il comando, salvo opt-in
+      if (shouldExecute(cmd, { repeat: e.repeat, focusInText })) executeCommand(cmd.id).catch(console.error);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

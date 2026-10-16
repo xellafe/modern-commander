@@ -17,15 +17,15 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
 
   Tab: 'mc_FocusNextGroup',
   'Shift+Tab': 'mc_FocusPrevGroup',
-  Enter: 'mc_Open',
+  Enter: 'cm_Return',
   Backspace: 'cm_GoToParent',
   'Ctrl+PageUp': 'cm_GoToParent',
   'Ctrl+Oem5': 'cm_GoToRoot', // Ctrl+\
-  'Alt+Left': 'mc_HistoryBack',
-  'Alt+Right': 'mc_HistoryForward',
+  'Alt+Left': 'cm_GotoPreviousDir',
+  'Alt+Right': 'cm_GotoNextDir',
   'Alt+Down': 'cm_DirectoryHistory',
 
-  Insert: 'mc_MarkAndDown',
+  Insert: 'cm_Reverse',
   Space: 'mc_MarkOrSize',
   NumAdd: 'cm_SpreadSelection',
   NumSubtract: 'cm_ShrinkSelection',
@@ -48,19 +48,19 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   'Ctrl+F5': 'cm_SrcByDateTime',
   'Ctrl+F6': 'cm_SrcBySize',
   'Ctrl+F7': 'cm_SrcUnsorted',
-  'Ctrl+S': 'mc_QuickFilter',
+  'Ctrl+S': 'cm_QuickFilter',
   'Ctrl+U': 'cm_Exchange',
 
   'Ctrl+Left': 'mc_OpenInPrevGroup',
   'Ctrl+Right': 'mc_OpenInNextGroup',
-  'Alt+F1': 'mc_OpenDrives',
+  'Alt+F1': 'cm_SrcOpenDrives',
   'Alt+Enter': 'cm_Properties',
-  'Shift+F10': 'mc_ContextMenu',
+  'Shift+F10': 'cm_ContextMenu',
   'Shift+Alt+Enter': 'cm_CountDirContent',
 
   // Scorciatoie nuove (non presenti nella mappa di fabbrica di TC)
   'Ctrl+Shift+E': 'mc_ToggleSidebar',
   'Ctrl+Oem3': 'mc_ToggleBottomPanel', // Ctrl+ò sul layout italiano
-  'Ctrl+Comma': 'mc_Settings',
+  'Ctrl+Comma': 'cm_Config',
   'Ctrl+Shift+Oem5': 'mc_SplitGroup', // Ctrl+Shift+\ (come "vai alla parentesi" di VS Code; libero in TC)
 };
