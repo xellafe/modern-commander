@@ -120,7 +120,11 @@
     "cm_Delete": "Delete (Recycle Bin)",
     "mc_DeletePermanent": "Delete permanently",
     "cm_SpreadSelection": "Select by mask",
-    "cm_ShrinkSelection": "Unselect by mask"
+    "cm_ShrinkSelection": "Unselect by mask",
+    "cm_ContextMenu": "Context menu",
+    "cm_Properties": "Properties",
+    "cm_List": "View",
+    "cm_Edit": "Edit"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",

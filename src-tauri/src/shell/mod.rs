@@ -7,6 +7,7 @@
 
 pub mod context_menu;
 pub mod drag;
+pub mod open;
 pub mod properties;
 
 use crate::error::{AppError, ErrorCode};

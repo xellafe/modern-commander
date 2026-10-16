@@ -20,6 +20,21 @@ export const unwatchDir = (tabId: string) => invoke<void>("unwatch_dir", { tabId
 export const onFsChanged = (cb: (tabId: string) => void): Promise<UnlistenFn> =>
   listen<{ tabId: string }>("fs-changed", (e) => cb(e.payload.tabId));
 
+/** Menu contestuale della shell; `x`/`y` in pixel fisici, client della finestra. Stessa cartella padre per tutti. */
+export const showContextMenu = (paths: string[], x: number, y: number) =>
+  invoke<void>("show_context_menu", { paths, x, y });
+
+export const showProperties = (paths: string[]) => invoke<void>("show_properties", { paths });
+
+/** Drag modale verso Explorer: si risolve a drop concluso o annullato (no-op a pulsante già rilasciato). */
+export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths });
+
+/** Apre con il programma associato (verbo "open" della shell). */
+export const openPath = (path: string) => invoke<void>("open_path", { path });
+
+/** Apre `path` con l'eseguibile `exe`, senza attendere che termini. */
+export const openWith = (exe: string, path: string) => invoke<void>("open_with", { exe, path });
+
 export const readConfig = (name: string) => invoke<unknown | null>("read_config", { name });
 
 export const writeConfig = (name: string, value: unknown) =>

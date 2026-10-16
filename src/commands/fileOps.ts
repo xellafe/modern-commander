@@ -9,6 +9,7 @@ import { parentPath, selectByMask } from "../state/tabView";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { useUi, type CopyTarget, type DialogRequest } from "../state/ui";
 import { registerCommand, type Command } from "./registry";
+import { isSelfDragging } from "./shell";
 
 /** Destinazione proposta per F5/F6 e, con 3 o più gruppi, gli altri gruppi tra cui scegliere (1…9). */
 export function copyTargets(l: LayoutState): { dest: string; requireChange: boolean; targets: CopyTarget[] } {
@@ -113,7 +114,8 @@ export async function dropOnGroup(groupId: string, paths: string[]) {
   const l = useLayout.getState();
   const g = l.groups.find((x) => x.id === groupId);
   // Con una finestra o un prompt aperti il drop si ignora: non si perde ciò che l'utente sta scrivendo.
-  if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length) return;
+  // Anche durante un nostro drag in uscita: le righe rilasciate sull'app stessa non sono un drop da Explorer.
+  if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length || isSelfDragging()) return;
   const sources = await normalizePaths(paths);
   const dest = l.tabs[g.activeTabId].path;
   ui().openDialog({

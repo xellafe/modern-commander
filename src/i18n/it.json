@@ -120,7 +120,11 @@
     "cm_Delete": "Elimina (Cestino)",
     "mc_DeletePermanent": "Elimina definitivamente",
     "cm_SpreadSelection": "Seleziona per maschera",
-    "cm_ShrinkSelection": "Deseleziona per maschera"
+    "cm_ShrinkSelection": "Deseleziona per maschera",
+    "cm_ContextMenu": "Menu contestuale",
+    "cm_Properties": "Proprietà",
+    "cm_List": "Visualizza",
+    "cm_Edit": "Modifica"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",

@@ -3,12 +3,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import i18n from "../i18n";
 import { listDrives } from "../ipc/api";
 import { formatSize } from "../lib/format";
-import { dirTarget, folderName, rootPath } from "../lib/paths";
+import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
 import { targetGroup, useLayout } from "../state/layout";
 import { invertMarks, markRange, parentPath, toggleMark, type SortKey, type TabView } from "../state/tabView";
 import { activeTabContext, useTabViews, type LoadOpts } from "../state/tabViews";
 import { useUi } from "../state/ui";
 import { registerCommand, type Command } from "./registry";
+import { openFile } from "./shell";
 
 /** Righe visibili nella lista (pagina per PgSu/PgGiù, righe per colonna nella vista breve). */
 let pageSize = 20;
@@ -109,10 +110,12 @@ const DEFS: Def[] = [
 
   // Navigazione
   ["cm_Return", () => {
-    const { path, cursorRow } = activeTabContext();
-    const target = cursorRow && dirTarget(path, cursorRow);
-    // Sui file non fa niente: l'apertura arriva col Task 18.
+    const { tabId, path, cursorRow } = activeTabContext();
+    if (!cursorRow) return;
+    const target = dirTarget(path, cursorRow);
     if (target) return open(target, cursorRow.isParent ? { focus: folderName(path) } : undefined);
+    // Un file (anche un collegamento .lnk) si apre col programma associato, come in Explorer.
+    return openFile(tabId, joinPath(path, cursorRow.name));
   }],
   ["cm_GoToParent", () => {
     const { path } = activeTabContext();

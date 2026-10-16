@@ -4,6 +4,7 @@ import App from "./App";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
 import { registerNavigationCommands } from "./commands/navigation";
+import { registerShellCommands, suppressKeyboardContextMenu } from "./commands/shell";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
 import { useHotlist } from "./state/hotlist";
@@ -20,6 +21,8 @@ applyTheme();
 registerNavigationCommands();
 registerHotlistCommands();
 registerFileOpCommands();
+registerShellCommands();
+window.addEventListener("contextmenu", suppressKeyboardContextMenu);
 // Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
 initJobs().catch(console.error);
 

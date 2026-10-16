@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { nameError, renameInPlace } from "../../commands/fileOps";
 import { setPageSize, sortBy } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
+import { rowContextMenu, trackDragOut } from "../../commands/shell";
 import { formatAttrs, formatDate, formatSize, splitName } from "../../lib/format";
 import { useLayout } from "../../state/layout";
 import { markRange, toggleMark, type Row, type SortKey, type TabView } from "../../state/tabView";
@@ -48,6 +49,19 @@ function clickRow(tabId: string, i: number, e: MouseEvent) {
 }
 const openRow = () => void executeCommand("cm_Return");
 
+// Click, doppio click, tasto destro (menu della shell) e drag in uscita verso Explorer.
+const rowHandlers = (tabId: string, i: number) => ({
+  onMouseDown: (e: MouseEvent) => {
+    clickRow(tabId, i, e);
+    trackDragOut(tabId, i, e);
+  },
+  onDoubleClick: openRow,
+  onContextMenu: (e: MouseEvent) => {
+    e.stopPropagation();
+    rowContextMenu(tabId, i, e);
+  },
+});
+
 const rowClass = (v: TabView, i: number, row: Row) =>
   `mc-row${i === v.cursor ? " cur" : ""}${v.marked.has(row.name) ? " mk" : ""}`;
 
@@ -81,6 +95,7 @@ function RenameInput({ tabId, row }: { tabId: string; row: Row }) {
         onBlur={cancel}
         onMouseDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.stopPropagation()} // menu di modifica del testo di WebView2
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === "Escape") cancel();
@@ -151,7 +166,7 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
         {head("date", t("groups.columns.date"), "c-date")}
         {head(null, t("groups.columns.attributes"), "c-attr")}
       </div>
-      <div className="mc-list-scroll" ref={ref}>
+      <div className="mc-list-scroll" ref={ref} onContextMenu={(e) => rowContextMenu(tabId, null, e)}>
         <div className="mc-list-canvas" style={{ height: virt.getTotalSize() }}>
           {virt.getVirtualItems().map(({ index: i, start }) => {
             const row = view.rows[i];
@@ -196,8 +211,7 @@ const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSi
     <div
       className={`${cls} mc-cols${renaming ? " renaming" : ""}`}
       style={{ transform: `translateY(${start}px)`, height }}
-      onMouseDown={(e) => clickRow(tabId, i, e)}
-      onDoubleClick={openRow}
+      {...rowHandlers(tabId, i)}
     >
       <span className="c-icon"><FileIcon row={row} /></span>
       <span className="c-name">{renaming ? <RenameInput tabId={tabId} row={row} /> : base}</span>
@@ -240,7 +254,12 @@ function BriefList({ tabId, view, active, rowHeight }: ListProps) {
 
   return (
     <div className="mc-list mc-list-brief">
-      <div className="mc-list-scroll" ref={ref} onWheel={(e) => (e.currentTarget.scrollLeft += e.deltaY)}>
+      <div
+        className="mc-list-scroll"
+        ref={ref}
+        onWheel={(e) => (e.currentTarget.scrollLeft += e.deltaY)}
+        onContextMenu={(e) => rowContextMenu(tabId, null, e)}
+      >
         <div className="mc-list-canvas" style={{ width: virt.getTotalSize() }}>
           {virt.getVirtualItems().map(({ index: c, start }) => (
             <div key={c} className="mc-brief-col" style={{ transform: `translateX(${start}px)`, width: BRIEF_COL_WIDTH }}>
@@ -251,8 +270,7 @@ function BriefList({ tabId, view, active, rowHeight }: ListProps) {
                     key={i}
                     className={rowClass(view, i, row)}
                     style={{ height: rowHeight }}
-                    onMouseDown={(e) => clickRow(tabId, i, e)}
-                    onDoubleClick={openRow}
+                    {...rowHandlers(tabId, i)}
                   >
                     <span className="c-icon"><FileIcon row={row} /></span>
                     <span className="c-name">{renaming === row.name ? <RenameInput tabId={tabId} row={row} /> : row.name}</span>

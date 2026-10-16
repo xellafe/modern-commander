@@ -24,6 +24,7 @@ test('named keys and the VK<n> fallback', () => {
   expect(chordFromEvent(ev(48))).toBe('0');
   expect(chordFromEvent(ev(135))).toBe('F24');
   expect(chordFromEvent(ev(34))).toBe('PageDown');
+  expect(chordFromEvent(ev(93))).toBe('Apps');
   expect(chordFromEvent(ev(186, { c: true }))).toBe('Ctrl+VK186');
 });
 

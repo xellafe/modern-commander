@@ -3,7 +3,7 @@ const NAMED: Record<number, string> = {
   8: 'Backspace', 9: 'Tab', 13: 'Enter', 27: 'Escape', 32: 'Space',
   33: 'PageUp', 34: 'PageDown', 35: 'End', 36: 'Home',
   37: 'Left', 38: 'Up', 39: 'Right', 40: 'Down',
-  45: 'Insert', 46: 'Delete',
+  45: 'Insert', 46: 'Delete', 93: 'Apps',
   106: 'NumMultiply', 107: 'NumAdd', 109: 'NumSubtract',
   188: 'Comma', 192: 'Oem3', 220: 'Oem5',
 };

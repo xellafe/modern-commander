@@ -14,7 +14,6 @@ use tauri::{Emitter, Manager};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .manage(fs::watch::Watchers::default())
         .setup(|app| {
             if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
@@ -40,6 +39,8 @@ pub fn run() {
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
             shell::drag::start_drag,
+            shell::open::open_path,
+            shell::open::open_with,
             config::read_config,
             config::write_config,
             ops::queue::enqueue_job,
