@@ -15,6 +15,8 @@ pub enum ErrorCode {
     IntoItself,
     /// Spostamento tra unità diverse: va fatto come copia + cancellazione.
     NotSameDevice,
+    /// Il volume non ha Cestino (rete, rimovibile, ...): serve la cancellazione definitiva.
+    NoRecycleBin,
     InvalidName,
     Cancelled,
     InvalidRequest,

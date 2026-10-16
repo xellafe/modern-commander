@@ -121,6 +121,7 @@
     "SAME_FILE": "Source and destination are the same file.",
     "INTO_ITSELF": "A folder cannot be copied or moved into itself.",
     "NOT_SAME_DEVICE": "Source and destination are on different drives.",
+    "NO_RECYCLE_BIN": "This drive has no Recycle Bin.",
     "INVALID_NAME": "The name is not valid.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",

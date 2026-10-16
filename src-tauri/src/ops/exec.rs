@@ -2,15 +2,16 @@
 
 use super::conflict::same_file;
 use crate::error::{AppError, ErrorCode};
-use crate::paths::to_extended;
+use crate::paths::{to_extended, volume_key};
 use std::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{
     COPY_FILE_FAIL_IF_EXISTS, COPYPROGRESSROUTINE_PROGRESS, CopyFileExW, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_READONLY, FILE_FLAGS_AND_ATTRIBUTES, LPPROGRESS_ROUTINE_CALLBACK_REASON,
+    FILE_ATTRIBUTE_READONLY, FILE_FLAGS_AND_ATTRIBUTES, FlushFileBuffers, GetDriveTypeW, LPPROGRESS_ROUTINE_CALLBACK_REASON,
     MOVE_FILE_FLAGS, MOVEFILE_REPLACE_EXISTING, MoveFileExW, PROGRESS_CANCEL, PROGRESS_CONTINUE,
     SetFileAttributesW,
 };
@@ -82,47 +83,138 @@ fn move_file(src: &Path, dst: &Path, flags: MOVE_FILE_FLAGS) -> Result<(), AppEr
     })
 }
 
+/// Limite NTFS di un singolo componente, in unità UTF-16.
+const MAX_COMPONENT: usize = 255;
+
+/// FNV-1a a 64 bit: stabile tra versioni (a differenza di `DefaultHasher`), così un `.mcpart`
+/// lasciato da una versione precedente si ritrova.
+fn fnv1a(units: impl Iterator<Item = u16>) -> u64 {
+    units.fold(0xcbf2_9ce4_8422_2325, |h, u| (h ^ u64::from(u)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// File temporaneo della copia, accanto a `dst`: `nome.mcpart`. Se il nome supererebbe i 255
+/// caratteri si usa `prefisso~hash.mcpart`, deterministico rispetto al nome completo.
+fn part_path(dst: &Path) -> PathBuf {
+    let name = dst.file_name().unwrap_or_default();
+    let name_len = name.encode_wide().count();
+    if name_len + PART_SUFFIX.len() <= MAX_COMPONENT {
+        let mut s = name.to_os_string();
+        s.push(PART_SUFFIX);
+        return dst.with_file_name(s);
+    }
+    let tail = format!("~{:016x}{PART_SUFFIX}", fnv1a(name.encode_wide()));
+    let budget = MAX_COMPONENT - tail.len();
+    let (mut prefix, mut used) = (String::new(), 0);
+    for c in name.to_string_lossy().chars() {
+        used += c.len_utf16(); // mai a metà di una coppia surrogata
+        if used > budget {
+            break;
+        }
+        prefix.push(c);
+    }
+    dst.with_file_name(prefix + &tail)
+}
+
+/// Il Cestino esiste in modo affidabile solo sui dischi fissi: su rete, rimovibili, CD e RAM disk
+/// la Shell (con `FOF_NO_UI`) cancellerebbe in modo definitivo senza dirlo.
+fn recycle_bin_supported(drive_type: u32) -> bool {
+    drive_type == 3 // DRIVE_FIXED
+}
+
+/// Componente che termina con `.` o spazio: la Shell lo normalizza e cestinerebbe un altro file.
+fn has_trailing_dot_or_space(p: &Path) -> bool {
+    p.components().any(|c| match c {
+        Component::Normal(n) => n.to_string_lossy().ends_with(['.', ' ']),
+        _ => false,
+    })
+}
+
+fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
+    if has_trailing_dot_or_space(path) {
+        return Err(AppError {
+            detail: Some("recycle_bin_unsupported_name".into()),
+            ..AppError::new(ErrorCode::InvalidName, Some(path))
+        });
+    }
+    let volume = volume_key(path);
+    // I percorsi UNC (`\\server\share`) non hanno Cestino.
+    let drive_type = if volume.len() == 2 { unsafe { GetDriveTypeW(&HSTRING::from(volume + "\\")) } } else { 0 };
+    if !recycle_bin_supported(drive_type) {
+        return Err(AppError::new(ErrorCode::NoRecycleBin, Some(path)));
+    }
+    trash::delete(path).map_err(|e| match e {
+        trash::Error::Os { code, description } => from_hresult(code, description, path),
+        other => AppError { detail: Some(other.to_string()), ..AppError::new(ErrorCode::Io, Some(path)) },
+    })
+}
+
+/// Stato condiviso col callback di CopyFileExW.
+struct CopyCtx<'a> {
+    progress: Progress<'a>,
+    /// Scrivere su disco la copia completa prima che sostituisca un `dst` esistente.
+    flush: bool,
+    flush_err: Option<windows::core::Error>,
+}
+
 unsafe extern "system" fn on_progress(
-    _total: i64,
+    total: i64,
     transferred: i64,
     _stream_size: i64,
     _stream_transferred: i64,
     _stream: u32,
     _reason: LPPROGRESS_ROUTINE_CALLBACK_REASON,
     _src: HANDLE,
-    _dst: HANDLE,
+    dst: HANDLE,
     data: *const c_void,
 ) -> COPYPROGRESSROUTINE_PROGRESS {
-    // SAFETY: `data` punta al `Progress` che `copy_file` tiene vivo per tutta la CopyFileExW.
-    let progress = unsafe { &mut *(data as *mut Progress) };
+    // SAFETY: `data` punta al `CopyCtx` che `copy_file` tiene vivo per tutta la CopyFileExW.
+    let ctx = unsafe { &mut *(data as *mut CopyCtx) };
     // Un panico non deve attraversare il confine FFI: lo si tratta come annullamento.
-    match catch_unwind(AssertUnwindSafe(|| progress(transferred as u64))) {
-        Ok(true) => PROGRESS_CONTINUE,
-        _ => PROGRESS_CANCEL,
+    if !matches!(catch_unwind(AssertUnwindSafe(|| (ctx.progress)(transferred as u64))), Ok(true)) {
+        return PROGRESS_CANCEL;
     }
+    // Tutti i byte (di tutti gli stream) sono stati scritti: si usa l'handle di scrittura della
+    // copia, che funziona anche se il `.mcpart` ha ereditato la sola lettura.
+    if ctx.flush
+        && transferred == total
+        && let Err(e) = unsafe { FlushFileBuffers(dst) }
+    {
+        ctx.flush_err = Some(e);
+        return PROGRESS_CANCEL;
+    }
+    PROGRESS_CONTINUE
 }
 
 impl Executor for LocalExecutor {
     /// La copia si scrive in `dst.mcpart` e prende il nome finale solo quando è completa:
     /// una copia interrotta non lascia mai un `dst` troncato, e `dst` non viene mai riscritto sul posto.
-    fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, mut progress: Progress) -> Result<(), AppError> {
-        if !overwrite && exists(dst) {
+    fn copy_file(&self, src: &Path, dst: &Path, overwrite: bool, progress: Progress) -> Result<(), AppError> {
+        let dst_exists = exists(dst);
+        if dst_exists && !overwrite {
             return Err(AppError::new(ErrorCode::AlreadyExists, Some(dst)));
         }
-        let mut part = dst.as_os_str().to_os_string();
-        part.push(PART_SUFFIX);
-        let part = PathBuf::from(part);
+        if dst_exists && same_file(src, dst) {
+            return Err(AppError::new(ErrorCode::SameFile, Some(src)));
+        }
+        let part = part_path(dst);
         remove_part(&part); // residuo di un crash precedente: è nostro per nome
-        let data = &mut progress as *mut Progress as *const c_void;
+        // Il flush serve solo quando si sostituisce: altrimenti un'interruzione di corrente
+        // non può far perdere una versione precedente.
+        let mut ctx = CopyCtx { progress, flush: dst_exists, flush_err: None };
+        let data = &mut ctx as *mut CopyCtx as *const c_void;
         let copied = unsafe {
             CopyFileExW(&wide(src), &wide(&part), Some(on_progress), Some(data), None, COPY_FILE_FAIL_IF_EXISTS)
         };
         if let Err(e) = copied {
             remove_part(&part);
+            if let Some(fe) = ctx.flush_err {
+                return Err(from_win(&fe, dst));
+            }
             // Se la sorgente si apre il problema è dal lato della destinazione.
             let blame = if std::fs::File::open(to_extended(src)).is_ok() { dst } else { src };
             return Err(from_win(&e, blame));
         }
+        // Difesa in profondità: `dst` potrebbe essere cambiato durante la copia.
         if overwrite && same_file(src, dst) {
             remove_part(&part);
             return Err(AppError::new(ErrorCode::SameFile, Some(src)));
@@ -147,10 +239,7 @@ impl Executor for LocalExecutor {
     fn delete(&self, path: &Path, is_dir: bool, permanent: bool) -> Result<(), AppError> {
         let meta = std::fs::symlink_metadata(to_extended(path)).map_err(|e| AppError::from_io(&e, path))?;
         if !permanent {
-            return trash::delete(path).map_err(|e| match e {
-                trash::Error::Os { code, description } => from_hresult(code, description, path),
-                other => AppError { detail: Some(other.to_string()), ..AppError::new(ErrorCode::Io, Some(path)) },
-            });
+            return move_to_recycle_bin(path);
         }
         clear_readonly(path, meta.file_attributes())?;
         let ext = to_extended(path);
@@ -173,15 +262,8 @@ mod tests {
     use super::*;
     use crate::paths::{to_extended, volume_key};
     use std::fs;
-    use std::path::PathBuf;
 
     const X: LocalExecutor = LocalExecutor;
-
-    fn part(dst: &Path) -> PathBuf {
-        let mut s = dst.as_os_str().to_os_string();
-        s.push(PART_SUFFIX);
-        PathBuf::from(s)
-    }
 
     fn exists(p: &Path) -> bool {
         fs::symlink_metadata(to_extended(p)).is_ok()
@@ -204,7 +286,7 @@ mod tests {
         assert!(seen.iter().any(|&n| n > 0 && n < data.len() as u64), "{seen:?}");
         assert_eq!(*seen.last().unwrap(), data.len() as u64);
         assert_eq!(fs::read(&dst).unwrap(), data);
-        assert!(!exists(&part(&dst)));
+        assert!(!exists(&part_path(&dst)));
     }
 
     #[test]
@@ -214,11 +296,11 @@ mod tests {
         fs::write(&src, vec![7u8; 1024 * 1024]).unwrap();
         let err = X.copy_file(&src, &dst, false, &mut |_| false).unwrap_err();
         assert_eq!(err.code, ErrorCode::Cancelled);
-        assert!(!exists(&dst) && !exists(&part(&dst)));
+        assert!(!exists(&dst) && !exists(&part_path(&dst)));
         // Un panico nel callback non attraversa l'FFI: diventa un annullamento.
         let err = X.copy_file(&src, &dst, false, &mut |_| panic!("prova")).unwrap_err();
         assert_eq!(err.code, ErrorCode::Cancelled);
-        assert!(!exists(&dst) && !exists(&part(&dst)));
+        assert!(!exists(&dst) && !exists(&part_path(&dst)));
     }
 
     #[test]
@@ -230,7 +312,7 @@ mod tests {
         let err = X.copy_file(&src, &dst, false, &mut |_| true).unwrap_err();
         assert_eq!(err.code, ErrorCode::AlreadyExists);
         assert_eq!(fs::read(&dst).unwrap(), b"vecchio");
-        assert!(!exists(&part(&dst)));
+        assert!(!exists(&part_path(&dst)));
     }
 
     #[test]
@@ -240,16 +322,16 @@ mod tests {
         fs::write(&src, b"nuovi byte").unwrap();
         fs::write(&dst, b"old").unwrap();
         // Un `.mcpart` rimasto da un crash precedente è nostro: si sostituisce.
-        fs::write(part(&dst), b"residuo").unwrap();
+        fs::write(part_path(&dst), b"residuo").unwrap();
         X.copy_file(&src, &dst, true, &mut |_| true).unwrap();
         assert_eq!(fs::read(&dst).unwrap(), b"nuovi byte");
-        assert!(!exists(&part(&dst)));
+        assert!(!exists(&part_path(&dst)));
         // Sovrascrivere un file con se stesso (qui via hard link) è vietato.
         let link = d.path().join("link");
         fs::hard_link(&src, &link).unwrap();
         assert_eq!(X.copy_file(&src, &link, true, &mut |_| true).unwrap_err().code, ErrorCode::SameFile);
         assert_eq!(fs::read(&link).unwrap(), b"nuovi byte");
-        assert!(!exists(&part(&link)));
+        assert!(!exists(&part_path(&link)));
     }
 
     #[test]
@@ -277,6 +359,46 @@ mod tests {
         X.delete(&f, false, false).unwrap();
         assert!(!exists(&f));
         assert_eq!(X.delete(&f, false, false).unwrap_err().code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn recycle_bin_refuses_names_the_shell_would_alter() {
+        let d = tempfile::tempdir().unwrap();
+        for (odd, twin) in [("x.", "x"), ("y ", "y")] {
+            let (odd, twin) = (d.path().join(odd), d.path().join(twin));
+            fs::write(to_extended(&odd), b"strano").unwrap();
+            fs::write(&twin, b"gemello").unwrap();
+            let err = X.delete(&odd, false, false).unwrap_err();
+            assert_eq!((err.code, err.detail.as_deref()), (ErrorCode::InvalidName, Some("recycle_bin_unsupported_name")));
+            assert!(exists(&odd) && exists(&twin));
+        }
+    }
+
+    #[test]
+    fn recycle_bin_only_on_fixed_drives() {
+        // GetDriveTypeW: 0 sconosciuto, 1 nessuna radice, 2 rimovibile, 3 fisso, 4 rete, 5 CD, 6 RAM disk.
+        let allowed: Vec<u32> = (0..=6).filter(|&t| recycle_bin_supported(t)).collect();
+        assert_eq!(allowed, vec![3]);
+        let unc = Path::new(r"\\server\share\f.txt");
+        assert_eq!(move_to_recycle_bin(unc).unwrap_err().code, ErrorCode::NoRecycleBin);
+    }
+
+    #[test]
+    fn part_name_fits_ntfs_component_limit() {
+        let d = tempfile::tempdir().unwrap();
+        let name = "n".repeat(252);
+        let (src, dst) = (d.path().join("s"), d.path().join(&name));
+        let part = part_path(&dst);
+        let part_name = part.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(part_name.encode_utf16().count() <= 255 && part_name.ends_with(PART_SUFFIX), "{part_name}");
+        assert_eq!(part.parent(), dst.parent());
+        assert_eq!(part_path(&dst), part); // deterministico: il residuo si ritrova
+        assert_ne!(part_path(&d.path().join("n".repeat(251) + "m")), part);
+        fs::write(&src, b"x").unwrap();
+        fs::write(&part, b"residuo").unwrap();
+        X.copy_file(&src, &dst, false, &mut |_| true).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"x");
+        assert!(!exists(&part));
     }
 
     #[test]

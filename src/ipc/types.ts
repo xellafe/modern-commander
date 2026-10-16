@@ -9,6 +9,7 @@ export type ErrorCode =
   | "SAME_FILE"
   | "INTO_ITSELF"
   | "NOT_SAME_DEVICE"
+  | "NO_RECYCLE_BIN"
   | "INVALID_NAME"
   | "CANCELLED"
   | "INVALID_REQUEST"

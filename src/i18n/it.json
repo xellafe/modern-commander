@@ -121,6 +121,7 @@
     "SAME_FILE": "Origine e destinazione sono lo stesso file.",
     "INTO_ITSELF": "Una cartella non può essere copiata o spostata dentro se stessa.",
     "NOT_SAME_DEVICE": "Origine e destinazione sono su unità diverse.",
+    "NO_RECYCLE_BIN": "Questa unità non ha un Cestino.",
     "INVALID_NAME": "Il nome non è valido.",
     "CANCELLED": "Operazione annullata.",
     "INVALID_REQUEST": "Richiesta non valida.",
