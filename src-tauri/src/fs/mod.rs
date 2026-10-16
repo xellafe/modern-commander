@@ -2,6 +2,7 @@
 
 pub mod drives;
 pub mod listing;
+pub mod watch;
 
 use crate::error::{AppError, ErrorCode};
 use std::path::{Path, PathBuf};
