@@ -1,6 +1,8 @@
 pub mod config;
 pub mod error;
 pub mod fs;
+pub mod mask;
+pub mod ops;
 pub mod paths;
 pub mod shell;
 
