@@ -73,9 +73,11 @@ interface SelfDragState {
   dragging: boolean;
   /** Percorsi dell'ultimo drag e istante in cui è finito. */
   last: { paths: string[]; at: number } | null;
+  /** Gruppo e cartella da cui è partito l'ultimo drag. */
+  origin?: { groupId: string; from: string } | null;
 }
 const SELF_DROP_MS = 2000;
-const selfDrag: SelfDragState = { dragging: false, last: null };
+const selfDrag: SelfDragState = { dragging: false, last: null, origin: null };
 
 const samePaths = (a: string[], b: string[]) => {
   const set = new Set(a.map((p) => p.toLowerCase()));
@@ -89,15 +91,30 @@ const samePaths = (a: string[], b: string[]) => {
 export const isSelfDrop = (paths: string[], s: SelfDragState, now: number) =>
   s.dragging || (!!s.last && now - s.last.at < SELF_DROP_MS && samePaths(paths, s.last.paths));
 
-/** Per `dropOnGroup`: il drop va ignorato. */
-export const ignoreDrop = (paths: string[]) => isSelfDrop(paths, selfDrag, Date.now());
+export type DropAction = { kind: "external" } | { kind: "ignore" } | { kind: "fromGroup"; from: string };
+
+/**
+ * Drop sul gruppo `groupId`: da fuori (Explorer), oppure il nostro drag. Il nostro sullo stesso gruppo si
+ * ignora; su un altro gruppo è una copia dalla cartella d'origine (Maiusc per spostare, come in TC, non si
+ * può leggere: l'evento di drop di Tauri non porta i modificatori).
+ */
+export function classifyDrop(paths: string[], s: SelfDragState, now: number, groupId: string): DropAction {
+  if (!isSelfDrop(paths, s, now)) return { kind: "external" };
+  return s.origin && s.origin.groupId !== groupId ? { kind: "fromGroup", from: s.origin.from } : { kind: "ignore" };
+}
+
+/** Per `dropOnGroup`. */
+export const dropAction = (paths: string[], groupId: string) => classifyDrop(paths, selfDrag, Date.now(), groupId);
 
 /** Trascina fuori dalla finestra le righe di `rowsAt` dalla riga `name` (mai unità: la shell creerebbe collegamenti). */
 export async function dragOut(tabId: string, name: string) {
   const v = useTabViews.getState().views[tabId];
   const rows = v ? rowsAt(v, v.rows.findIndex((r) => r.name === name)).filter((r) => !r.drive) : [];
   if (!rows.length) return;
-  const paths = shellPaths(useLayout.getState().tabs[tabId].path, rows);
+  const l = useLayout.getState();
+  const from = l.tabs[tabId].path;
+  const paths = shellPaths(from, rows);
+  selfDrag.origin = { groupId: l.groups.find((g) => g.tabIds.includes(tabId))?.id ?? "", from };
   selfDrag.dragging = true;
   try {
     await startDrag(paths);

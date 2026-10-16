@@ -4,6 +4,11 @@ import {
   moveTab, newTab, setTabPath, splitGroup, targetGroup, useLayout,
 } from './layout';
 
+test('the default layout opens two groups on C:\\, never on a drive that may be missing', () => {
+  const { groups, tabs } = useLayout.getState();
+  expect(groups.map((g) => tabs[g.activeTabId].path)).toEqual(['C:\\', 'C:\\']);
+});
+
 test('targetGroup is most recently active other group', () => {
   let s = initialLayout(['C:\\', 'D:\\']);
   s = splitGroup(s, s.groups[1].id); // 3 gruppi, attivo il terzo

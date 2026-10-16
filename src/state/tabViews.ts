@@ -130,8 +130,14 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
       try {
         res = await fetchListing(path);
       } catch (e) {
-        if (seq.get(tabId) === token) get().showNotice(tabId, e);
-        return;
+        try {
+          // Prima lettura di una scheda (accesso negato…): non resta vuota, mostra le unità.
+          if (get().views[tabId] || path === DRIVES) throw e;
+          res = { ...(await fetchListing(DRIVES)), error: e as AppError };
+        } catch {
+          if (seq.get(tabId) === token) get().showNotice(tabId, e);
+          return;
+        }
       }
       if (seq.get(tabId) !== token) return;
       const t1 = performance.now();

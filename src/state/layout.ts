@@ -143,7 +143,8 @@ interface LayoutActions {
 }
 
 export const useLayout = create<LayoutState & LayoutActions>((set) => ({
-  ...initialLayout(["C:\\", "D:\\"]),
+  // Il secondo gruppo come il primo: una D: assente (o un CD vuoto) darebbe un avviso all'avvio.
+  ...initialLayout(["C:\\", "C:\\"]),
   activateGroup: (groupId) => set((s) => activateGroup(s, groupId)),
   newTab: (groupId, path) => set((s) => newTab(s, groupId, path)),
   closeTab: (tabId) => set((s) => closeTab(s, tabId)),

@@ -6,6 +6,7 @@ import { ConflictDialog } from "./ConflictDialog";
 import { CopyMoveDialog } from "./CopyMoveDialog";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { ErrorDialog } from "./ErrorDialog";
+import { ExitConfirm } from "./ExitConfirm";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
 import { trapTab, useModalFocus } from "./focusTrap";
@@ -74,6 +75,7 @@ export function DialogHost() {
     case "mkdir": return <MkdirDialog req={dialog} />;
     case "delete": return <DeleteConfirm req={dialog} />;
     case "mask": return <MaskDialog req={dialog} />;
+    case "exit": return <ExitConfirm req={dialog} />;
   }
   if (!prompt) return null;
   return prompt.type === "conflict"

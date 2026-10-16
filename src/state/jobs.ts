@@ -1,6 +1,6 @@
 // Stato della coda delle operazioni (Task 15): job, ordine e prompt in attesa.
 import { create } from "zustand";
-import { listJobs, onJobPrompt, onJobUpdated, replyPrompt } from "../ipc/api";
+import { cancelJob, listJobs, onJobPrompt, onJobUpdated, replyPrompt } from "../ipc/api";
 import type { JobId, JobKind, JobView, Prompt, PromptReply } from "../ipc/types";
 import { joinPath } from "../lib/paths";
 import { parentPath } from "./tabView";
@@ -106,21 +106,42 @@ export async function initJobs() {
   await useJobs.getState().refresh();
 }
 
-/** Attende la fine del job (anche se è già finito). */
+/**
+ * Attende la fine del job (anche se è già finito). Un job tolto dall'elenco prima del suo evento
+ * finale (clear_finished) conta come annullato: non si resta in attesa per sempre.
+ */
 export function waitForJob(id: JobId): Promise<JobView> {
   return new Promise((resolve) => {
+    let seen: JobView | undefined;
     const check = (s: JobsState) => {
       const j = s.jobs[id];
-      if (j && isFinished(j)) {
-        off();
-        resolve(j);
-        return true;
-      }
-      return false;
+      const end = j ? (isFinished(j) ? j : undefined) : seen && { ...seen, state: { type: "cancelled" as const } };
+      seen = j ?? seen;
+      if (!end) return;
+      off();
+      resolve(end);
     };
     const off = useJobs.subscribe(check);
     check(useJobs.getState());
   });
+}
+
+/** Job non ancora finiti (in coda, in corso, in pausa, in attesa di risposta). */
+export const unfinishedJobs = (jobs: Record<JobId, JobView>): JobView[] => Object.values(jobs).filter((j) => !isFinished(j));
+
+/**
+ * Annulla tutti i job non finiti e attende il loro stato finale, così una copia in corso toglie il
+ * proprio `.mcpart`; al massimo `timeoutMs`, poi si prosegue comunque (un job bloccato non trattiene l'uscita).
+ */
+export async function cancelAllAndWait(timeoutMs: number): Promise<void> {
+  const ids = unfinishedJobs(useJobs.getState().jobs).map((j) => j.id);
+  await Promise.all(ids.map((id) => cancelJob(id).catch(() => {})));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all(ids.map(waitForJob)),
+    new Promise((r) => (timer = setTimeout(r, timeoutMs))),
+  ]);
+  clearTimeout(timer);
 }
 
 /** Job avviati e non finiti (in corso, in attesa di risposta, in pausa), nell'ordine della coda: la barra di stato mostra il primo. */

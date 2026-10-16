@@ -1,6 +1,9 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+
+vi.mock("../ipc/api");
+import * as api from "../ipc/api";
 import type { JobView, Prompt } from "../ipc/types";
-import { conflictChoices, conflictReply, pendingPrompts, renamePath } from "./jobs";
+import { cancelAllAndWait, conflictChoices, conflictReply, pendingPrompts, renamePath, unfinishedJobs, useJobs, waitForJob } from "./jobs";
 
 test("conflictChoices on the same file offers only skip, rename and cancel", () => {
   expect(conflictChoices(true)).toEqual(["skip", "rename", "cancel"]);
@@ -33,6 +36,44 @@ test("conflictReply maps every choice to the backend shape", () => {
   expect(conflictReply("larger", false)).toEqual({ type: "conflictPolicy", policy: { type: "overwriteIfLarger" }, applyToAll: false });
   // Annulla chiude il job: "per tutti" non ha senso.
   expect(conflictReply("cancel", true)).toEqual({ type: "conflict", decision: { type: "cancel" }, applyToAll: false });
+});
+
+const withState = (id: number, type: JobView["state"]["type"]): JobView => ({ ...job(id, null), state: { type } });
+
+test("unfinishedJobs: queued, running, paused and waiting jobs block a silent exit", () => {
+  const states = ["queued", "running", "paused", "waiting", "done", "failed", "cancelled"] as const;
+  const jobs = Object.fromEntries(states.map((s, i) => [i + 1, withState(i + 1, s)]));
+  expect(unfinishedJobs(jobs).map((j) => j.state.type)).toEqual(["queued", "running", "paused", "waiting"]);
+  expect(unfinishedJobs({})).toEqual([]);
+});
+
+test("cancelAllAndWait cancels every unfinished job and waits for its final state, at most until the timeout", async () => {
+  useJobs.setState({ jobs: { 1: withState(1, "running"), 2: withState(2, "waiting"), 3: withState(3, "done") } });
+  vi.mocked(api.cancelJob).mockResolvedValue();
+  const done = cancelAllAndWait(3000);
+  await vi.waitFor(() => expect(api.cancelJob).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(api.cancelJob).mock.calls.map((c) => c[0])).toEqual([1, 2]);
+  let settled = false;
+  void done.then(() => (settled = true));
+  useJobs.setState((s) => ({ jobs: { ...s.jobs, 1: withState(1, "cancelled") } }));
+  await Promise.resolve();
+  expect(settled).toBe(false); // il 2 non è ancora finito
+  useJobs.setState((s) => ({ jobs: { ...s.jobs, 2: withState(2, "cancelled") } }));
+  await done;
+
+  vi.useFakeTimers();
+  useJobs.setState({ jobs: { 4: withState(4, "running") } });
+  const late = cancelAllAndWait(3000);
+  await vi.advanceTimersByTimeAsync(3000); // un job che non risponde non blocca l'uscita
+  await late;
+  vi.useRealTimers();
+});
+
+test("waitForJob resolves as cancelled if the job is removed before its final event", async () => {
+  useJobs.setState({ jobs: { 5: withState(5, "running") } });
+  const w = waitForJob(5);
+  useJobs.setState({ jobs: {} }); // clear_finished + refresh prima dell'evento finale
+  expect((await w).state.type).toBe("cancelled");
 });
 
 test("renamePath keeps the folder of the suggested name and changes only the file name", () => {

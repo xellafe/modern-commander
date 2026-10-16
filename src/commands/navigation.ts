@@ -5,6 +5,7 @@ import { listDrives } from "../ipc/api";
 import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
 import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
+import { cancelAllAndWait, unfinishedJobs, useJobs } from "../state/jobs";
 import { targetGroup, useLayout } from "../state/layout";
 import {
   finishSizing, hasSize, invertMarks, markRange, parentPath, sizable, startSizing, toggleMark,
@@ -136,6 +137,34 @@ function openHistoryMenu() {
   const { tabId, view } = activeTabContext();
   const items = view.history.map((p, i) => ({ label: p, path: p, historyIndex: i, current: i === view.historyIndex }));
   views().setOverlay({ kind: "menu", tabId, title: i18n.t("groups.history"), items: items.reverse() });
+}
+
+/** Attesa massima dei job annullati all'uscita: le copie in corso fanno in tempo a togliere il `.mcpart`. */
+const EXIT_WAIT_MS = 3000;
+let exiting = false;
+
+/**
+ * Chiusura della finestra: la X, Alt+F4 e cm_Exit passano tutti di qui. Con operazioni non finite
+ * (in coda, in corso, in pausa, in attesa di risposta) si chiede conferma invece di ucciderle.
+ */
+export const initCloseGuard = () =>
+  getCurrentWindow().onCloseRequested((e) => {
+    const count = unfinishedJobs(useJobs.getState().jobs).length;
+    if (!count && !exiting) return;
+    e.preventDefault();
+    // Sostituisce un'eventuale altra finestra aperta: l'utente vuole uscire.
+    if (!exiting) useUi.setState({ dialog: { kind: "exit", count } });
+  });
+
+/** Dalla conferma: annulla tutti i job, ne attende la fine (al massimo `EXIT_WAIT_MS`) e chiude. */
+export async function exitCancellingJobs() {
+  exiting = true;
+  try {
+    await cancelAllAndWait(EXIT_WAIT_MS);
+    await getCurrentWindow().destroy();
+  } finally {
+    exiting = false; // se destroy fallisce la finestra resta chiudibile
+  }
 }
 
 type Def = [id: string, run: Command["run"], opts?: { repeat?: boolean; global?: boolean }];

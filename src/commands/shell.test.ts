@@ -11,7 +11,7 @@ import { dropOnGroup } from "./fileOps";
 import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 import {
-  dragOut, isExecutable, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
+  classifyDrop, dragOut, isExecutable, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
   suppressKeyboardContextMenu, toPhysical,
 } from "./shell";
 
@@ -144,6 +144,37 @@ test("isSelfDrop: running drag, or the same path set (any order and case) within
   expect(isSelfDrop(["C:\\x\\a.txt", "C:\\x\\b.txt"], { dragging: false, last }, 3000)).toBe(false);
   expect(isSelfDrop(["C:\\x\\a.txt"], { dragging: false, last }, 1500)).toBe(false);
   expect(isSelfDrop(["C:\\x\\a.txt", "C:\\x\\c.txt"], { dragging: false, last }, 1500)).toBe(false);
+});
+
+test("classifyDrop: an external drop, our drag on its own group (ignored) or on another group", () => {
+  const s = { dragging: true, last: null, origin: { groupId: "g1", from: "C:\\x" } };
+  expect(classifyDrop(["C:\\y"], { dragging: false, last: null }, 0, "g1")).toEqual({ kind: "external" });
+  expect(classifyDrop(["C:\\x\\a.txt"], s, 0, "g1")).toEqual({ kind: "ignore" });
+  expect(classifyDrop(["C:\\x\\a.txt"], s, 0, "g2")).toEqual({ kind: "fromGroup", from: "C:\\x" });
+  expect(classifyDrop(["C:\\x\\a.txt"], { dragging: true, last: null }, 0, "g2")).toEqual({ kind: "ignore" });
+});
+
+test("rows dragged onto another group open the copy dialog from the origin folder", async () => {
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["t1"], activeTabId: "t1" }, { id: "g2", tabIds: ["t2"], activeTabId: "t2" }],
+    tabs: { t1: { id: "t1", path: "C:\\x" }, t2: { id: "t2", path: "D:\\y" } },
+    activeGroupId: "g1",
+    activationOrder: ["g1", "g2"],
+  });
+  let finish!: () => void;
+  vi.mocked(api.startDrag).mockReturnValue(new Promise<void>((r) => (finish = r)));
+  vi.mocked(api.normalizePaths).mockImplementation(async (p) => p);
+  mark("a.txt", "b.txt");
+  const drag = dragOut("t1", "a.txt");
+  await dropOnGroup("g1", ["C:\\x\\a.txt", "C:\\x\\b.txt"]); // sullo stesso gruppo: niente
+  expect(useUi.getState().dialog).toBeNull();
+  await dropOnGroup("g2", ["C:\\x\\a.txt", "C:\\x\\b.txt"]);
+  expect(useUi.getState().dialog).toEqual({
+    kind: "copyMove", move: false, sources: ["C:\\x\\a.txt", "C:\\x\\b.txt"], from: "C:\\x", dest: "D:\\y",
+    requireChange: false, targets: [], policy: "ask",
+  });
+  finish();
+  await drag;
 });
 
 test("a failed start_drag shows a notice and releases the self-drag flag", async () => {

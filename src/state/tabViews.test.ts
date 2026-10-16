@@ -40,6 +40,22 @@ test("no ancestor shows drives", async () => {
   expect(useLayout.getState().tabs["t1"].path).toBe("drives:");
 });
 
+test("a first load failing with another error shows the drives instead of an empty tab", async () => {
+  vi.mocked(api.listDrives).mockResolvedValue([{ root: "C:\\", label: "", kind: "fixed", total: 1, free: 1, ready: true }]);
+  listDir.mockRejectedValueOnce({ code: "ACCESS_DENIED", path: "C:\\x", detail: null });
+  await useTabViews.getState().load("t1", "C:\\x");
+  expect(useLayout.getState().tabs["t1"].path).toBe("drives:");
+  expect(useTabViews.getState().views["t1"].rows.map((r) => r.name)).toEqual(["C:\\"]);
+  expect(useTabViews.getState().notice).toEqual({ tabId: "t1", code: "ACCESS_DENIED", path: "C:\\x" });
+  // Una scheda che ha già una cartella ci resta: solo il notice.
+  listDir.mockResolvedValueOnce([f("a")]);
+  await useTabViews.getState().load("t1", "D:\\a");
+  listDir.mockRejectedValueOnce({ code: "ACCESS_DENIED", path: "D:\\b", detail: null });
+  await useTabViews.getState().load("t1", "D:\\b");
+  expect(useLayout.getState().tabs["t1"].path).toBe("D:\\a");
+  expect(useTabViews.getState().notice?.path).toBe("D:\\b");
+});
+
 test("reload keeps cursor on the same name", async () => {
   listDir.mockResolvedValueOnce([f("a"), f("b"), f("c")]);
   await useTabViews.getState().load("t1", "D:\\a");

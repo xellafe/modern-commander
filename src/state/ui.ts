@@ -31,7 +31,9 @@ export type DialogRequest =
     }
   | { kind: "mkdir"; tabId: string; path: string }
   | { kind: "delete"; permanent: boolean; sources: string[] }
-  | { kind: "mask"; tabId: string; select: boolean };
+  | { kind: "mask"; tabId: string; select: boolean }
+  /** Chiusura della finestra con `count` operazioni non finite. */
+  | { kind: "exit"; count: number };
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 

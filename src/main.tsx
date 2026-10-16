@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
-import { registerNavigationCommands } from "./commands/navigation";
+import { initCloseGuard, registerNavigationCommands } from "./commands/navigation";
 import { registerSettingsCommands } from "./commands/settings";
 import { registerShellCommands, suppressKeyboardContextMenu } from "./commands/shell";
 import "./styles/tokens.css";
@@ -29,12 +29,17 @@ registerSettingsCommands();
 window.addEventListener("contextmenu", suppressKeyboardContextMenu);
 // Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
 initJobs().catch(console.error);
+// Chiusura con operazioni non finite: conferma invece di ucciderle.
+initCloseGuard().catch(console.error);
 
 async function bootstrap() {
-  // Se la lettura fallisce l'app parte comunque con i valori di default.
-  await useSettings.getState().load().catch(() => {});
-  await useHotlist.getState().load(); // prima del render: nessuna modifica può sovrascrivere un file non ancora letto
-  await useKeybindings.getState().load().catch(console.error); // se fallisce restano i tasti di fabbrica
+  // Letture indipendenti in parallelo (avvio < 1 s), tutte prima del render: nessuna modifica può
+  // sovrascrivere un file non ancora letto.
+  await Promise.all([
+    useSettings.getState().load().catch(() => {}), // se fallisce l'app parte con i valori di default
+    useHotlist.getState().load(),
+    useKeybindings.getState().load().catch(console.error), // se fallisce restano i tasti di fabbrica
+  ]);
   await initI18n(useSettings.getState().language);
   applyTheme();
   media.addEventListener("change", applyTheme);

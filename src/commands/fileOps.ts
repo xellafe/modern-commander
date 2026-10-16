@@ -9,7 +9,7 @@ import { parentPath, selectByMask } from "../state/tabView";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { useUi, type CopyTarget, type DialogRequest } from "../state/ui";
 import { registerCommand, type Command } from "./registry";
-import { ignoreDrop } from "./shell";
+import { dropAction } from "./shell";
 
 /** Destinazione proposta per F5/F6 e, con 3 o più gruppi, gli altri gruppi tra cui scegliere (1…9). */
 export function copyTargets(l: LayoutState): { dest: string; requireChange: boolean; targets: CopyTarget[] } {
@@ -115,17 +115,22 @@ export function startCopyMove(
   });
 }
 
-/** Drop da Explorer su un gruppo: finestra di copia verso la cartella della sua scheda attiva. */
+/**
+ * Drop su un gruppo, da Explorer o di righe trascinate da un altro gruppo: finestra di copia verso la
+ * cartella della sua scheda attiva. Le righe rilasciate sul loro stesso gruppo si ignorano.
+ */
 export async function dropOnGroup(groupId: string, paths: string[]) {
   const l = useLayout.getState();
   const g = l.groups.find((x) => x.id === groupId);
   // Con una finestra o un prompt aperti il drop si ignora: non si perde ciò che l'utente sta scrivendo.
-  // Anche durante un nostro drag in uscita: le righe rilasciate sull'app stessa non sono un drop da Explorer.
-  if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length || ignoreDrop(paths)) return;
+  if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length) return;
+  const action = dropAction(paths, groupId);
+  if (action.kind === "ignore") return;
   const sources = await normalizePaths(paths);
   const dest = l.tabs[g.activeTabId].path;
   ui().openDialog({
-    kind: "copyMove", move: false, sources, from: parentPath(sources[0]) ?? sources[0],
+    kind: "copyMove", move: false, sources,
+    from: action.kind === "fromGroup" ? action.from : (parentPath(sources[0]) ?? sources[0]),
     dest: dest === DRIVES ? "" : dest, requireChange: false, targets: [], policy: "ask",
   });
 }
