@@ -118,3 +118,18 @@
 .mc-menu-item.sel { background: var(--mc-selection); }
 .mc-menu-item.current > span:first-child { color: var(--mc-accent); }
 .mc-menu-item .detail { color: var(--mc-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Rinomina in place (Shift+F6) */
+.mc-rename { position: relative; display: block; width: 100%; }
+.mc-rename input {
+  box-sizing: border-box; width: 100%; height: calc(var(--mc-row-height) - 4px); padding: 0 4px;
+  font: inherit; color: var(--mc-text); background: var(--mc-bg);
+  border: 1px solid var(--mc-accent); border-radius: var(--mc-radius); outline: 0;
+}
+.mc-rename input[aria-invalid="true"] { border-color: var(--mc-danger); }
+.mc-rename-error {
+  position: absolute; left: 0; top: 100%; z-index: 3; padding: 2px 6px; white-space: nowrap;
+  background: var(--mc-panel); color: var(--mc-danger); border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
+}
+.mc-row.renaming { z-index: 2; }
+.mc-row.renaming > .c-name { overflow: visible; }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { buildKeymap, loadKeymap } from "./commands/keymap";
 import { DEFAULT_KEYMAP } from "./commands/tcKeymap";
 import { useKeyboard } from "./commands/useKeyboard";
+import { DialogHost } from "./components/dialogs/Dialog";
 import { HotlistMenu } from "./components/dialogs/HotlistMenu";
 import { GroupsArea } from "./components/groups/GroupsArea";
 import "./components/shell/shell.css";
@@ -24,17 +25,20 @@ export default function App() {
   useKeyboard(keymap);
 
   return (
-    <div className="mc-shell">
-      <TitleBar />
-      <div className="mc-main">
-        <ActivityBar />
-        {sidebarVisible && <Sidebar />}
-        <GroupsArea keymap={keymap} />
+    <>
+      <div className="mc-shell">
+        <TitleBar />
+        <div className="mc-main">
+          <ActivityBar />
+          {sidebarVisible && <Sidebar />}
+          <GroupsArea keymap={keymap} />
+        </div>
+        {bottomPanelVisible && <BottomPanel />}
+        <FKeyBar />
+        <StatusBar />
+        <HotlistMenu />
       </div>
-      {bottomPanelVisible && <BottomPanel />}
-      <FKeyBar />
-      <StatusBar />
-      <HotlistMenu />
-    </div>
+      <DialogHost />
+    </>
   );
 }

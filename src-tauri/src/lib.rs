@@ -30,6 +30,7 @@ pub fn run() {
             fs::list_dir,
             fs::nearest_existing_ancestor,
             fs::list_drives,
+            fs::normalize_paths,
             fs::watch::watch_dir,
             fs::watch::unwatch_dir,
             shell::context_menu::show_context_menu,

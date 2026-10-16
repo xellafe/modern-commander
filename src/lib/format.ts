@@ -31,21 +31,29 @@ add("exec", "exe msi bat cmd ps1 com lnk dll");
 export const fileKind = (name: string, isDir: boolean): FileKind =>
   isDir ? "folder" : (KINDS[splitName(name, false)[1].toLowerCase()] ?? "file");
 
-const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte", "terabyte"] as const;
+// Simboli uguali in tutte le lingue (Intl darebbe "byte" e "kB"); il numero segue la lingua.
+const UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
 const sizeFormats = new Map<string, Intl.NumberFormat[]>();
 
-/** Dimensione leggibile, localizzata con Intl (unità incluse). */
-export function formatSize(bytes: number, locale: string): string {
-  let fmts = sizeFormats.get(locale);
+/** Dimensione leggibile in base 1024: `1,5 KB` in italiano, `1.5 KB` in inglese. */
+export function formatSize(bytes: number, lang: string): string {
+  let fmts = sizeFormats.get(lang);
   if (!fmts) {
-    fmts = UNITS.map((unit, i) =>
-      new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "short", maximumFractionDigits: i ? 1 : 0 }));
-    sizeFormats.set(locale, fmts);
+    fmts = UNITS.map((_, i) => new Intl.NumberFormat(lang, { maximumFractionDigits: i ? 1 : 0 }));
+    sizeFormats.set(lang, fmts);
   }
   let i = 0;
   let n = bytes;
   while (n >= 1024 && i < UNITS.length - 1) { n /= 1024; i++; }
-  return fmts[i].format(n);
+  return `${fmts[i].format(n)} ${UNITS[i]}`;
+}
+
+/** Tempo rimanente: `m:ss`, oppure `h:mm:ss` da un'ora in su. */
+export function formatEta(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const [h, m] = [Math.floor(s / 3600), Math.floor((s % 3600) / 60)];
+  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
 const dateFormats = new Map<string, Intl.DateTimeFormat>();

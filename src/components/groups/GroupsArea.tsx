@@ -1,4 +1,6 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Fragment, useEffect, useRef, useState, type PointerEvent } from "react";
+import { dropOnGroup } from "../../commands/fileOps";
 import { chordFromEvent, quickSearchChar } from "../../commands/keys";
 import { focusInTextOrDialog } from "../../commands/useKeyboard";
 import { onFsChanged } from "../../ipc/api";
@@ -56,6 +58,18 @@ export function GroupsArea({ keymap }: { keymap: Map<string, string> }) {
 
   useEffect(() => {
     const unlisten = onFsChanged((tabId) => void useTabViews.getState().reload(tabId));
+    return () => void unlisten.then((off) => off());
+  }, []);
+
+  // Drop da Explorer: finestra di copia verso il gruppo sotto il puntatore (posizione in pixel fisici).
+  useEffect(() => {
+    const unlisten = getCurrentWebview().onDragDropEvent(({ payload: p }) => {
+      if (p.type !== "drop") return;
+      const dpr = window.devicePixelRatio || 1;
+      const el = document.elementFromPoint(p.position.x / dpr, p.position.y / dpr);
+      const groupId = el?.closest<HTMLElement>("[data-group-id]")?.dataset.groupId;
+      if (groupId) dropOnGroup(groupId, p.paths).catch(console.error);
+    });
     return () => void unlisten.then((off) => off());
   }, []);
 

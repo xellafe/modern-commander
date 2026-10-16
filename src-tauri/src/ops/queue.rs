@@ -458,7 +458,12 @@ impl Handle {
             st = self.q.wait(st);
         };
         drop(st);
-        self.checkpoint().then_some(reply)
+        // Annulla non aspetta la ripresa di un job in pausa.
+        let cancel = matches!(
+            reply,
+            PromptReply::Conflict { decision: Decision::Cancel, .. } | PromptReply::Error { action: ErrorAction::Cancel, .. }
+        );
+        (cancel || self.checkpoint()).then_some(reply)
     }
 
     fn finish(&self, end: JobState) {
@@ -945,6 +950,68 @@ mod tests {
         assert_eq!(finish(&rx, id).state, Done);
         assert_eq!(fake.copies.load(Ordering::SeqCst), 2);
         assert!(exists(&dest.join("f.txt")));
+    }
+
+    #[test]
+    fn copy_creates_missing_destination_with_intermediates() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("f.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let dest = d.path().join("X").join("Y");
+        let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(&dest), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(std::fs::read(dest.join("f.txt")).unwrap(), b"x");
+
+        // Una destinazione che non si può creare passa dal prompt d'errore; "Salta" chiude il job.
+        let bad = f.join("sub");
+        let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(&bad), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        assert!(matches!(p, Prompt::Error { .. }), "{p:?}");
+        reply_error(&q, &p, ErrorAction::Skip, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len(), v.files_total), (Done, 1, 0));
+    }
+
+    #[test]
+    fn cancel_reply_does_not_wait_for_resume() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("f.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let (q, rx) = queue(Fake { fail_copy_at: Some(1), ..Default::default() });
+        // Conflitto (stesso file) e poi errore di copia: Annulla da un job in pausa termina subito.
+        let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(d.path()), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        q.pause(id).unwrap();
+        reply_conflict(&q, &p, Decision::Cancel, false);
+        assert_eq!(finish(&rx, id).state, Cancelled);
+
+        let id = q.enqueue(spec(JobKind::Copy, vec![f], Some(&d.path().join("D")), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        assert!(matches!(p, Prompt::Error { .. }), "{p:?}");
+        q.pause(id).unwrap();
+        reply_error(&q, &p, ErrorAction::Cancel, false);
+        assert_eq!(finish(&rx, id).state, Cancelled);
+    }
+
+    #[test]
+    fn conflict_policy_for_all_survives_same_file_error() {
+        let (_d, srcs, dst) = policy_case();
+        // Prima un file su se stesso (dst/a.txt), poi src/a.txt più nuovo contro dst/a.txt.
+        let srcs = vec![dst.join("b.txt"), srcs[0].clone()];
+        let (q, rx) = queue(LocalExecutor);
+        let id = q.enqueue(spec(JobKind::Copy, srcs, Some(&dst), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let Prompt::Conflict { same_file, .. } = &p else { panic!("{p:?}") };
+        assert!(same_file);
+        q.reply(p.prompt_id(), PromptReply::ConflictPolicy { policy: ConflictPolicy::OverwriteIfNewer, apply_to_all: true }).unwrap();
+        let p = next_prompt(&rx);
+        let Prompt::Error { error, .. } = &p else { panic!("{p:?}") };
+        assert_eq!(error.code, ErrorCode::SameFile);
+        reply_error(&q, &p, ErrorAction::Skip, false);
+        // La politica "per tutti" vale per il conflitto successivo: nessun nuovo prompt.
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"nuovo e grande");
     }
 
     #[test]

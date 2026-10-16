@@ -39,6 +39,32 @@ struct Attempt {
 }
 
 pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
+    let mut r = Runner {
+        h,
+        exec,
+        spec,
+        items: Vec::new(),
+        bytes: 0,
+        policy: spec.policy.clone(),
+        conflict_all: None,
+        skip_all: Vec::new(),
+        permanent_all: false,
+        skipped: Vec::new(),
+        renamed: Vec::new(),
+        src_dirs: Vec::new(),
+    };
+    // Come TC, una cartella di destinazione mancante si crea (con le intermedie) all'avvio.
+    if let (JobKind::Copy | JobKind::Move, Some(dest)) = (&spec.kind, &spec.dest)
+        && !exists(dest)
+    {
+        let dest = normalize_lexical(dest);
+        if r.attempt(&dest, |r, _| r.mkdir_all(&dest)).is_err() {
+            return JobState::Cancelled;
+        }
+        if !r.skipped.is_empty() {
+            return JobState::Done; // saltata: l'errore resta nel riepilogo
+        }
+    }
     let items = match expand(spec) {
         Ok(items) => items,
         Err(e) => {
@@ -50,20 +76,7 @@ pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
         v.files_total = items.len() as u64;
         v.bytes_total = items.iter().map(|i| i.size).sum();
     });
-    let mut r = Runner {
-        h,
-        exec,
-        spec,
-        items,
-        bytes: 0,
-        policy: spec.policy.clone(),
-        conflict_all: None,
-        skip_all: Vec::new(),
-        permanent_all: false,
-        skipped: Vec::new(),
-        renamed: Vec::new(),
-        src_dirs: Vec::new(),
-    };
+    r.items = items;
     match r.run() {
         Ok(()) => JobState::Done,
         Err(Stop) => JobState::Cancelled,
@@ -370,12 +383,12 @@ impl Runner<'_> {
                 Ok(decision)
             }
             Some(PromptReply::ConflictPolicy { policy, apply_to_all }) => {
-                // `reply` rifiuta `Ask`: con le altre politiche `resolve` decide sempre.
-                let d = resolve(&policy, src, dst, &src_meta, &dst_meta)?.unwrap_or(Decision::Skip);
+                // Prima di `resolve`: anche se questo conflitto dà `SAME_FILE`, vale per i successivi.
                 if apply_to_all {
-                    self.policy = policy;
+                    self.policy = policy.clone();
                 }
-                Ok(d)
+                // `reply` rifiuta `Ask`: con le altre politiche `resolve` decide sempre.
+                Ok(resolve(&policy, src, dst, &src_meta, &dst_meta)?.unwrap_or(Decision::Skip))
             }
             _ => Err(Fail::Stop),
         }

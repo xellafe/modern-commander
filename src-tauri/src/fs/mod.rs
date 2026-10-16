@@ -24,7 +24,13 @@ pub async fn nearest_existing_ancestor(path: String) -> Result<Option<PathBuf>, 
     blocking(move || listing::nearest_existing_ancestor(Path::new(&path))).await
 }
 
+/// Percorsi in forma lunga (i nomi 8.3 del drop da Explorer); quelli non risolvibili restano invariati.
 #[tauri::command]
-pub async fn list_drives() -> Result<Vec<drives::Drive>, AppError> {
+pub async fn normalize_paths(paths: Vec<String>) -> Result<Vec<PathBuf>, AppError> {
+    blocking(move || paths.iter().map(|p| listing::long_path(Path::new(p))).collect()).await
+}
+
+#[tauri::command]
+pub async fn list_drives()-> Result<Vec<drives::Drive>, AppError> {
     blocking(drives::list_drives).await
 }

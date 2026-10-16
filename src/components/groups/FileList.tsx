@@ -3,9 +3,11 @@ import type { TFunction } from "i18next";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
+import { nameError, renameInPlace } from "../../commands/fileOps";
 import { setPageSize, sortBy } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
 import { formatAttrs, formatDate, formatSize, splitName } from "../../lib/format";
+import { useLayout } from "../../state/layout";
 import { markRange, toggleMark, type Row, type SortKey, type TabView } from "../../state/tabView";
 import { useTabViews } from "../../state/tabViews";
 import { FileIcon } from "./FileIcon";
@@ -56,6 +58,47 @@ interface ListProps {
   rowHeight: number;
 }
 
+// Shift+F6: Invio rinomina, Esc (o un click altrove) annulla; è selezionato il nome senza estensione.
+function RenameInput({ tabId, row }: { tabId: string; row: Row }) {
+  const { t } = useTranslation();
+  const ref = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState(row.name);
+  const error = nameError(value.trim());
+  useEffect(() => {
+    ref.current!.focus();
+    ref.current!.setSelectionRange(0, splitName(row.name, row.isDir)[0].length);
+  }, []);
+  const cancel = () => useTabViews.getState().setOverlay(null);
+  return (
+    <span className="mc-rename">
+      <input
+        ref={ref}
+        value={value}
+        spellCheck={false}
+        aria-label={t("ops.renameLabel")}
+        aria-invalid={!!error}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={cancel}
+        onMouseDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") cancel();
+          else if (e.key === "Enter" && !error) {
+            const base = useLayout.getState().tabs[tabId].path;
+            renameInPlace(tabId, base, row.name, value.trim()).catch(console.error);
+          } else return;
+          e.preventDefault();
+        }}
+      />
+      {error && <span className="mc-rename-error" role="alert">{t(error)}</span>}
+    </span>
+  );
+}
+
+const useRenaming = (tabId: string) =>
+  useTabViews((s) => (s.overlay?.kind === "rename" && s.overlay.tabId === tabId ? s.overlay.name : null));
+
 export function FileList({ tabId, active }: { tabId: string; active: boolean }) {
   const view = useTabViews((s) => s.views[tabId]);
   const rowHeight = useSyncExternalStore(subscribeTheme, readRowHeight);
@@ -75,6 +118,7 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
   const lng = i18n.language;
   const ref = useRef<HTMLDivElement>(null);
   const height = useHeight(ref);
+  const renaming = useRenaming(tabId);
   const virt = useVirtualizer({
     count: view.rows.length,
     getScrollElement: () => ref.current,
@@ -122,6 +166,7 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
                 cls={rowClass(view, i, row)}
                 dirSize={view.dirSizes[row.name]}
                 lng={lng}
+                renaming={renaming === row.name}
               />
             );
           })}
@@ -140,21 +185,22 @@ interface RowProps {
   cls: string;
   dirSize: number | undefined;
   lng: string;
+  renaming: boolean;
 }
 
 // memo: spostando il cursore si ridisegnano solo le due righe che cambiano classe.
-const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSize, lng }: RowProps) {
+const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSize, lng, renaming }: RowProps) {
   const { t } = useTranslation();  const [base, ext] = row.isParent || row.drive ? [row.name, ""] : splitName(row.name, row.isDir);
   const d = row.drive;
   return (
     <div
-      className={`${cls} mc-cols`}
+      className={`${cls} mc-cols${renaming ? " renaming" : ""}`}
       style={{ transform: `translateY(${start}px)`, height }}
       onMouseDown={(e) => clickRow(tabId, i, e)}
       onDoubleClick={openRow}
     >
       <span className="c-icon"><FileIcon row={row} /></span>
-      <span className="c-name">{base}</span>
+      <span className="c-name">{renaming ? <RenameInput tabId={tabId} row={row} /> : base}</span>
       {d ? (
         <span className="c-drive">
           {[d.label, d.ready && t("groups.driveSpace", { free: formatSize(d.free, lng), total: formatSize(d.total, lng) })]
@@ -176,6 +222,7 @@ const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSi
 function BriefList({ tabId, view, active, rowHeight }: ListProps) {
   const ref = useRef<HTMLDivElement>(null);
   const height = useHeight(ref);
+  const renaming = useRenaming(tabId);
   const perCol = Math.max(1, Math.floor(height / rowHeight));
   const virt = useVirtualizer({
     horizontal: true,
@@ -208,7 +255,7 @@ function BriefList({ tabId, view, active, rowHeight }: ListProps) {
                     onDoubleClick={openRow}
                   >
                     <span className="c-icon"><FileIcon row={row} /></span>
-                    <span className="c-name">{row.name}</span>
+                    <span className="c-name">{renaming === row.name ? <RenameInput tabId={tabId} row={row} /> : row.name}</span>
                   </div>
                 );
               })}

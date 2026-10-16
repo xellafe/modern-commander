@@ -117,3 +117,6 @@ body {
   display: flex; align-items: center; gap: 14px; padding: 0 10px; font-size: 11px; color: var(--mc-muted);
   background: var(--mc-panel); border-top: 1px solid var(--mc-border);
 }
+.mc-status-job { display: flex; align-items: center; gap: 6px; }
+.mc-status-prog { width: 70px; height: 3px; background: var(--mc-border); border-radius: var(--mc-radius); overflow: hidden; }
+.mc-status-prog i { display: block; height: 100%; background: var(--mc-accent); }

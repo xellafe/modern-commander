@@ -9,6 +9,9 @@ export const nearestExistingAncestor = (path: string) =>
 
 export const listDrives = () => invoke<Drive[]>("list_drives");
 
+/** Forma lunga dei percorsi (i nomi 8.3 del drop da Explorer); quelli non risolvibili restano uguali. */
+export const normalizePaths = (paths: string[]) => invoke<string[]>("normalize_paths", { paths });
+
 export const watchDir = (tabId: string, path: string) =>
   invoke<void>("watch_dir", { tabId, path });
 

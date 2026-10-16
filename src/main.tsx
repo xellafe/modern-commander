@@ -1,11 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
 import { registerNavigationCommands } from "./commands/navigation";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
 import { useHotlist } from "./state/hotlist";
+import { initJobs } from "./state/jobs";
 import { resolveTheme, useSettings } from "./state/settings";
 
 const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -17,6 +19,9 @@ const applyTheme = () => {
 applyTheme();
 registerNavigationCommands();
 registerHotlistCommands();
+registerFileOpCommands();
+// Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
+initJobs().catch(console.error);
 
 async function bootstrap() {
   // Se la lettura fallisce l'app parte comunque con i valori di default.

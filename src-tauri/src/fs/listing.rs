@@ -2,14 +2,14 @@
 //! blocco di voci, con nome, attributi, dimensione e data già inclusi (niente `metadata` per file).
 
 use crate::error::{AppError, ErrorCode};
-use crate::paths::to_extended;
+use crate::paths::{normalize_lexical, to_extended};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FIND_FIRST_EX_LARGE_FETCH,
     FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW,
-    WIN32_FIND_DATAW,
+    GetLongPathNameW, WIN32_FIND_DATAW,
 };
 use windows::core::HSTRING;
 
@@ -111,6 +111,25 @@ pub fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
         .find(|a| to_extended(a).is_dir())
         .map(Path::to_path_buf)
 }
+
+/// Forma lunga di un percorso che può contenere nomi 8.3 (`PROVA-~1.TXT`), come quelli del drop
+/// da Explorer. Se il percorso non esiste o la chiamata fallisce resta invariato.
+pub fn long_path(path: &Path) -> PathBuf {
+    let short = HSTRING::from(to_extended(path).as_os_str());
+    let mut buf = vec![0u16; 1024];
+    loop {
+        let n = unsafe { GetLongPathNameW(&short, Some(&mut buf)) } as usize;
+        if n == 0 {
+            return path.to_path_buf();
+        }
+        if n < buf.len() {
+            // `normalize_lexical` toglie il prefisso esteso.
+            return normalize_lexical(Path::new(&String::from_utf16_lossy(&buf[..n])));
+        }
+        buf.resize(n, 0); // buffer piccolo: `n` è la lunghezza necessaria
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +180,25 @@ mod tests {
         let f = d.path().join("f.txt");
         std::fs::write(&f, b"x").unwrap();
         assert_eq!(nearest_existing_ancestor(&f).unwrap(), d.path());
+    }
+
+    #[test]
+    fn long_path_expands_short_names() {
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("un nome decisamente lungo.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let mut buf = vec![0u16; 1024];
+        let n = unsafe { GetShortPathNameW(&HSTRING::from(f.as_os_str()), Some(&mut buf)) } as usize;
+        assert!(n > 0 && n < buf.len());
+        let short = PathBuf::from(String::from_utf16_lossy(&buf[..n]));
+        // Con i nomi 8.3 disattivati sul volume `short` coincide con `f`: il test vale comunque.
+        let long = long_path(&short);
+        assert_eq!(long.file_name().unwrap(), "un nome decisamente lungo.txt");
+        assert_eq!(long, long_path(&f));
+        assert!(!long.to_string_lossy().starts_with(r"\\?\"));
+        let gone = d.path().join("NONESI~1.TXT");
+        assert_eq!(long_path(&gone), gone);
     }
 
     #[test]

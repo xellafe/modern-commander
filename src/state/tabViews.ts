@@ -25,7 +25,9 @@ export interface MenuItem {
 export type Overlay =
   | { kind: "quickSearch"; tabId: string; prefix: string }
   | { kind: "filter"; tabId: string }
-  | { kind: "menu"; tabId: string; title: string; items: MenuItem[] };
+  | { kind: "menu"; tabId: string; title: string; items: MenuItem[] }
+  /** Modifica in place del nome (Shift+F6) sulla riga `name`. */
+  | { kind: "rename"; tabId: string; name: string };
 
 export interface LoadOpts {
   /** Nome su cui mettere il cursore (es. la cartella da cui si risale). */

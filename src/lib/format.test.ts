@@ -1,5 +1,17 @@
 import { expect, test } from "vitest";
-import { fileKind, formatAttrs, splitName } from "./format";
+import { fileKind, formatAttrs, formatEta, formatSize, splitName } from "./format";
+
+test("formatSize uses B/KB/MB/GB with the language's decimal separator", () => {
+  expect(formatSize(0, "it")).toBe("0 B");
+  expect(formatSize(1536, "it")).toBe("1,5 KB");
+  expect(formatSize(1536, "en")).toBe("1.5 KB");
+  expect(formatSize(2.4 * 1024 ** 3, "it")).toBe("2,4 GB");
+});
+
+test("formatEta is m:ss under an hour, h:mm:ss above", () => {
+  expect(formatEta(65)).toBe("1:05");
+  expect(formatEta(3725)).toBe("1:02:05");
+});
 
 test("formatAttrs uses TC letters r a h s", () => {
   expect(formatAttrs(0)).toBe("----");
