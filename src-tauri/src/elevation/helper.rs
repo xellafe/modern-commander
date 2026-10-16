@@ -1,6 +1,6 @@
 //! Processo helper (`--elevated-helper <pipe> <token>`): si connette alla pipe dell'app, manda
 //! `Hello` ed esegue le richieste una alla volta. Esce quando la pipe si chiude (app terminata),
-//! dopo un messaggio non valido o dopo 60 s senza richieste (`MC_HELPER_IDLE_MS` nei test).
+//! dopo un messaggio non valido o dopo 60 s senza richieste.
 
 use super::protocol::{Request, Response, read_msg, validate, write_msg};
 use super::{PIPE_PREFIX, Pipe, owned, raw};
@@ -15,19 +15,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
-use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
 use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows::core::{HSTRING, PWSTR};
 
-const DEFAULT_IDLE_MS: u64 = 60_000;
+const IDLE_MS: u64 = 60_000;
 
+/// 60 s; solo con la feature `test-hooks` `MC_HELPER_IDLE_MS` lo cambia.
 fn idle_timeout() -> Duration {
-    let ms = std::env::var("MC_HELPER_IDLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_IDLE_MS);
-    Duration::from_millis(ms)
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("MC_HELPER_IDLE_MS").ok().and_then(|v| v.parse().ok()) {
+        return Duration::from_millis(ms);
+    }
+    Duration::from_millis(IDLE_MS)
 }
 
 /// `SECURITY_IDENTIFICATION`: il server può solo identificare l'helper, non agire con il suo token
@@ -55,32 +61,37 @@ fn valid_args(pipe_name: &str, token: &str) -> bool {
     uuid_ok && token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Percorso dell'eseguibile del processo server della pipe.
+/// Eseguibile di un processo secondo `QueryFullProcessImageNameW`, che risolve unità `subst`,
+/// giunzioni e collegamenti: le due immagini da confrontare si ricavano entrambe così.
+fn image_of(process: HANDLE) -> Option<PathBuf> {
+    let mut buf = vec![0u16; 32768];
+    let mut len = buf.len() as u32;
+    unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) }.ok()?;
+    Some(PathBuf::from(OsString::from_wide(&buf[..len as usize])))
+}
+
 fn server_image(pipe: &Pipe) -> Option<PathBuf> {
     let mut pid = 0;
     unsafe { GetNamedPipeServerProcessId(pipe.handle(), &mut pid) }.ok()?;
     let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let h = unsafe { owned(h) };
-    let mut buf = vec![0u16; 32768];
-    let mut len = buf.len() as u32;
-    unsafe { QueryFullProcessImageNameW(raw(&h), PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) }.ok()?;
-    Some(PathBuf::from(OsString::from_wide(&buf[..len as usize])))
+    image_of(raw(&unsafe { owned(h) }))
 }
 
-/// Il server deve eseguire questo stesso eseguibile. Solo nelle build di debug `MC_TEST_SERVER_EXE`
-/// indica un altro eseguibile atteso: serve ai test d'integrazione, dove il server è l'eseguibile
-/// dei test. Nelle build di release questo ramo non esiste e vale sempre `current_exe()`.
-fn expected_server_image() -> std::io::Result<PathBuf> {
-    #[cfg(debug_assertions)]
+/// Il server deve eseguire lo stesso eseguibile dell'helper. Solo con la feature `test-hooks`
+/// `MC_TEST_SERVER_EXE` indica un altro eseguibile atteso (nei test d'integrazione il server è
+/// l'eseguibile dei test); senza la feature il ramo non viene compilato.
+fn expected_server_image() -> Option<PathBuf> {
+    #[cfg(feature = "test-hooks")]
     if let Some(p) = std::env::var_os("MC_TEST_SERVER_EXE") {
-        return Ok(p.into());
+        return Some(p.into());
     }
-    std::env::current_exe()
+    image_of(unsafe { GetCurrentProcess() })
 }
 
+/// Confronto senza distinguere maiuscole e minuscole.
 fn server_is_trusted(pipe: &Pipe) -> bool {
     match (server_image(pipe), expected_server_image()) {
-        (Some(server), Ok(expected)) => same_path(&normalize_lexical(&server), &normalize_lexical(&expected)),
+        (Some(server), Some(expected)) => same_path(&normalize_lexical(&server), &normalize_lexical(&expected)),
         _ => false,
     }
 }

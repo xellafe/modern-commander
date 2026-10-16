@@ -39,3 +39,13 @@ strip = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[features]
+# Agganci per i test d'integrazione dell'helper elevato (MC_TEST_SERVER_EXE, MC_HELPER_IDLE_MS,
+# --test-pipe-server): mai nelle build distribuite.
+test-hooks = []
+
+# `cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks`
+[[test]]
+name = "elevation_pipe"
+required-features = ["test-hooks"]

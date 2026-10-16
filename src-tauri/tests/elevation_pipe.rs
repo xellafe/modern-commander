@@ -3,9 +3,13 @@
 //! **senza** elevazione: si prova il protocollo e la sicurezza della pipe, non il prompt UAC
 //! (verifica manuale).
 //!
-//! Qui il server della pipe è l'eseguibile dei test, non `modern-commander.exe`: l'helper (build di
-//! debug) lo accetta solo perché `MC_TEST_SERVER_EXE` lo indica. In release il server deve essere
-//! sempre lo stesso eseguibile dell'helper.
+//! Si eseguono con la feature `test-hooks` (il target ha `required-features`):
+//! `cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks`.
+//!
+//! Qui il server della pipe di solito è l'eseguibile dei test, non `modern-commander.exe`: l'helper
+//! lo accetta solo perché `MC_TEST_SERVER_EXE` (attiva solo con `test-hooks`) lo indica. Il
+//! confronto di produzione (server = stesso eseguibile dell'helper) si prova con la modalità
+//! `--test-pipe-server` dell'app, anch'essa solo con `test-hooks`.
 
 use modern_commander_lib::elevation::{ElevatedExecutor, shared_with};
 use modern_commander_lib::error::ErrorCode;
@@ -221,6 +225,29 @@ fn shared_helper_is_reused_while_busy() {
     assert_eq!(fs::read(&dst).unwrap().len(), 8 * 1024 * 1024);
     drop((x, y, slot));
     assert!(wait_exit(child.as_mut().unwrap(), T).is_some());
+}
+
+/// Confronto di produzione delle immagini: `modern-commander.exe --test-pipe-server` fa da server
+/// e lancia sé stesso come helper, senza `MC_TEST_SERVER_EXE`. Anche avviato tramite una giunzione
+/// (forma che `QueryFullProcessImageNameW` risolve) l'helper riconosce il server.
+#[test]
+fn production_image_check_accepts_the_same_executable() {
+    let d = tempfile::tempdir().unwrap();
+    let run = |exe: &Path, dir: &Path| {
+        let mut c = Command::new(exe).arg("--test-pipe-server").arg(dir).env_remove("MC_TEST_SERVER_EXE").spawn().unwrap();
+        wait_exit(&mut c, T).and_then(|s| s.code())
+    };
+    let direct = d.path().join("diretto");
+    assert_eq!(run(Path::new(BIN), &direct), Some(0));
+    assert!(direct.is_dir());
+
+    let bin = Path::new(BIN);
+    let junction = d.path().join("giunzione");
+    let ok = Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&junction).arg(bin.parent().unwrap()).output().unwrap();
+    assert!(ok.status.success());
+    let via = d.path().join("via_giunzione");
+    assert_eq!(run(&junction.join(bin.file_name().unwrap()), &via), Some(0));
+    assert!(via.is_dir());
 }
 
 #[test]

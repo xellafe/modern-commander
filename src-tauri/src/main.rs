@@ -11,5 +11,11 @@ fn main() {
         };
         std::process::exit(code);
     }
+    #[cfg(feature = "test-hooks")]
+    if let [_, mode, dir] = &args[..]
+        && mode == "--test-pipe-server"
+    {
+        std::process::exit(modern_commander_lib::elevation::client::test_pipe_server(dir));
+    }
     modern_commander_lib::run()
 }

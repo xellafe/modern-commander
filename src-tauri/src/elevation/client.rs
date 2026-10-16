@@ -298,6 +298,32 @@ impl Executor for ElevatedExecutor {
     }
 }
 
+/// Solo con `test-hooks`: modalità `--test-pipe-server <cartella>` dell'eseguibile. Fa da server
+/// della pipe, lancia sé stesso come helper (senza elevazione e senza `MC_TEST_SERVER_EXE`, quindi
+/// con il confronto delle immagini di produzione) e gli fa creare `<cartella>`.
+/// Codice d'uscita: 0 riuscito, 1 helper non autenticato, 2 `mkdir` fallito.
+#[doc(hidden)]
+#[cfg(feature = "test-hooks")]
+pub fn test_pipe_server(dir: &str) -> i32 {
+    let Ok(exe) = std::env::current_exe() else { return 1 };
+    let mut _child = None; // tiene aperto l'handle del processo: il PID non si ricicla
+    let x = ElevatedExecutor::spawn_with(|pipe, token| {
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(["--elevated-helper", pipe, token]).env_remove("MC_TEST_SERVER_EXE");
+        let c = cmd.spawn().map_err(|e| AppError::from_io(&e, &exe))?;
+        let pid = c.id();
+        _child = Some(c);
+        Ok(pid)
+    });
+    match x {
+        Err(e) => {
+            eprintln!("{e:?}");
+            1
+        }
+        Ok(x) => i32::from(x.mkdir(Path::new(dir)).is_err()) * 2,
+    }
+}
+
 /// Helper condiviso dall'intera sessione: si avvia (con il prompt UAC) al primo uso e si riavvia
 /// al primo uso dopo la sua uscita. Il lock copre l'avvio: due job non aprono due prompt.
 pub fn shared() -> Result<Arc<dyn Executor>, AppError> {
