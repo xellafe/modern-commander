@@ -3,7 +3,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { Drive } from "../ipc/types";
-import { useDrives } from "./drives";
+import { isUnwatched, useDrives } from "./drives";
 
 const listDrives = vi.mocked(api.listDrives);
 const drive = (root: string): Drive => ({ root, label: "", kind: "fixed", total: 10, free: 5, ready: true });
@@ -28,6 +28,14 @@ test("refresh never starts a second listDrives while one is pending", async () =
   await useDrives.getState().refresh(); // la precedente è tornata: riparte
   expect(listDrives).toHaveBeenCalledTimes(2);
   expect(useDrives.getState().drives).toHaveLength(2);
+});
+
+test("folders on removable and optical drives are not watched", () => {
+  const drives: Drive[] = [drive("C:\\"), { ...drive("E:\\"), kind: "removable" }, { ...drive("F:\\"), kind: "cdrom" }];
+  expect(isUnwatched("e:\\foto", drives)).toBe(true);
+  expect(isUnwatched("F:\\", drives)).toBe(true);
+  expect(isUnwatched("C:\\e", drives)).toBe(false);
+  expect(isUnwatched("drives:", drives)).toBe(false);
 });
 
 test("a failed refresh keeps the previous list and releases the guard", async () => {

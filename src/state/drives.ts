@@ -28,6 +28,10 @@ export const useDrives = create<DrivesState>((set) => ({
   },
 }));
 
+/** Cartella su un'unità che il backend non osserva (rimovibile o CD: il watcher ne bloccherebbe la rimozione). */
+export const isUnwatched = (path: string, drives: Drive[]) =>
+  drives.some((d) => (d.kind === "removable" || d.kind === "cdrom") && path.toLowerCase().startsWith(d.root.toLowerCase()));
+
 const DRIVES_REFRESH_MS = 10_000;
 
 /** Rilettura periodica delle unità (ogni 10 s e al ritorno in primo piano). Da montare una sola volta: la barra di stato. */

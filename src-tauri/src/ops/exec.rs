@@ -157,6 +157,13 @@ fn volume_root(p: &Path) -> Option<String> {
     Some(root.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(root))
 }
 
+/// `GetDriveTypeW` del volume che contiene davvero `p` (anche montato in una cartella); 0 se non
+/// si risolve. Solo per percorsi con lettera di unità: i percorsi UNC non si interrogano.
+pub(crate) fn drive_type(p: &Path) -> u32 {
+    let root = if volume_key(p).len() == 2 { volume_root(p) } else { None };
+    root.map_or(0, |r| unsafe { GetDriveTypeW(&HSTRING::from(r)) })
+}
+
 fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
     // La Shell normalizza il nome e cestinerebbe un altro file.
     if has_trailing_dot_or_space(path) {
@@ -166,9 +173,7 @@ fn move_to_recycle_bin(path: &Path) -> Result<(), AppError> {
         });
     }
     // I percorsi UNC (`\\server\share`) non hanno Cestino: si rifiutano senza toccare la rete.
-    let root = if volume_key(path).len() == 2 { volume_root(path) } else { None };
-    let drive_type = root.map_or(0, |r| unsafe { GetDriveTypeW(&HSTRING::from(r)) });
-    if !recycle_bin_supported(drive_type) {
+    if !recycle_bin_supported(drive_type(path)) {
         return Err(AppError::new(ErrorCode::NoRecycleBin, Some(path)));
     }
     trash::delete(path).map_err(|e| match e {

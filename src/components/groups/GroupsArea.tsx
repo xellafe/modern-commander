@@ -4,6 +4,7 @@ import { dropOnGroup } from "../../commands/fileOps";
 import { chordFromEvent, quickSearchChar } from "../../commands/keys";
 import { focusInTextOrDialog } from "../../commands/useKeyboard";
 import { onFsChanged } from "../../ipc/api";
+import { isUnwatched, useDrives } from "../../state/drives";
 import { useLayout } from "../../state/layout";
 import { quickSearch } from "../../state/tabView";
 import { activeTabContext, useTabViews } from "../../state/tabViews";
@@ -58,7 +59,18 @@ export function GroupsArea({ keymap }: { keymap: Map<string, string> }) {
 
   useEffect(() => {
     const unlisten = onFsChanged((tabId) => void useTabViews.getState().reload(tabId));
-    return () => void unlisten.then((off) => off());
+    // Le unità rimovibili non hanno watcher: le schede visibili su di loro si rileggono al ritorno del focus.
+    const onFocus = () => {
+      const { groups, tabs } = useLayout.getState();
+      for (const g of groups) {
+        if (isUnwatched(tabs[g.activeTabId].path, useDrives.getState().drives)) void useTabViews.getState().reload(g.activeTabId);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      void unlisten.then((off) => off());
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   // Drop da Explorer: finestra di copia verso il gruppo sotto il puntatore (posizione in pixel fisici).
