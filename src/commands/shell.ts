@@ -63,33 +63,58 @@ export function rowContextMenu(tabId: string, i: number | null, e: MouseEvent) {
  * Chromium genera anche un contextmenu senza pulsante (`button` -1) che aprirebbe il menu di WebView2.
  * Nei campi di testo resta il menu di modifica.
  */
-export function suppressKeyboardContextMenu(e: globalThis.MouseEvent) {
-  const editable = e.target instanceof Element && e.target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])');
+export function suppressKeyboardContextMenu(e: Pick<globalThis.MouseEvent, "button" | "target" | "preventDefault">) {
+  const t = e.target as Element | null;
+  const editable = typeof t?.closest === "function" && t.closest('input, textarea, [contenteditable]:not([contenteditable="false"])');
   if (e.button !== 2 && !editable) e.preventDefault();
 }
 
-let selfDrag = false;
-/** true mentre è in corso un nostro `start_drag`: il drop su noi stessi va ignorato. */
-export const isSelfDragging = () => selfDrag;
+interface SelfDragState {
+  dragging: boolean;
+  /** Percorsi dell'ultimo drag e istante in cui è finito. */
+  last: { paths: string[]; at: number } | null;
+}
+const SELF_DROP_MS = 2000;
+const selfDrag: SelfDragState = { dragging: false, last: null };
 
-/** Trascina fuori dalla finestra le righe di `rowsAt(i)`. */
-export async function dragOut(tabId: string, i: number) {
+const samePaths = (a: string[], b: string[]) => {
+  const set = new Set(a.map((p) => p.toLowerCase()));
+  return a.length === b.length && b.every((p) => set.has(p.toLowerCase()));
+};
+
+/**
+ * Un drop è il nostro drag rilasciato sull'app se il drag è in corso, oppure se porta esattamente i percorsi
+ * dell'ultimo drag finito da meno di 2 s: l'evento drop e la risposta di `start_drag` viaggiano su canali diversi.
+ */
+export const isSelfDrop = (paths: string[], s: SelfDragState, now: number) =>
+  s.dragging || (!!s.last && now - s.last.at < SELF_DROP_MS && samePaths(paths, s.last.paths));
+
+/** Per `dropOnGroup`: il drop va ignorato. */
+export const ignoreDrop = (paths: string[]) => isSelfDrop(paths, selfDrag, Date.now());
+
+/** Trascina fuori dalla finestra le righe di `rowsAt` dalla riga `name` (mai unità: la shell creerebbe collegamenti). */
+export async function dragOut(tabId: string, name: string) {
   const v = useTabViews.getState().views[tabId];
-  const rows = v ? rowsAt(v, i) : [];
+  const rows = v ? rowsAt(v, v.rows.findIndex((r) => r.name === name)).filter((r) => !r.drive) : [];
   if (!rows.length) return;
-  selfDrag = true;
+  const paths = shellPaths(useLayout.getState().tabs[tabId].path, rows);
+  selfDrag.dragging = true;
   try {
-    await startDrag(shellPaths(useLayout.getState().tabs[tabId].path, rows));
+    await startDrag(paths);
   } catch (e) {
     report(tabId, e);
   } finally {
-    selfDrag = false;
+    selfDrag.last = { paths, at: Date.now() };
+    // Un macrotask dopo: un drop già in coda viene comunque scartato.
+    setTimeout(() => (selfDrag.dragging = false), 0);
   }
 }
 
 /** Dal mousedown sinistro su una riga: oltre la soglia, con il pulsante ancora premuto, parte il drag nativo. */
 export function trackDragOut(tabId: string, i: number, e: MouseEvent) {
-  if (e.button !== 0) return;
+  // Il nome, non l'indice: il watcher può ricaricare la lista prima che si superi la soglia.
+  const name = useTabViews.getState().views[tabId]?.rows[i]?.name;
+  if (e.button !== 0 || name === undefined) return;
   const { clientX: x0, clientY: y0 } = e;
   const stop = () => {
     window.removeEventListener("mousemove", move);
@@ -99,7 +124,7 @@ export function trackDragOut(tabId: string, i: number, e: MouseEvent) {
     if (!(ev.buttons & 1)) return stop();
     if (!pastDragThreshold(ev.clientX - x0, ev.clientY - y0)) return;
     stop();
-    void dragOut(tabId, i);
+    void dragOut(tabId, name);
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", stop);
@@ -108,11 +133,23 @@ export function trackDragOut(tabId: string, i: number, e: MouseEvent) {
 /** Apre un file col programma associato (Invio, doppio click, F3 in fase 1). */
 export const openFile = (tabId: string, path: string) => run(tabId, openPath(path));
 
+const EXECUTABLE = new Set(
+  "exe com bat cmd ps1 vbs vbe js jse wsf wsh msi msp scr pif cpl hta lnk reg".split(" "),
+);
+
+/** Programmi, script e collegamenti: F3 non li esegue, li mostra come testo nell'editor esterno. */
+export const isExecutable = (name: string) => {
+  const i = name.lastIndexOf(".");
+  return i > 0 && EXECUTABLE.has(name.slice(i + 1).toLowerCase());
+};
+
 /** File sotto il cursore (non cartelle, unità o '..'). */
 function cursorFile() {
   const { tabId, path, cursorRow: r } = activeTabContext();
-  return r && !r.isDir ? { tabId, path: joinPath(path, r.name) } : null;
+  return r && !r.isDir ? { tabId, name: r.name, path: joinPath(path, r.name) } : null;
 }
+
+const editFile = (tabId: string, path: string) => run(tabId, openWith(useSettings.getState().externalEditor, path));
 
 function keyboardMenu() {
   const { tabId, markedOrCursor } = activeTabContext();
@@ -133,13 +170,14 @@ const DEFS: [string, Command["run"]][] = [
   ["cm_ContextMenu", keyboardMenu],
   ["cm_Properties", properties],
   // Fase 1: programma di default ed editor esterno; in fase 2 viewer ed editor interni.
+  // Invio (cm_Return) invece esegue anche i programmi, come Explorer.
   ["cm_List", () => {
     const f = cursorFile();
-    if (f) return openFile(f.tabId, f.path);
+    if (f) return isExecutable(f.name) ? editFile(f.tabId, f.path) : openFile(f.tabId, f.path);
   }],
   ["cm_Edit", () => {
     const f = cursorFile();
-    if (f) return run(f.tabId, openWith(useSettings.getState().externalEditor, f.path));
+    if (f) return editFile(f.tabId, f.path);
   }],
 ];
 

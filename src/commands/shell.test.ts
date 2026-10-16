@@ -10,7 +10,10 @@ import { useUi } from "../state/ui";
 import { dropOnGroup } from "./fileOps";
 import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
-import { dragOut, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths, toPhysical } from "./shell";
+import {
+  dragOut, isExecutable, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
+  suppressKeyboardContextMenu, toPhysical,
+} from "./shell";
 
 const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
 const view = () => activeTabContext().view;
@@ -111,19 +114,91 @@ test("CANCELLED is ignored, other errors become a notice", async () => {
   expect(useTabViews.getState().notice).toEqual({ tabId: "t1", code: "ACCESS_DENIED", path: "C:\\x\\a.txt" });
 });
 
-test("drops are ignored while our own drag is running", async () => {
+const macrotask = () => new Promise((r) => setTimeout(r, 0));
+
+test("drops are ignored while our own drag is running and for its paths right after", async () => {
   let finish!: () => void;
   vi.mocked(api.startDrag).mockReturnValue(new Promise<void>((r) => (finish = r)));
   vi.mocked(api.normalizePaths).mockImplementation(async (p) => p);
   mark("a.txt", "b.txt");
-  const drag = dragOut("t1", indexOf("b.txt"));
+  const drag = dragOut("t1", "b.txt");
   expect(api.startDrag).toHaveBeenCalledWith(["C:\\x\\a.txt", "C:\\x\\b.txt"]);
   await dropOnGroup("g1", ["C:\\x\\a.txt"]);
   expect(useUi.getState().dialog).toBeNull();
   finish();
   await drag;
+  await dropOnGroup("g1", ["C:\\y\\z.txt"]); // stesso macrotask: ancora ignorato
+  expect(useUi.getState().dialog).toBeNull();
+  await macrotask();
+  await dropOnGroup("g1", ["C:\\x\\b.txt", "C:\\x\\a.txt"]); // l'insieme appena trascinato
+  expect(useUi.getState().dialog).toBeNull();
   await dropOnGroup("g1", ["C:\\y\\z.txt"]);
   expect(useUi.getState().dialog?.kind).toBe("copyMove");
+});
+
+test("isSelfDrop: running drag, or the same path set (any order and case) within 2 s", () => {
+  const last = { paths: ["C:\\x\\a.txt", "C:\\x\\b.txt"], at: 1000 };
+  expect(isSelfDrop(["C:\\y"], { dragging: true, last: null }, 0)).toBe(true);
+  expect(isSelfDrop(["C:\\y"], { dragging: false, last: null }, 0)).toBe(false);
+  expect(isSelfDrop(["c:\\X\\B.TXT", "C:\\x\\a.txt"], { dragging: false, last }, 2999)).toBe(true);
+  expect(isSelfDrop(["C:\\x\\a.txt", "C:\\x\\b.txt"], { dragging: false, last }, 3000)).toBe(false);
+  expect(isSelfDrop(["C:\\x\\a.txt"], { dragging: false, last }, 1500)).toBe(false);
+  expect(isSelfDrop(["C:\\x\\a.txt", "C:\\x\\c.txt"], { dragging: false, last }, 1500)).toBe(false);
+});
+
+test("a failed start_drag shows a notice and releases the self-drag flag", async () => {
+  vi.mocked(api.startDrag).mockRejectedValueOnce({ code: "NOT_FOUND", path: "C:\\x\\c.pdf", detail: null });
+  vi.mocked(api.normalizePaths).mockImplementation(async (p) => p);
+  await dragOut("t1", "c.pdf");
+  expect(useTabViews.getState().notice).toEqual({ tabId: "t1", code: "NOT_FOUND", path: "C:\\x\\c.pdf" });
+  await macrotask();
+  await dropOnGroup("g1", ["C:\\y\\z.txt"]);
+  expect(useUi.getState().dialog?.kind).toBe("copyMove");
+});
+
+test("drive rows and '..' are never dragged", async () => {
+  vi.mocked(api.listDrives).mockResolvedValue([{ root: "D:\\", label: "", kind: "fixed", total: 0, free: 0, ready: true } as never]);
+  await useTabViews.getState().load("t1", "drives:");
+  expect(view().rows.map((r) => r.name)).toEqual(["D:\\"]);
+  await dragOut("t1", "D:\\");
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "C:\\x");
+  await dragOut("t1", "..");
+  expect(api.startDrag).not.toHaveBeenCalled();
+});
+
+test("isExecutable matches programs and scripts case-insensitively", () => {
+  for (const n of ["a.EXE", "b.bat", "c.Cmd", "d.ps1", "e.lnk", "f.reg", "g.js", "h.msi", "i.hta"]) expect(isExecutable(n), n).toBe(true);
+  for (const n of ["a.txt", "b.pdf", "exe", ".bat", "c.json", "d.exe.txt"]) expect(isExecutable(n), n).toBe(false);
+});
+
+test("cm_List shows programs in the external editor instead of running them; cm_Return runs them", async () => {
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("setup.BAT")]);
+  await useTabViews.getState().load("t1", "C:\\y");
+  vi.mocked(api.openWith).mockResolvedValue();
+  vi.mocked(api.openPath).mockResolvedValue();
+  useSettings.setState({ externalEditor: "notepad.exe" });
+  setCursor("setup.BAT");
+  await executeCommand("cm_List");
+  expect(api.openWith).toHaveBeenCalledWith("notepad.exe", "C:\\y\\setup.BAT");
+  expect(api.openPath).not.toHaveBeenCalled();
+  await executeCommand("cm_Return");
+  expect(api.openPath).toHaveBeenCalledWith("C:\\y\\setup.BAT");
+});
+
+test("suppressKeyboardContextMenu prevents keyboard menus outside text fields only", () => {
+  const ev = (button: number, editable: boolean) => {
+    const e = { button, target: { closest: () => (editable ? {} : null) }, preventDefault: vi.fn() };
+    suppressKeyboardContextMenu(e as never);
+    return e.preventDefault.mock.calls.length > 0;
+  };
+  expect(ev(-1, false)).toBe(true);
+  expect(ev(0, false)).toBe(true);
+  expect(ev(2, false)).toBe(false); // tasto destro: lo gestisce la lista (o resta il menu di WebView2)
+  expect(ev(-1, true)).toBe(false); // menu di modifica del testo
+  const noTarget = { button: -1, target: null, preventDefault: vi.fn() };
+  suppressKeyboardContextMenu(noTarget as never);
+  expect(noTarget.preventDefault).toHaveBeenCalled();
 });
 
 test("every shell command has a title in both languages", async () => {

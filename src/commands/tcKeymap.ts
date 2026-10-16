@@ -68,10 +68,10 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   'Alt+F1': 'cm_SrcOpenDrives',
   'Alt+Enter': 'cm_Properties',
   'Shift+F10': 'cm_ContextMenu',
-  Apps: 'cm_ContextMenu', // tasto Menu: in TC lo gestisce Windows, non la mappa
   'Shift+Alt+Enter': 'cm_CountDirContent',
 
   // Scorciatoie nuove (non presenti nella mappa di fabbrica di TC)
+  Apps: 'cm_ContextMenu', // tasto Menu: in TC lo gestisce Windows, non la mappa
   'Ctrl+Shift+E': 'mc_ToggleSidebar',
   'Ctrl+Oem3': 'mc_ToggleBottomPanel', // Ctrl+ò sul layout italiano
   'Ctrl+Comma': 'cm_Config',
