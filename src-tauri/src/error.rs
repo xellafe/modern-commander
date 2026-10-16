@@ -13,6 +13,8 @@ pub enum ErrorCode {
     NotReady,
     SameFile,
     IntoItself,
+    /// Spostamento tra unità diverse: va fatto come copia + cancellazione.
+    NotSameDevice,
     InvalidName,
     Cancelled,
     InvalidRequest,
@@ -45,6 +47,8 @@ impl AppError {
             Some(112) => ErrorCode::DiskFull,
             Some(21) => ErrorCode::NotReady,
             Some(123) => ErrorCode::InvalidName,
+            Some(17) => ErrorCode::NotSameDevice,
+            Some(1235) => ErrorCode::Cancelled,
             _ => ErrorCode::Io,
         };
         Self {
@@ -69,6 +73,8 @@ mod tests {
         assert_eq!(e(112), ErrorCode::DiskFull);
         assert_eq!(e(21), ErrorCode::NotReady);
         assert_eq!(e(123), ErrorCode::InvalidName);
+        assert_eq!(e(17), ErrorCode::NotSameDevice);
+        assert_eq!(e(1235), ErrorCode::Cancelled);
         assert_eq!(e(9999), ErrorCode::Io);
     }
 

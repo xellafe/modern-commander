@@ -28,7 +28,7 @@ fn file_id(p: &Path) -> Option<(u32, u64)> {
 
 /// Stesso file: se esistono entrambi si confronta l'identità del file (copre maiuscole, `..`,
 /// collegamenti e hard link); altrimenti i percorsi normalizzati.
-fn same_file(src: &Path, dst: &Path) -> bool {
+pub(crate) fn same_file(src: &Path, dst: &Path) -> bool {
     match (file_id(src), file_id(dst)) {
         (Some(a), Some(b)) => a == b,
         _ => same_path(&normalize_lexical(src), &normalize_lexical(dst)),

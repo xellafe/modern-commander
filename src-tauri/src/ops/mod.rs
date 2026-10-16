@@ -1,6 +1,7 @@
-//! Operazioni sui file: modello, espansione in elementi per file e politiche di conflitto.
+//! Operazioni sui file: modello, espansione in elementi per file, politiche di conflitto ed esecutore.
 
 pub mod conflict;
+pub mod exec;
 pub mod model;
 pub mod plan;
 

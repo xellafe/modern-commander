@@ -8,6 +8,7 @@ export type ErrorCode =
   | "NOT_READY"
   | "SAME_FILE"
   | "INTO_ITSELF"
+  | "NOT_SAME_DEVICE"
   | "INVALID_NAME"
   | "CANCELLED"
   | "INVALID_REQUEST"
