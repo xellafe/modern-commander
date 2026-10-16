@@ -1,6 +1,7 @@
 //! Tipi delle operazioni sui file, condivisi col frontend via IPC (camelCase, tag `"type"`).
 
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,8 +25,10 @@ pub enum ConflictPolicy {
     RenameNew,
 }
 
-/// Per Copy/Move `dest` è la cartella di destinazione; per Rename il nuovo percorso completo;
-/// per Mkdir il percorso da creare è `sources[0]`.
+/// Per Copy/Move `dest` è la cartella di destinazione, salvo con un solo file come sorgente e una
+/// `dest` che non è una cartella esistente né termina con `\`: allora è il nome del file da creare
+/// (`plan::file_target`, regola di TC). Per Rename il nuovo percorso completo; per Mkdir il
+/// percorso da creare è `sources[0]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSpec {
@@ -44,6 +47,22 @@ pub struct FileItem {
     pub src: PathBuf,
     pub dst: Option<PathBuf>,
     pub is_dir: bool,
+    pub size: u64,
+    /// Cartella vera il cui contenuto non è nell'elenco: si elenca durante l'esecuzione, se serve
+    /// (illeggibile in `expand`, oppure da spostare o cestinare intera). Mai per file e collegamenti.
+    pub unlisted: bool,
+}
+
+/// Voce di una cartella: quanto serve per espandere un job (passa anche dalla pipe dell'helper).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListEntry {
+    /// `OsString`: anche un nome non valido in UTF-16 (surrogato spaiato) passa intatto.
+    pub name: OsString,
+    /// Cartella vera, da attraversare; falso per giunzioni e symlink.
+    pub dir: bool,
+    /// Giunzione o symlink a una cartella: una foglia trattata come cartella.
+    pub dir_link: bool,
     pub size: u64,
 }
 
@@ -93,8 +112,11 @@ mod tests {
         assert_eq!(serde_json::from_value::<Decision>(v).unwrap(), r);
         assert_eq!(serde_json::to_value(Decision::Skip).unwrap(), json!({"type": "skip"}));
 
-        let item = FileItem { src: PathBuf::from("a"), dst: None, is_dir: true, size: 0 };
-        assert_eq!(serde_json::to_value(&item).unwrap(), json!({"src": "a", "dst": null, "isDir": true, "size": 0}));
+        let item = FileItem { src: PathBuf::from("a"), dst: None, is_dir: true, size: 0, unlisted: false };
+        assert_eq!(
+            serde_json::to_value(&item).unwrap(),
+            json!({"src": "a", "dst": null, "isDir": true, "size": 0, "unlisted": false})
+        );
         let m = Meta { size: 1, modified_ms: 2 };
         assert_eq!(serde_json::to_value(m).unwrap(), json!({"size": 1, "modifiedMs": 2}));
     }

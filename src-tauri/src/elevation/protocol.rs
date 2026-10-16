@@ -1,9 +1,10 @@
 //! Protocollo tra l'app e l'helper elevato: un messaggio JSON per riga sulla named pipe.
 //! Il primo messaggio, dall'helper all'app, è `Hello` con il token; poi l'app manda una richiesta
-//! alla volta e l'helper risponde con zero o più `Progress` (solo le copie) e un `Ok`/`Err` finale.
-//! Durante una copia l'app può mandare `Cancel`.
+//! alla volta e l'helper risponde con zero o più `Progress` (solo le copie) o `Entry` (solo
+//! `List`, una voce per messaggio) e un `Ok`/`Err` finale. Durante una copia l'app può mandare `Cancel`.
 
 use crate::error::{AppError, ErrorCode};
+use crate::ops::model::ListEntry;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -24,6 +25,8 @@ pub enum Request {
     Delete { path: PathBuf, is_dir: bool, permanent: bool },
     Mkdir { path: PathBuf },
     Rename { src: PathBuf, dst: PathBuf },
+    /// Contenuto diretto di una cartella (per espandere un job): solo nomi, tipo e dimensione.
+    List { path: PathBuf },
     /// Interrompe la copia in corso; altrimenti non ha effetto.
     Cancel,
 }
@@ -47,6 +50,7 @@ impl fmt::Debug for Request {
             }
             Request::Mkdir { path } => f.debug_struct("Mkdir").field("path", path).finish(),
             Request::Rename { src, dst } => f.debug_struct("Rename").field("src", src).field("dst", dst).finish(),
+            Request::List { path } => f.debug_struct("List").field("path", path).finish(),
             Request::Cancel => f.write_str("Cancel"),
         }
     }
@@ -55,6 +59,7 @@ impl fmt::Debug for Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Response {
     Progress { bytes: u64 },
+    Entry(ListEntry),
     Ok,
     Err(AppError),
 }
@@ -63,7 +68,7 @@ pub enum Response {
 pub fn validate(req: &Request) -> Result<(), AppError> {
     let paths: Vec<&Path> = match req {
         Request::Copy { src, dst, .. } | Request::Move { src, dst, .. } | Request::Rename { src, dst } => vec![src, dst],
-        Request::Delete { path, .. } | Request::Mkdir { path } => vec![path],
+        Request::Delete { path, .. } | Request::Mkdir { path } | Request::List { path } => vec![path],
         Request::Hello { .. } | Request::Cancel => vec![],
     };
     match paths.into_iter().find(|p| !is_safe(p)) {
@@ -126,6 +131,7 @@ mod tests {
     fn validate_rejects_unsafe_paths() {
         for p in [r"relative\x", r"C:\a\..\Windows", r"\\.\PhysicalDrive0", r"\\?\GLOBALROOT\x", ""] {
             assert_eq!(validate(&Request::Mkdir { path: p.into() }).unwrap_err().code, ErrorCode::InvalidRequest, "{p}");
+            assert_eq!(validate(&Request::List { path: p.into() }).unwrap_err().code, ErrorCode::InvalidRequest, "{p}");
         }
         assert!(validate(&Request::Mkdir { path: r"C:\Program Files\X".into() }).is_ok());
         assert!(validate(&Request::Mkdir { path: r"\\srv\share\x".into() }).is_ok());
@@ -174,10 +180,15 @@ mod tests {
             Request::Delete { path: p(r"C:\a"), is_dir: true, permanent: false },
             Request::Mkdir { path: p(r"C:\Program Files\X") },
             Request::Rename { src: p(r"C:\a"), dst: p(r"C:\A") },
+            Request::List { path: p(r"C:\a") },
             Request::Cancel,
         ];
+        // Un nome con un surrogato spaiato (valido in NTFS, non in UTF-8) passa intatto.
+        let odd = <std::ffi::OsString as std::os::windows::ffi::OsStringExt>::from_wide(&[0x61, 0xD800]);
         let resps = [
             Response::Progress { bytes: 42 },
+            Response::Entry(ListEntry { name: odd, dir: false, dir_link: false, size: 7 }),
+            Response::Entry(ListEntry { name: "s".into(), dir: true, dir_link: false, size: 0 }),
             Response::Ok,
             Response::Err(AppError { detail: Some("d".into()), ..AppError::new(ErrorCode::AccessDenied, Some(&p(r"C:\a"))) }),
         ];

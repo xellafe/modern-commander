@@ -84,6 +84,12 @@ fn helper_executes_mkdir_and_copy() {
     .unwrap();
     assert_eq!(fs::read(dir.join("a.bin")).unwrap(), data);
     assert!(seen.len() > 1 && seen.last() == Some(&(data.len() as u64)), "{seen:?}");
+    // L'elenco di una cartella (per espandere un job) arriva voce per voce.
+    fs::create_dir(dir.join("sub")).unwrap();
+    let mut listed: Vec<_> = x.list_dir(&dir).unwrap().into_iter().map(|e| (e.name.into_string().unwrap(), e.dir, e.size)).collect();
+    listed.sort();
+    assert_eq!(listed, [("a.bin".to_owned(), false, data.len() as u64), ("sub".to_owned(), true, 0)]);
+    assert_eq!(x.list_dir(&d.path().join("manca")).unwrap_err().code, ErrorCode::NotFound);
 
     // `Cancel` interrompe la copia in corso: nessuna destinazione, l'helper resta utilizzabile.
     let big = d.path().join("big.bin");

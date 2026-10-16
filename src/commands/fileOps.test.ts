@@ -54,10 +54,18 @@ test("mkdirTarget resolves relative paths with intermediates and allows absolute
   expect(mkdirTarget("drives:", "x")).toEqual({ error: "ops.nameInvalid" });
 });
 
+test("mustChangeDest ignores a trailing backslash", () => {
+  expect(mustChangeDest({ from: "C:\\a", move: true, requireChange: false }, "C:\\a\\")).toBe(true);
+  expect(mustChangeDest({ from: "C:\\", move: true, requireChange: false }, "c:\\")).toBe(true);
+});
+
 test("resolveDest keeps absolute paths and resolves relative ones against the source folder", () => {
-  expect(resolveDest("C:\\a", "D:/x/")).toBe("D:\\x");
+  // Il `\` finale resta: per il backend la destinazione è di sicuro una cartella (regola di TC per un file solo).
+  expect(resolveDest("C:\\a", "D:/x/")).toBe("D:\\x\\");
+  expect(resolveDest("C:\\a", "D:\\x")).toBe("D:\\x");
   expect(resolveDest("C:\\a", "sub")).toBe("C:\\a\\sub");
-  expect(resolveDest("C:\\a", "\\\\srv\\share\\")).toBe("\\\\srv\\share");
+  expect(resolveDest("C:\\a", "sub\\\\")).toBe("C:\\a\\sub\\");
+  expect(resolveDest("C:\\a", "\\\\srv\\share\\")).toBe("\\\\srv\\share\\");
   expect(resolveDest("C:\\a", "d:")).toBe("d:\\");
   expect(resolveDest("C:\\a", "  ")).toBeNull();
   expect(resolveDest("drives:", "sub")).toBeNull();

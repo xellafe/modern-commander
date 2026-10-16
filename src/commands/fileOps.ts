@@ -52,17 +52,23 @@ export function mkdirTarget(base: string, input: string): { path: string; focus:
   return { path, focus: parentPath(path)?.toLowerCase() === base.toLowerCase() ? parts[parts.length - 1] : null };
 }
 
-/** Destinazione digitata nella finestra di copia: assoluta, oppure relativa alla cartella delle sorgenti. */
+/**
+ * Destinazione digitata nella finestra di copia: assoluta, oppure relativa alla cartella delle sorgenti.
+ * Un `\` finale resta: con un solo file da copiare dice al backend che la destinazione è una cartella
+ * e non il nome del file (regola di TC).
+ */
 export function resolveDest(base: string, input: string): string | null {
   if (!input.trim()) return null;
   const p = normalizePath(input);
-  if (/^(?:[A-Za-z]:\\|\\\\)/.test(p)) return p;
-  return base === DRIVES ? null : joinPath(base, p);
+  const abs = /^(?:[A-Za-z]:\\|\\\\)/.test(p) ? p : base === DRIVES ? null : joinPath(base, p);
+  return abs && /[\\/]$/.test(input.trim()) && !abs.endsWith("\\") ? `${abs}\\` : abs;
 }
+
+const noTrailing = (p: string) => p.replace(/\\+$/, "").toLowerCase();
 
 /** OK disattivato: destinazione uguale alla cartella delle sorgenti con un solo gruppo o per uno spostamento. */
 export const mustChangeDest = (req: { from: string; move: boolean; requireChange: boolean }, dest: string | null) =>
-  (req.requireChange || req.move) && dest?.toLowerCase() === req.from.toLowerCase();
+  (req.requireChange || req.move) && dest !== null && noTrailing(dest) === noTrailing(req.from);
 
 const views = () => useTabViews.getState();
 const ui = () => useUi.getState();

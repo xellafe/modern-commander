@@ -593,9 +593,13 @@ mod tests {
         panic_copy: bool,
         /// Ogni copy_file dà `ACCESS_DENIED` (serve l'helper elevato).
         deny_copy: bool,
+        /// Il Cestino "accetta" tutto: l'elemento si rimuove dal disco (mai il Cestino vero nei test).
+        trash: bool,
         copies: AtomicUsize,
         /// Il parametro `flush` di ogni copy_file.
         flushes: Mutex<Vec<bool>>,
+        /// Ogni delete: percorso e `permanent`.
+        deletes: Mutex<Vec<(PathBuf, bool)>>,
     }
 
     impl Executor for Fake {
@@ -634,9 +638,15 @@ mod tests {
             LocalExecutor.move_path(src, dst, overwrite)
         }
         fn delete(&self, path: &Path, is_dir: bool, permanent: bool) -> Result<(), AppError> {
+            self.deletes.lock().unwrap().push((path.to_path_buf(), permanent));
             if self.no_recycle && !permanent {
                 return Err(AppError::new(ErrorCode::NoRecycleBin, Some(path)));
             }
+            if self.trash && !permanent {
+                let r = if is_dir { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
+                return r.map_err(|e| AppError::from_io(&e, path));
+            }
+            assert!(permanent, "Cestino vero nei test");
             LocalExecutor.delete(path, is_dir, permanent)
         }
         fn mkdir(&self, path: &Path) -> Result<(), AppError> {
@@ -644,6 +654,9 @@ mod tests {
         }
         fn rename(&self, src: &Path, dst: &Path) -> Result<(), AppError> {
             LocalExecutor.rename(src, dst)
+        }
+        fn list_dir(&self, path: &Path) -> Result<Vec<crate::ops::model::ListEntry>, AppError> {
+            LocalExecutor.list_dir(path)
         }
     }
 
@@ -998,15 +1011,16 @@ mod tests {
         let f = d.path().join("f.txt");
         std::fs::write(&f, b"x").unwrap();
         let (q, rx) = queue(LocalExecutor);
-        let dest = d.path().join("X").join("Y");
+        // Con `\` finale la destinazione di un solo file è una cartella (senza, sarebbe il nome del file).
+        let dest = d.path().join("X").join("Y\\");
         let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(&dest), ConflictPolicy::Ask));
         assert_eq!(finish(&rx, id).state, Done);
-        assert_eq!(std::fs::read(dest.join("f.txt")).unwrap(), b"x");
+        assert_eq!(std::fs::read(d.path().join("X").join("Y").join("f.txt")).unwrap(), b"x");
 
         // Una destinazione che non si può creare passa dal prompt d'errore; "Salta" chiude il job.
         let g = d.path().join("g.txt");
         std::fs::write(&g, b"g").unwrap();
-        let bad = g.join("sub"); // un file al posto della cartella intermedia
+        let bad = g.join("sub\\"); // un file al posto della cartella intermedia
         let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(&bad), ConflictPolicy::Ask));
         let p = next_prompt(&rx);
         assert!(matches!(p, Prompt::Error { .. }), "{p:?}");
@@ -1160,6 +1174,100 @@ mod tests {
         for n in names {
             assert_eq!(std::fs::read(dest.join(n)).unwrap(), n.as_bytes());
         }
+    }
+
+    #[test]
+    fn recycle_delete_trashes_a_folder_whole() {
+        let d = tempfile::tempdir().unwrap();
+        let a = tree(d.path());
+        let fake = Arc::new(Fake { trash: true, ..Default::default() });
+        let (q, rx) = queue_shared(fake.clone());
+        let id = q.enqueue(spec(JobKind::Delete { permanent: false }, vec![a.clone()], None, ConflictPolicy::Ask));
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.files_done, v.files_total, v.errors.len()), (Done, 1, 1, 0));
+        assert_eq!(*fake.deletes.lock().unwrap(), vec![(a.clone(), false)]);
+        assert!(!exists(&a));
+    }
+
+    #[test]
+    fn recycle_refusal_of_a_folder_deletes_its_tree_permanently() {
+        let d = tempfile::tempdir().unwrap();
+        let a = tree(d.path());
+        let fake = Arc::new(Fake { no_recycle: true, ..Default::default() });
+        let (q, rx) = queue_shared(fake.clone());
+        let id = q.enqueue(spec(JobKind::Delete { permanent: false }, vec![a.clone()], None, ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let Prompt::Error { error, can_delete_permanently, .. } = &p else { panic!("{p:?}") };
+        assert_eq!((error.code, error.path.as_deref(), *can_delete_permanently), (ErrorCode::NoRecycleBin, a.to_str(), true));
+        // Solo per questo elemento: il suo contenuto segue senza altri prompt.
+        reply_error(&q, &p, ErrorAction::DeletePermanent, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len(), v.files_done, v.files_total), (Done, 0, 4, 4));
+        assert!(!exists(&a));
+        let expected = [(a.clone(), false), (a.join("x.txt"), true), (a.join("s").join("y.txt"), true), (a.join("s"), true), (a.clone(), true)];
+        assert_eq!(*fake.deletes.lock().unwrap(), expected);
+    }
+
+    /// a/{x.txt, s/y.txt (cartella illeggibile), t/z.txt}
+    fn tree_with_unreadable(root: &Path) -> (PathBuf, crate::ops::DenyList) {
+        let a = tree(root);
+        std::fs::create_dir(a.join("t")).unwrap();
+        std::fs::write(a.join("t").join("z.txt"), b"z").unwrap();
+        let deny = crate::ops::DenyList::new(&a.join("s"));
+        (a, deny)
+    }
+
+    fn skip_access_denied(q: &Queue, rx: &mpsc::Receiver<Event>, dir: &Path) {
+        let p = next_prompt(rx);
+        let Prompt::Error { error, can_elevate, .. } = &p else { panic!("{p:?}") };
+        assert_eq!((error.code, error.path.as_deref(), *can_elevate), (ErrorCode::AccessDenied, dir.to_str(), true));
+        reply_error(q, &p, ErrorAction::Skip, false);
+    }
+
+    #[test]
+    fn unreadable_subfolder_in_copy_prompts_and_skip_copies_the_rest() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, _deny) = tree_with_unreadable(d.path());
+        let dest = d.path().join("D");
+        let (q, rx) = queue(LocalExecutor);
+        let id = q.enqueue(spec(JobKind::Copy, vec![a.clone()], Some(&dest), ConflictPolicy::Ask));
+        skip_access_denied(&q, &rx, &a.join("s"));
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Done, vec![ErrorCode::AccessDenied]));
+        assert_eq!(std::fs::read(dest.join("a").join("x.txt")).unwrap(), b"x");
+        assert_eq!(std::fs::read(dest.join("a").join("t").join("z.txt")).unwrap(), b"z");
+        assert!(!exists(&dest.join("a").join("s")), "la cartella saltata non si crea");
+    }
+
+    #[test]
+    fn unreadable_subfolder_in_permanent_delete_prompts_and_skip_deletes_the_rest() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, _deny) = tree_with_unreadable(d.path());
+        let (q, rx) = queue(LocalExecutor);
+        let id = q.enqueue(spec(JobKind::Delete { permanent: true }, vec![a.clone()], None, ConflictPolicy::Ask));
+        skip_access_denied(&q, &rx, &a.join("s"));
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 1));
+        assert!(!exists(&a.join("x.txt")) && !exists(&a.join("t")));
+        // La cartella saltata e i suoi antenati restano.
+        assert!(exists(&a.join("s")) && exists(&a));
+    }
+
+    #[test]
+    fn single_file_to_a_missing_name_creates_that_file() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("f.txt");
+        std::fs::write(&f, b"dati").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let to = d.path().join("D").join("g.txt");
+        let id = q.enqueue(spec(JobKind::Copy, vec![f.clone()], Some(&to), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(std::fs::read(&to).unwrap(), b"dati", "g.txt è il file copiato, non una cartella");
+        let moved = d.path().join("h.txt");
+        let id = q.enqueue(spec(JobKind::Move, vec![f.clone()], Some(&moved), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(std::fs::read(&moved).unwrap(), b"dati");
+        assert!(!exists(&f));
     }
 
     #[test]

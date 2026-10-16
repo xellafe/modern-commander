@@ -6,7 +6,7 @@
 use super::conflict::{next_free_name, resolve, same_file};
 use super::exec::Executor;
 use super::model::{ConflictPolicy, Decision, FileItem, JobKind, JobSpec, Meta};
-use super::plan::expand;
+use super::plan::{expand, expand_children, file_target, filter_of};
 use super::queue::{ErrorAction, Handle, JobState, Prompt, PromptReply};
 use crate::error::{AppError, ErrorCode};
 use crate::fs::listing::FILETIME_UNIX_DIFF_MS;
@@ -57,6 +57,8 @@ pub(crate) fn run(h: &Handle, exec: Arc<dyn Executor>, spec: &JobSpec) -> JobSta
         skipped: Vec::new(),
         renamed: Vec::new(),
         src_dirs: Vec::new(),
+        permanent_under: Vec::new(),
+        again: false,
     };
     let items = match expand(spec) {
         Ok(items) => items,
@@ -67,10 +69,15 @@ pub(crate) fn run(h: &Handle, exec: Arc<dyn Executor>, spec: &JobSpec) -> JobSta
     };
     // Come TC, una cartella di destinazione mancante si crea (con le intermedie) all'avvio; solo
     // dopo `expand`, che rifiuta per esempio la copia dentro se stessa: un job fallito non crea nulla.
-    if let (JobKind::Copy | JobKind::Move, Some(dest)) = (&spec.kind, &spec.dest)
-        && !exists(dest)
-    {
-        let dest = normalize_lexical(dest);
+    // Se la destinazione è il nome di un file (`file_target`) si crea solo la sua cartella.
+    let dest_dir = match (&spec.kind, &spec.dest) {
+        (JobKind::Copy | JobKind::Move, Some(dest)) => {
+            let dest = normalize_lexical(dest);
+            if file_target(spec) { dest.parent().map(Path::to_path_buf) } else { Some(dest) }
+        }
+        _ => None,
+    };
+    if let Some(dest) = dest_dir.filter(|d| !exists(d)) {
         if r.attempt(&dest, |r, _| r.mkdir_all(&dest)).is_err() {
             return JobState::Cancelled;
         }
@@ -114,6 +121,11 @@ struct Runner<'a> {
     renamed: Vec<(PathBuf, PathBuf)>,
     /// Move: cartelle sorgente da rimuovere alla fine, se vuote.
     src_dirs: Vec<PathBuf>,
+    /// Delete: cartelle rifiutate dal Cestino ed eliminate in modo definitivo, contenuto compreso.
+    permanent_under: Vec<PathBuf>,
+    /// L'elemento corrente è stato elencato e il suo contenuto messo al suo posto (Delete): si
+    /// riparte dallo stesso indice senza contarlo.
+    again: bool,
 }
 
 impl Runner<'_> {
@@ -129,6 +141,9 @@ impl Runner<'_> {
             self.h.update(|v| v.current = Some(current));
             if !self.is_skipped(&item.src) {
                 self.attempt(&item.src, |r, a| r.item(i, &item, a))?;
+                if std::mem::take(&mut self.again) {
+                    continue;
+                }
             }
             self.bytes += item.size;
             let bytes = self.bytes;
@@ -243,12 +258,30 @@ impl Runner<'_> {
     fn item(&mut self, i: usize, item: &FileItem, a: &mut Attempt) -> Result<(), Fail> {
         let src = &item.src;
         match &self.spec.kind {
-            JobKind::Delete { permanent } => Ok(self.exec.delete(src, item.is_dir, *permanent || a.permanent)?),
+            JobKind::Delete { permanent } => self.delete(i, item, *permanent || a.permanent),
             JobKind::Mkdir => self.mkdir_all(&normalize_lexical(src)),
             JobKind::Rename => Ok(self.exec.rename(src, &dst_of(item)?)?),
             JobKind::Copy | JobKind::Move if item.is_dir => self.dir(i, item, a),
             JobKind::Copy | JobKind::Move => self.file(item, a),
         }
+    }
+
+    /// Una cartella non elencata va nel Cestino intera; in modo definitivo (anche dopo un rifiuto
+    /// del Cestino) o con un filtro prima si elenca, e il suo contenuto passa prima di lei.
+    fn delete(&mut self, i: usize, item: &FileItem, permanent: bool) -> Result<(), Fail> {
+        let permanent = permanent || self.permanent_under.iter().any(|p| item.src.starts_with(p));
+        let filtered = filter_of(self.spec).is_some();
+        if self.items[i].unlisted && (permanent || filtered) {
+            self.list(i)?;
+            if permanent {
+                self.permanent_under.push(item.src.clone());
+            }
+            return Ok(());
+        }
+        if item.is_dir && filtered {
+            return Ok(()); // con un filtro le cartelle restano: conterrebbero i file esclusi
+        }
+        Ok(self.exec.delete(&item.src, item.is_dir, permanent)?)
     }
 
     fn file(&mut self, item: &FileItem, a: &mut Attempt) -> Result<(), Fail> {
@@ -287,14 +320,14 @@ impl Runner<'_> {
         Ok(())
     }
 
-    /// Cartella di Copy/Move. Se è seguita dal proprio contenuto (espansa da `expand`) basta
-    /// crearla; altrimenti (Move sulla stessa unità) si sposta in blocco con `move_path`.
+    /// Cartella di Copy/Move. Se il suo contenuto è già nell'elenco basta crearla; un Move senza
+    /// filtro di una cartella non elencata prova a spostarla in blocco con `move_path`, altrimenti
+    /// (altro volume, destinazione da unire, cartella illeggibile in `expand`) la si elenca qui.
     /// Un collegamento a cartella (giunzione, symlink) si può solo spostare in blocco: copiarlo
     /// darebbe una cartella vuota, quindi diventa un errore `UNSUPPORTED` (detail `reparse_point`).
     fn dir(&mut self, i: usize, item: &FileItem, a: &mut Attempt) -> Result<(), Fail> {
         let src = &item.src;
         let is_move = self.spec.kind == JobKind::Move;
-        let expanded = self.items.get(i + 1).is_some_and(|n| n.src.starts_with(src));
         let link = is_dir_link(src);
         if link && !is_move {
             return Err(unsupported_link(src).into());
@@ -317,7 +350,7 @@ impl Runner<'_> {
                 // Una cartella esistente si unisce; un file al suo posto fa fallire mkdir/move_path.
                 merge = is_real_dir(&dst);
             }
-            if is_move && !expanded && !merge {
+            if is_move && (item.unlisted || link) && !merge && filter_of(self.spec).is_none() {
                 match self.exec.move_path(src, &dst, false) {
                     Err(e) if e.code == ErrorCode::NotSameDevice => {}
                     r => return Ok(r?),
@@ -325,6 +358,10 @@ impl Runner<'_> {
             }
             if link {
                 return Err(unsupported_link(src).into());
+            }
+            // Prima di creare la cartella: se non si riesce a elencarla e la si salta, non resta vuota.
+            if self.items[i].unlisted {
+                self.list(i)?;
             }
             if !merge {
                 self.exec.mkdir(&dst)?;
@@ -339,32 +376,27 @@ impl Runner<'_> {
             }
             a.created = Some(dst);
         }
-        if is_move && !expanded {
-            self.splice_children(i)?;
-        }
         Ok(())
     }
 
-    /// Move di una cartella non espansa che non si è potuta spostare in blocco (altro volume o
-    /// destinazione da unire): il suo contenuto entra nella coda subito dopo di lei.
-    fn splice_children(&mut self, i: usize) -> Result<(), AppError> {
-        let item = &self.items[i];
-        let parent = item.dst.as_deref().and_then(Path::parent).map(Path::to_path_buf);
-        let copy = JobSpec {
-            kind: JobKind::Copy,
-            sources: vec![item.src.clone()],
-            dest: parent,
-            filter: None,
-            policy: self.spec.policy.clone(),
-        };
-        // Le `dst` così costruite sono quelle originali dei figli (`dst` della cartella + nome).
-        let children: Vec<FileItem> = expand(&copy)?.into_iter().skip(1).collect(); // senza la cartella stessa
+    /// Elenca la cartella `i` con l'esecutore del tentativo (anche quello elevato) e ne mette il
+    /// contenuto nell'elenco: subito dopo di lei per Copy/Move, prima di lei per Delete, che poi
+    /// riparte da lì (`again`). Le `dst` dei figli sono quelle originali, come le altre.
+    fn list(&mut self, i: usize) -> Result<(), Fail> {
+        let dir = self.items[i].clone();
+        let children = expand_children(self.spec, &dir, self.exec.list_dir(&dir.src)?);
         let (n, bytes) = (children.len() as u64, children.iter().map(|c| c.size).sum::<u64>());
         self.h.update(|v| {
             v.files_total += n;
             v.bytes_total += bytes;
         });
-        self.items.splice(i + 1..i + 1, children);
+        self.items[i].unlisted = false;
+        if matches!(self.spec.kind, JobKind::Delete { .. }) {
+            self.items.splice(i..i, children);
+            self.again = true;
+        } else {
+            self.items.splice(i + 1..i + 1, children);
+        }
         Ok(())
     }
 

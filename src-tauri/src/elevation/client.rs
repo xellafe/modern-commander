@@ -4,6 +4,7 @@ use super::protocol::{MAX_LINE, Request, Response, read_msg, write_msg};
 use super::{PIPE_PREFIX, Pipe, event, is, os_code, owned, raw};
 use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::Executor;
+use crate::ops::model::ListEntry;
 use std::ffi::c_void;
 use std::io::{self, BufReader};
 use std::os::windows::io::OwnedHandle;
@@ -155,8 +156,13 @@ struct Conn {
 
 impl Conn {
     /// Manda la richiesta e legge fino alla risposta finale; se `progress` restituisce `false`
-    /// manda `Cancel` (una volta) e continua a leggere.
-    fn exchange(&mut self, req: &Request, mut progress: Option<Progress>) -> io::Result<Result<(), AppError>> {
+    /// manda `Cancel` (una volta) e continua a leggere. Le voci di `List` finiscono in `entries`.
+    fn exchange(
+        &mut self,
+        req: &Request,
+        mut progress: Option<Progress>,
+        entries: &mut Vec<ListEntry>,
+    ) -> io::Result<Result<(), AppError>> {
         write_msg(&mut self.output, req)?;
         let mut cancelled = false;
         loop {
@@ -164,6 +170,7 @@ impl Conn {
                 None => return Err(io::ErrorKind::BrokenPipe.into()),
                 Some(Response::Ok) => return Ok(Ok(())),
                 Some(Response::Err(e)) => return Ok(Err(e)),
+                Some(Response::Entry(e)) => entries.push(e),
                 Some(Response::Progress { bytes }) => {
                     if let Some(p) = progress.as_mut()
                         && !cancelled
@@ -250,12 +257,16 @@ impl ElevatedExecutor {
     /// `broken` segna solo i guasti veri: durante uno scambio in corso l'helper resta "vivo" per
     /// `shared`, che altrimenti ne avvierebbe un secondo (con un altro prompt UAC).
     fn call(&self, req: Request, progress: Option<Progress>) -> Result<(), AppError> {
+        self.call_listing(req, progress, &mut Vec::new())
+    }
+
+    fn call_listing(&self, req: Request, progress: Option<Progress>, entries: &mut Vec<ListEntry>) -> Result<(), AppError> {
         let mut conn = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
         if self.broken.load(Ordering::SeqCst) {
             return Err(gone());
         }
         let _guard = BreakOnPanic(&self.broken);
-        let res = conn.exchange(&req, progress);
+        let res = conn.exchange(&req, progress, entries);
         if res.is_err() {
             self.broken.store(true, Ordering::SeqCst);
         }
@@ -295,6 +306,12 @@ impl Executor for ElevatedExecutor {
 
     fn rename(&self, src: &Path, dst: &Path) -> Result<(), AppError> {
         self.call(Request::Rename { src: src.into(), dst: dst.into() }, None)
+    }
+
+    fn list_dir(&self, path: &Path) -> Result<Vec<ListEntry>, AppError> {
+        let mut entries = Vec::new();
+        self.call_listing(Request::List { path: path.into() }, None, &mut entries)?;
+        Ok(entries)
     }
 }
 

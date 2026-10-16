@@ -156,6 +156,13 @@ fn execute(req: &Request, out: &mut Pipe, cancel: &AtomicBool) -> Result<(), App
         Request::Delete { path, is_dir, permanent } => x.delete(&n(path), *is_dir, *permanent),
         Request::Mkdir { path } => x.mkdir(&n(path)),
         Request::Rename { src, dst } => x.rename(&n(src), &n(dst)),
+        Request::List { path } => {
+            for e in x.list_dir(&n(path))? {
+                // Pipe chiusa: anche la risposta finale non arriverà, e il ciclo principale esce.
+                write_msg(out, &Response::Entry(e)).map_err(|e| AppError::from_io(&e, path))?;
+            }
+            Ok(())
+        }
         Request::Hello { .. } | Request::Cancel => Err(AppError::new(ErrorCode::InvalidRequest, None)),
     }
 }

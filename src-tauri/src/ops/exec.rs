@@ -1,6 +1,8 @@
 //! Esecutore locale: le primitive che toccano davvero il disco.
 
 use super::conflict::same_file;
+use super::model::ListEntry;
+use super::plan::read_entries;
 use crate::error::{AppError, ErrorCode};
 use crate::paths::{to_extended, volume_key};
 use std::ffi::c_void;
@@ -32,6 +34,9 @@ pub trait Executor: Send + Sync {
     fn delete(&self, path: &Path, is_dir: bool, permanent: bool) -> Result<(), AppError>;
     fn mkdir(&self, path: &Path) -> Result<(), AppError>;
     fn rename(&self, src: &Path, dst: &Path) -> Result<(), AppError>;
+    /// Contenuto diretto di una cartella vera; un collegamento dà `UNSUPPORTED` (`reparse_point`):
+    /// elencarlo porterebbe a copiare o eliminare il contenuto del bersaglio.
+    fn list_dir(&self, path: &Path) -> Result<Vec<ListEntry>, AppError>;
 }
 
 pub struct LocalExecutor;
@@ -300,6 +305,14 @@ impl Executor for LocalExecutor {
     /// Senza sostituzione; le rinomine che cambiano solo maiuscole/minuscole funzionano.
     fn rename(&self, src: &Path, dst: &Path) -> Result<(), AppError> {
         move_file(src, dst, MOVE_FILE_FLAGS(0))
+    }
+
+    fn list_dir(&self, path: &Path) -> Result<Vec<ListEntry>, AppError> {
+        let meta = std::fs::symlink_metadata(to_extended(path)).map_err(|e| AppError::from_io(&e, path))?;
+        if meta.file_type().is_symlink() {
+            return Err(AppError { detail: Some("reparse_point".into()), ..AppError::new(ErrorCode::Unsupported, Some(path)) });
+        }
+        read_entries(path)
     }
 }
 
