@@ -13,6 +13,7 @@ use crate::fs::listing::FILETIME_UNIX_DIFF_MS;
 use crate::paths::{normalize_lexical, to_extended};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Il job è stato annullato (dall'utente o con una risposta `Cancel`).
 struct Stop;
@@ -36,12 +37,16 @@ struct Attempt {
     /// Prima fase già riuscita (copia del file, creazione della cartella) con la destinazione
     /// effettiva: un nuovo tentativo riprende dalla fase successiva.
     created: Option<PathBuf>,
+    /// I tentativi successivi passano per l'helper elevato ("Riprova come amministratore").
+    elevated: bool,
 }
 
-pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
+pub(crate) fn run(h: &Handle, exec: Arc<dyn Executor>, spec: &JobSpec) -> JobState {
     let mut r = Runner {
         h,
-        exec,
+        exec: exec.clone(),
+        local: exec,
+        elevate_all: false,
         spec,
         items: Vec::new(),
         bytes: 0,
@@ -86,7 +91,11 @@ pub(crate) fn run(h: &Handle, exec: &dyn Executor, spec: &JobSpec) -> JobState {
 
 struct Runner<'a> {
     h: &'a Handle,
-    exec: &'a dyn Executor,
+    /// Esecutore del tentativo in corso: `local` oppure quello elevato.
+    exec: Arc<dyn Executor>,
+    local: Arc<dyn Executor>,
+    /// "Riprova come amministratore" per tutti: il resto del job passa per l'helper elevato.
+    elevate_all: bool,
     spec: &'a JobSpec,
     /// Le `dst` restano quelle originali: le rinomine si applicano con `rewrite`.
     items: Vec<FileItem>,
@@ -159,7 +168,14 @@ impl Runner<'_> {
     fn attempt(&mut self, src: &Path, mut op: impl FnMut(&mut Self, &mut Attempt) -> Result<(), Fail>) -> Result<(), Stop> {
         let mut a = Attempt::default();
         loop {
-            let e = match op(self, &mut a) {
+            let res = match self.executor(&mut a) {
+                Ok(x) => {
+                    self.exec = x;
+                    op(self, &mut a)
+                }
+                Err(e) => Err(Fail::Err(e)), // per esempio UAC rifiutato: prompt d'errore normale
+            };
+            let e = match res {
                 Ok(()) => return Ok(()),
                 Err(Fail::Stop) => return Err(Stop),
                 Err(Fail::Err(e)) => e,
@@ -177,8 +193,9 @@ impl Runner<'_> {
                 self.ask_error(&e, deletable)?
             };
             match action {
-                // ponytail: RetryElevated vale come Retry finché il Task 17 non aggiunge l'helper elevato.
-                ErrorAction::Retry | ErrorAction::RetryElevated => {}
+                // Retry ripete nello stesso modo, elevato compreso.
+                ErrorAction::Retry => {}
+                ErrorAction::RetryElevated => a.elevated = true,
                 ErrorAction::DeletePermanent => a.permanent = deletable,
                 ErrorAction::Skip => {
                     self.skipped.push(src.to_path_buf());
@@ -188,6 +205,18 @@ impl Runner<'_> {
                 ErrorAction::Cancel => return Err(Stop),
             }
         }
+    }
+
+    /// Esecutore per il prossimo tentativo. Se l'helper non parte (UAC rifiutato) si torna
+    /// all'esecutore locale: un semplice Riprova non ripropone il prompt UAC.
+    fn executor(&mut self, a: &mut Attempt) -> Result<Arc<dyn Executor>, AppError> {
+        if !(a.elevated || self.elevate_all) {
+            return Ok(self.local.clone());
+        }
+        self.h.elevated().inspect_err(|_| {
+            a.elevated = false;
+            self.elevate_all = false;
+        })
     }
 
     fn ask_error(&mut self, e: &AppError, deletable: bool) -> Result<ErrorAction, Stop> {
@@ -204,6 +233,7 @@ impl Runner<'_> {
             match action {
                 ErrorAction::Skip => self.skip_all.push(e.code),
                 ErrorAction::DeletePermanent if deletable => self.permanent_all = true,
+                ErrorAction::RetryElevated => self.elevate_all = true,
                 _ => {}
             }
         }

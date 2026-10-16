@@ -2096,6 +2096,7 @@ dependencies = [
 name = "modern-commander"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "notify",
  "serde",
  "serde_json",
@@ -2104,6 +2105,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "trash",
+ "uuid",
  "windows",
 ]
 

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod elevation;
 pub mod error;
 pub mod fs;
 pub mod mask;
@@ -23,7 +24,7 @@ pub fn run() {
                     Event::Prompt(p) => handle.emit("job-prompt", p),
                 };
             });
-            app.manage(Queue::new(Arc::new(ops::exec::LocalExecutor), sink));
+            app.manage(Queue::new(Arc::new(ops::exec::LocalExecutor), Arc::new(elevation::shared), sink));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

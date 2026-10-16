@@ -108,7 +108,7 @@ pub enum ErrorAction {
     Retry,
     Skip,
     Cancel,
-    /// Fino al Task 17 (helper elevato) si comporta come `Retry`.
+    /// Riprova con l'helper elevato; con `apply_to_all` anche per il resto del job.
     RetryElevated,
     /// Solo con `can_delete_permanently`: elimina l'elemento in modo definitivo.
     DeletePermanent,
@@ -127,6 +127,9 @@ pub enum Event {
 }
 
 pub type Sink = Arc<dyn Fn(Event) + Send + Sync>;
+
+/// Esecutore elevato condiviso, avviato al primo uso (`elevation::shared` nell'app).
+pub type Elevate = Arc<dyn Fn() -> Result<Arc<dyn Executor>, AppError> + Send + Sync>;
 
 const EMIT_EVERY: Duration = Duration::from_millis(100);
 const SPEED_WINDOW: Duration = Duration::from_secs(2);
@@ -160,6 +163,7 @@ struct Inner {
     /// Unica condition variable: scheduler, pausa e prompt; ogni cambiamento fa `notify_all`.
     cv: Condvar,
     exec: Arc<dyn Executor>,
+    elevate: Elevate,
     sink: Sink,
 }
 
@@ -168,9 +172,9 @@ pub struct Queue(Arc<Inner>);
 
 impl Queue {
     // ponytail: lo scheduler non termina mai (nessuno shutdown all'uscita dell'app, per ora).
-    pub fn new(exec: Arc<dyn Executor>, sink: Sink) -> Self {
+    pub fn new(exec: Arc<dyn Executor>, elevate: Elevate, sink: Sink) -> Self {
         let state = State { jobs: Vec::new(), next_id: 0, next_prompt: 0 };
-        let q = Queue(Arc::new(Inner { state: Mutex::new(state), cv: Condvar::new(), exec, sink }));
+        let q = Queue(Arc::new(Inner { state: Mutex::new(state), cv: Condvar::new(), exec, elevate, sink }));
         let s = q.clone();
         std::thread::spawn(move || s.schedule());
         q
@@ -226,7 +230,7 @@ impl Queue {
         std::thread::spawn(move || {
             // Un panico non deve lasciare il job `Running` con i volumi occupati per sempre.
             // (Con `panic = "abort"` del profilo release l'app termina comunque.)
-            let end = catch_unwind(AssertUnwindSafe(|| runner::run(&h, &*h.q.0.exec, &spec))).unwrap_or_else(|_| {
+            let end = catch_unwind(AssertUnwindSafe(|| runner::run(&h, h.q.0.exec.clone(), &spec))).unwrap_or_else(|_| {
                 let e = AppError { detail: Some("internal_panic".into()), ..AppError::new(ErrorCode::Io, None) };
                 h.update(|v| v.errors.push(e));
                 JobState::Failed
@@ -391,6 +395,11 @@ impl Handle {
         let mut st = self.q.lock();
         // Un job avviato e non finito non si rimuove mai dall'elenco.
         f(st.job(self.id).expect("job del worker"))
+    }
+
+    /// Esecutore elevato (al primo uso compare il prompt UAC).
+    pub(crate) fn elevated(&self) -> Result<Arc<dyn Executor>, AppError> {
+        (self.q.0.elevate)()
     }
 
     pub(crate) fn cancelled(&self) -> bool {
@@ -575,6 +584,8 @@ mod tests {
         no_recycle: bool,
         /// copy_file va in panico.
         panic_copy: bool,
+        /// Ogni copy_file dà `ACCESS_DENIED` (serve l'helper elevato).
+        deny_copy: bool,
         copies: AtomicUsize,
         /// Il parametro `flush` di ogni copy_file.
         flushes: Mutex<Vec<bool>>,
@@ -590,6 +601,9 @@ mod tests {
             progress: &mut dyn FnMut(u64) -> bool,
         ) -> Result<(), AppError> {
             assert!(!self.panic_copy, "panico di prova");
+            if self.deny_copy {
+                return Err(AppError::new(ErrorCode::AccessDenied, Some(dst)));
+            }
             self.flushes.lock().unwrap().push(flush);
             let n = self.copies.fetch_add(1, Ordering::SeqCst) + 1;
             if self.fail_copy_at == Some(n) {
@@ -631,11 +645,15 @@ mod tests {
     }
 
     fn queue_shared(exec: Arc<dyn Executor>) -> (Queue, mpsc::Receiver<Event>) {
+        queue_elevated(exec, Arc::new(|| panic!("helper elevato non previsto")))
+    }
+
+    fn queue_elevated(exec: Arc<dyn Executor>, elevate: Elevate) -> (Queue, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel();
-        let q = Queue::new(exec, Arc::new(move |e| {
+        let sink: Sink = Arc::new(move |e| {
             let _ = tx.send(e);
-        }));
-        (q, rx)
+        });
+        (Queue::new(exec, elevate, sink), rx)
     }
 
     fn spec(kind: JobKind, sources: Vec<PathBuf>, dest: Option<&Path>, policy: ConflictPolicy) -> JobSpec {
@@ -1077,6 +1095,49 @@ mod tests {
         assert_eq!((v.state, v.errors.len()), (Done, 1));
         assert!(dest.join("p").is_dir());
         assert!(!exists(&dest.join("p").join("link")));
+    }
+
+    #[test]
+    fn retry_elevated_uses_the_elevated_executor() {
+        let d = tempfile::tempdir().unwrap();
+        let names = ["1.txt", "2.txt", "3.txt"];
+        for n in names {
+            std::fs::write(d.path().join(n), n).unwrap();
+        }
+        let dest = d.path().join("D");
+        let elevated = Arc::new(Fake::default());
+        let (calls, x) = (AtomicUsize::new(0), elevated.clone());
+        // Il primo avvio dell'helper fallisce come un UAC rifiutato.
+        let elevate: Elevate = Arc::new(move || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(AppError { detail: Some("uac_declined".into()), ..AppError::new(ErrorCode::AccessDenied, None) });
+            }
+            Ok(x.clone() as Arc<dyn Executor>)
+        });
+        let (q, rx) = queue_elevated(Arc::new(Fake { deny_copy: true, ..Default::default() }), elevate);
+        let sources = names.iter().map(|n| d.path().join(n)).collect();
+        let id = q.enqueue(spec(JobKind::Copy, sources, Some(&dest), ConflictPolicy::Ask));
+        let error_of = |p: &Prompt| match p {
+            Prompt::Error { error, can_elevate, .. } => (error.code, error.detail.clone(), *can_elevate),
+            _ => panic!("{p:?}"),
+        };
+        let p = next_prompt(&rx);
+        assert_eq!(error_of(&p), (ErrorCode::AccessDenied, None, true));
+        reply_error(&q, &p, ErrorAction::RetryElevated, false);
+        // UAC rifiutato: torna il prompt d'errore normale, da cui si può riprovare.
+        let p = next_prompt(&rx);
+        assert_eq!(error_of(&p), (ErrorCode::AccessDenied, Some("uac_declined".into()), true));
+        reply_error(&q, &p, ErrorAction::RetryElevated, false);
+        // Solo il file corrente: il secondo chiede di nuovo, ora "per tutti".
+        let p = next_prompt(&rx);
+        assert_eq!(error_of(&p), (ErrorCode::AccessDenied, None, true));
+        reply_error(&q, &p, ErrorAction::RetryElevated, true);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 0));
+        assert_eq!(elevated.copies.load(Ordering::SeqCst), 3);
+        for n in names {
+            assert_eq!(std::fs::read(dest.join(n)).unwrap(), n.as_bytes());
+        }
     }
 
     #[test]
