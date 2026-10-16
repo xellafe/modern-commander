@@ -6,12 +6,11 @@ import { useUi, type SidebarView } from "../../state/ui";
 const VIEWS: { id: SidebarView; icon: LucideIcon }[] = [
   { id: "explorer", icon: FolderTree },
   { id: "favorites", icon: Star },
-  { id: "settings", icon: Settings },
 ];
 
 export function ActivityBar() {
   const { t } = useTranslation();
-  const { sidebarView, sidebarVisible, setSidebarView, toggleSidebar } = useUi();
+  const { sidebarView, sidebarVisible, setSidebarView, toggleSidebar, page, openPage, closePage } = useUi();
 
   return (
     <nav className="mc-activity">
@@ -31,6 +30,16 @@ export function ActivityBar() {
           </button>
         );
       })}
+      {/* Le impostazioni non hanno una vista nella barra laterale: aprono la pagina a schermo intero. */}
+      <button
+        className={page === "settings" ? "end on" : "end"}
+        title={t("shell.views.settings")}
+        aria-label={t("shell.views.settings")}
+        aria-pressed={page === "settings"}
+        onClick={() => (page === "settings" ? closePage() : openPage("settings"))}
+      >
+        <Settings size={18} strokeWidth={1.6} />
+      </button>
     </nav>
   );
 }

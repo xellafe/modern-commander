@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import type { ConflictPolicy } from "../ipc/types";
 
-export type SidebarView = "explorer" | "search" | "git" | "favorites" | "settings";
+export type SidebarView = "explorer" | "search" | "git" | "favorites";
+
+/** Pagine a schermo intero sopra l'area dei gruppi. */
+export type PageKind = "settings" | "keybindings";
 
 export const SIDEBAR_MIN = 160;
 export const SIDEBAR_MAX = 480;
@@ -40,6 +43,9 @@ interface UiState {
   bottomPanelTab: "operations" | "terminal";
   bottomPanelHeight: number;
   dialog: DialogRequest | null;
+  page: PageKind | null;
+  openPage: (p: PageKind) => void;
+  closePage: () => void;
   /** Una finestra alla volta: se ce n'è già una aperta la richiesta è ignorata. */
   openDialog: (d: DialogRequest) => void;
   closeDialog: () => void;
@@ -60,6 +66,9 @@ export const useUi = create<UiState>((set) => ({
   bottomPanelTab: "operations",
   bottomPanelHeight: 180,
   dialog: null,
+  page: null,
+  openPage: (page) => set({ page }),
+  closePage: () => set({ page: null }),
   openDialog: (d) => set((s) => (s.dialog ? s : { dialog: d })),
   closeDialog: () => set({ dialog: null }),
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),

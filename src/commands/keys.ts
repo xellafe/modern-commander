@@ -15,6 +15,13 @@ function keyName(code: number): string {
   return NAMED[code] ?? `VK${code}`;
 }
 
+const DISPLAY: Record<string, string> = {
+  Oem3: '`', Oem5: '\\', Comma: ',', NumAdd: 'Num +', NumSubtract: 'Num -', NumMultiply: 'Num *',
+};
+
+/** Un chord canonico ('Ctrl+Oem3') come elenco di tasti da mostrare (['Ctrl', '`']). */
+export const chordParts = (chord: string): string[] => chord.split('+').map((k) => DISPLAY[k] ?? k);
+
 interface KeyLike {
   keyCode: number;
   ctrlKey: boolean;

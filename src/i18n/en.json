@@ -143,7 +143,9 @@
     "cm_ContextMenu": "Context menu",
     "cm_Properties": "Properties",
     "cm_List": "View",
-    "cm_Edit": "Edit"
+    "cm_Edit": "Edit",
+    "cm_Config": "Settings",
+    "mc_Keybindings": "Keyboard shortcuts"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",
@@ -242,5 +244,77 @@
     "cancelJob": "Cancel",
     "clearFinished": "Clear finished",
     "empty": "No operations."
+  },
+  "settings": {
+    "searchPlaceholder": "Search settings",
+    "close": "Close",
+    "noResults": "No settings found.",
+    "categories": {
+      "all": "All",
+      "appearance": "Appearance",
+      "files": "Files",
+      "editor": "Editor"
+    },
+    "items": {
+      "theme": {
+        "label": "Theme",
+        "desc": "Color theme of the interface."
+      },
+      "language": {
+        "label": "Language",
+        "desc": "Language of the interface, applied immediately."
+      },
+      "showHidden": {
+        "label": "Show hidden files",
+        "desc": "Show files and folders with the Hidden attribute."
+      },
+      "showSystem": {
+        "label": "Show system files",
+        "desc": "Show files and folders with the System attribute."
+      },
+      "confirmDelete": {
+        "label": "Confirm before deleting",
+        "desc": "Ask for confirmation before moving items to the Recycle Bin or deleting them."
+      },
+      "externalEditor": {
+        "label": "External editor",
+        "desc": "Program that opens files with F4 (command or full path)."
+      }
+    },
+    "options": {
+      "theme": {
+        "system": "Follow Windows",
+        "dark": "Dark",
+        "light": "Light"
+      },
+      "language": {
+        "en": "English",
+        "it": "Italiano"
+      }
+    },
+    "errors": {
+      "editorEmpty": "Enter the name or path of a program."
+    }
+  },
+  "keybindings": {
+    "searchPlaceholder": "Search by command, id or key",
+    "columns": {
+      "command": "Command",
+      "keys": "Keybinding",
+      "source": "Source"
+    },
+    "source": {
+      "default": "Default",
+      "user": "User"
+    },
+    "unassigned": "Not assigned",
+    "capturePrompt": "Press the new key combination…",
+    "captureHint": "Esc cancels · Backspace removes the binding",
+    "conflict": "{{chord}} is already used by “{{command}}”.",
+    "replace": "Replace",
+    "reset": "Reset",
+    "resetFor": "Reset “{{command}}” to its default",
+    "rowHint": "Double-click or press Enter to change the key",
+    "noResults": "No commands found."
   }
 }

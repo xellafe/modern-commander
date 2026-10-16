@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useJobs } from "../../state/jobs";
 import { useUi } from "../../state/ui";
@@ -8,9 +8,8 @@ import { DeleteConfirm } from "./DeleteConfirm";
 import { ErrorDialog } from "./ErrorDialog";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
+import { trapTab, useModalFocus } from "./focusTrap";
 import "./dialogs.css";
-
-const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 interface DialogProps {
   title: string;
@@ -29,16 +28,7 @@ interface DialogProps {
 export function Dialog({ title, onCancel, onConfirm, children, actions }: DialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
-    const el = ref.current!;
-    const first = el.querySelector<HTMLElement>("[data-autofocus]") ?? el.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? el).focus();
-    if (first instanceof HTMLInputElement && first.type === "text") first.select();
-    return () => {
-      if (before?.isConnected) before.focus();
-    };
-  }, []);
+  useModalFocus(ref);
 
   // Si fermano solo i tasti gestiti qui o dai figli (`preventDefault`): gli altri arrivano a useKeyboard,
   // che col focus nella finestra esegue solo i comandi `global` (Alt+F4…).
@@ -51,12 +41,7 @@ export function Dialog({ title, onCancel, onConfirm, children, actions }: Dialog
       e.preventDefault();
       onConfirm();
     } else if (e.key === "Tab") {
-      const items = [...ref.current!.querySelectorAll<HTMLElement>(FOCUSABLE)];
-      if (!items.length) return;
-      const i = items.indexOf(document.activeElement as HTMLElement);
-      const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : (i + 1) % items.length;
-      e.preventDefault();
-      items[next].focus();
+      trapTab(e, ref.current!);
     }
   };
 

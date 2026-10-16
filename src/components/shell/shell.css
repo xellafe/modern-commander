@@ -65,6 +65,7 @@ body {
   background: var(--mc-panel); border-right: 1px solid var(--mc-border);
 }
 .mc-activity button { position: relative; width: 32px; height: 32px; border-radius: var(--mc-radius); }
+.mc-activity button.end { margin-top: auto; margin-bottom: 6px; } /* Impostazioni in fondo, come in VS Code */
 .mc-activity button.on { color: var(--mc-text); }
 .mc-activity button.on::before {
   content: ""; position: absolute; left: -3px; top: 6px; bottom: 6px; width: 2px;
@@ -80,6 +81,8 @@ body {
 }
 .mc-sidebar-body { flex: 1; min-height: 0; overflow: auto; }
 
+/* Contenitore dei gruppi e delle pagine a schermo intero (impostazioni, scorciatoie) */
+.mc-center { position: relative; flex: 1; display: flex; min-width: 0; }
 .mc-groups { flex: 1; min-width: 0; background: var(--mc-bg); }
 
 /* Pannello in basso */

@@ -4,6 +4,7 @@ vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { Entry } from "../ipc/types";
 import { useLayout } from "./layout";
+import { useSettings } from "./settings";
 import { useTabViews } from "./tabViews";
 
 const listDir = vi.mocked(api.listDir);
@@ -110,4 +111,33 @@ test("going up puts the cursor on the folder we came from", async () => {
   await useTabViews.getState().load("t1", "D:\\a", { focus: "sub" });
   const v = useTabViews.getState().views["t1"];
   expect(v.rows[v.cursor].name).toBe("sub");
+});
+
+test("rebuildAll applies showHidden to every open tab and keeps each cursor on the same name", async () => {
+  const hidden = (name: string): Entry => ({ ...f(name), attributes: 0x2 });
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["t1", "t2"], activeTabId: "t1" }],
+    tabs: { t1: { id: "t1", path: "C:\\" }, t2: { id: "t2", path: "C:\\" } },
+  });
+  listDir.mockResolvedValue([f("a"), hidden(".h"), f("b")]);
+  await useTabViews.getState().load("t1", "D:\\a");
+  await useTabViews.getState().load("t2", "D:\\a");
+  const names = (id: string) => useTabViews.getState().views[id].rows.map((r) => r.name);
+  expect(names("t1")).toEqual(["..", "a", "b"]);
+  for (const id of ["t1", "t2"]) {
+    useTabViews.getState().update(id, (x) => ({ ...x, cursor: x.rows.findIndex((r) => r.name === "b") }));
+  }
+
+  useSettings.setState({ showHidden: true });
+  useTabViews.getState().rebuildAll();
+  for (const id of ["t1", "t2"]) {
+    const v = useTabViews.getState().views[id];
+    expect(names(id)).toEqual(["..", ".h", "a", "b"]);
+    expect(v.rows[v.cursor].name).toBe("b");
+  }
+
+  useSettings.setState({ showHidden: false });
+  useTabViews.getState().rebuildAll();
+  expect(names("t2")).toEqual(["..", "a", "b"]);
+  expect(useTabViews.getState().views["t2"].rows[useTabViews.getState().views["t2"].cursor].name).toBe("b");
 });

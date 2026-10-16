@@ -48,6 +48,8 @@ interface TabViewsState {
   update: (tabId: string, fn: (v: TabView) => TabView) => void;
   /** Cambia ordinamento o filtro e ricostruisce le righe dal listing già in memoria. */
   rebuild: (tabId: string, patch: Partial<Pick<TabView, "sort" | "filter">>) => void;
+  /** Ricostruisce le righe di tutte le schede aperte (cambio di file nascosti/di sistema), cursore per nome. */
+  rebuildAll: () => void;
   /** Da chiamare quando una scheda viene chiusa. */
   dispose: (tabId: string) => void;
   showNotice: (tabId: string, error: unknown) => void;
@@ -197,6 +199,10 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
     const rows = rowsFor(listings.get(tabId) ?? [], v.history[v.historyIndex], v);
     const cursor = indexOrClamp(rows, v0.rows[v0.cursor]?.name, v0.cursor);
     set((s) => ({ views: { ...s.views, [tabId]: { ...v, rows, cursor } } }));
+  },
+
+  rebuildAll: () => {
+    for (const tabId of Object.keys(get().views)) get().rebuild(tabId, {});
   },
 
   dispose: (tabId) => {

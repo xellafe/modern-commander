@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { chordFromEvent, quickSearchChar } from './keys';
+import { chordFromEvent, chordParts, quickSearchChar } from './keys';
 
 const ev = (keyCode: number, m: { c?: boolean; s?: boolean; a?: boolean } = {}) => ({
   keyCode,
@@ -49,4 +49,15 @@ test('quickSearchChar: letters, Ctrl+Alt+letter, never AltGr', () => {
   expect(quickSearchChar(typed('a', 65, { c: true }))).toBeNull();
   expect(quickSearchChar(typed(' ', 32))).toBeNull();
   expect(quickSearchChar(typed('Enter', 13))).toBeNull();
+});
+
+test('chordParts: readable key names for display', () => {
+  expect(chordParts('F5')).toEqual(['F5']);
+  expect(chordParts('Ctrl+Oem3')).toEqual(['Ctrl', '`']);
+  expect(chordParts('Ctrl+Shift+Oem5')).toEqual(['Ctrl', 'Shift', '\\']);
+  expect(chordParts('Ctrl+Comma')).toEqual(['Ctrl', ',']);
+  expect(chordParts('Ctrl+NumAdd')).toEqual(['Ctrl', 'Num +']);
+  expect(chordParts('NumSubtract')).toEqual(['Num -']);
+  expect(chordParts('NumMultiply')).toEqual(['Num *']);
+  expect(chordParts('Ctrl+VK186')).toEqual(['Ctrl', 'VK186']);
 });

@@ -143,7 +143,9 @@
     "cm_ContextMenu": "Menu contestuale",
     "cm_Properties": "Proprietà",
     "cm_List": "Visualizza",
-    "cm_Edit": "Modifica"
+    "cm_Edit": "Modifica",
+    "cm_Config": "Impostazioni",
+    "mc_Keybindings": "Scorciatoie da tastiera"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",
@@ -242,5 +244,77 @@
     "cancelJob": "Annulla",
     "clearFinished": "Pulisci completati",
     "empty": "Nessuna operazione."
+  },
+  "settings": {
+    "searchPlaceholder": "Cerca nelle impostazioni",
+    "close": "Chiudi",
+    "noResults": "Nessuna impostazione trovata.",
+    "categories": {
+      "all": "Tutte",
+      "appearance": "Aspetto",
+      "files": "File",
+      "editor": "Editor"
+    },
+    "items": {
+      "theme": {
+        "label": "Tema",
+        "desc": "Tema dei colori dell'interfaccia."
+      },
+      "language": {
+        "label": "Lingua",
+        "desc": "Lingua dell'interfaccia, applicata subito."
+      },
+      "showHidden": {
+        "label": "Mostra file nascosti",
+        "desc": "Mostra file e cartelle con l'attributo Nascosto."
+      },
+      "showSystem": {
+        "label": "Mostra file di sistema",
+        "desc": "Mostra file e cartelle con l'attributo Sistema."
+      },
+      "confirmDelete": {
+        "label": "Conferma prima di eliminare",
+        "desc": "Chiede conferma prima di spostare gli elementi nel Cestino o di eliminarli."
+      },
+      "externalEditor": {
+        "label": "Editor esterno",
+        "desc": "Programma che apre i file con F4 (comando o percorso completo)."
+      }
+    },
+    "options": {
+      "theme": {
+        "system": "Segui Windows",
+        "dark": "Scuro",
+        "light": "Chiaro"
+      },
+      "language": {
+        "en": "English",
+        "it": "Italiano"
+      }
+    },
+    "errors": {
+      "editorEmpty": "Inserisci il nome o il percorso di un programma."
+    }
+  },
+  "keybindings": {
+    "searchPlaceholder": "Cerca per comando, id o tasto",
+    "columns": {
+      "command": "Comando",
+      "keys": "Tasti",
+      "source": "Origine"
+    },
+    "source": {
+      "default": "Predefinita",
+      "user": "Utente"
+    },
+    "unassigned": "Nessun tasto",
+    "capturePrompt": "Premi la nuova combinazione di tasti…",
+    "captureHint": "Esc annulla · Backspace rimuove il tasto",
+    "conflict": "{{chord}} è già usato da «{{command}}».",
+    "replace": "Sostituisci",
+    "reset": "Ripristina",
+    "resetFor": "Ripristina «{{command}}» al valore predefinito",
+    "rowHint": "Doppio click o Invio per cambiare il tasto",
+    "noResults": "Nessun comando trovato."
   }
 }
