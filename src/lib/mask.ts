@@ -13,10 +13,17 @@ const compile = (pattern: string): RegExp => {
 const patterns = (list: string): RegExp[] =>
   list.split(/[; ]+/).filter(Boolean).map(compile);
 
-export function matchMask(name: string, mask: string): boolean {
+/** Compila la maschera una volta sola: da usare quando si filtrano molti nomi. */
+export function compileMask(mask: string): (name: string) => boolean {
   const bar = mask.indexOf("|");
   const include = patterns(bar < 0 ? mask : mask.slice(0, bar));
   const exclude = bar < 0 ? [] : patterns(mask.slice(bar + 1));
-  if (exclude.some((r) => r.test(name))) return false;
-  return include.length === 0 || include.some((r) => r.test(name));
+  return (name) =>
+    !exclude.some((r) => r.test(name)) && (include.length === 0 || include.some((r) => r.test(name)));
 }
+
+export const matchMask = (name: string, mask: string): boolean => compileMask(mask)(name);
+
+/** Filtro rapido (Ctrl+S): un testo senza jolly cerca una sottostringa, come in TC. */
+export const quickFilterMask = (text: string): string =>
+  !text || /[*?|;]/.test(text) ? text : `*${text}*`;

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { chordFromEvent } from './keys';
+import { chordFromEvent, quickSearchChar } from './keys';
 
 const ev = (keyCode: number, m: { c?: boolean; s?: boolean; a?: boolean } = {}) => ({
   keyCode,
@@ -25,4 +25,27 @@ test('named keys and the VK<n> fallback', () => {
   expect(chordFromEvent(ev(135))).toBe('F24');
   expect(chordFromEvent(ev(34))).toBe('PageDown');
   expect(chordFromEvent(ev(186, { c: true }))).toBe('Ctrl+VK186');
+});
+
+const altGr = (keyCode: number) => ({ ...ev(keyCode, { c: true, a: true }), getModifierState: (k: string) => k === 'AltGraph' });
+
+test('AltGr never produces a Ctrl+Alt chord', () => {
+  expect(chordFromEvent(altGr(69))).toBe('AltGr+E');
+  expect(chordFromEvent({ ...ev(69, { c: true, a: true }), getModifierState: () => false })).toBe('Ctrl+Alt+E');
+});
+
+const typed = (key: string, keyCode: number, m: { c?: boolean; a?: boolean; g?: boolean } = {}) => ({
+  key, keyCode, ctrlKey: !!m.c, altKey: !!m.a, shiftKey: false, metaKey: false,
+  getModifierState: (k: string) => k === 'AltGraph' && !!m.g,
+});
+
+test('quickSearchChar: letters, Ctrl+Alt+letter, never AltGr', () => {
+  expect(quickSearchChar(typed('a', 65))).toBe('a');
+  expect(quickSearchChar(typed('.', 190))).toBe('.');
+  expect(quickSearchChar(typed('a', 65, { c: true, a: true }))).toBe('a');
+  expect(quickSearchChar(typed('€', 69, { c: true, a: true, g: true }))).toBeNull();
+  expect(quickSearchChar(typed('@', 192, { c: true, a: true, g: true }))).toBeNull();
+  expect(quickSearchChar(typed('a', 65, { c: true }))).toBeNull();
+  expect(quickSearchChar(typed(' ', 32))).toBeNull();
+  expect(quickSearchChar(typed('Enter', 13))).toBeNull();
 });

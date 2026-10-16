@@ -6,6 +6,7 @@ import {
   emptyView,
   forward,
   invertMarks,
+  jumpTo,
   markRange,
   navigateTo,
   parentPath,
@@ -158,6 +159,13 @@ describe("history", () => {
     expect(b.historyIndex).toBe(0);
     expect(back(b)).toBe(b);
     expect(forward(b).historyIndex).toBe(1);
+  });
+
+  it("jumpTo salta a un indice qualsiasi senza toccare la history", () => {
+    const v = { ...navigateTo(navigateTo(emptyView("C:\\"), "C:\\a"), "C:\\b"), cursor: 3 };
+    const j = jumpTo(v, 0);
+    expect([j.historyIndex, j.cursor, j.history.length]).toEqual([0, 0, 3]);
+    expect(jumpTo(v, 9)).toBe(v);
   });
 });
 

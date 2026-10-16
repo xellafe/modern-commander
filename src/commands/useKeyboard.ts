@@ -3,7 +3,7 @@ import { chordFromEvent } from './keys';
 import { executeCommand, getCommand, shouldExecute } from './registry';
 
 // Focus in un campo di testo o dentro una finestra di dialogo: solo i comandi 'global'.
-function focusInTextOrDialog(): boolean {
+export function focusInTextOrDialog(): boolean {
   const el = document.activeElement;
   if (!(el instanceof HTMLElement)) return false;
   return el.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])') || el.closest('[role="dialog"]') !== null;

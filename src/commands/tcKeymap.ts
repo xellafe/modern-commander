@@ -15,6 +15,18 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   'Shift+Delete': 'mc_DeletePermanent',
   'Alt+F4': 'cm_Exit',
 
+  // Cursore (in TC sono tasti fissi, senza id cm_*)
+  Up: 'mc_CursorUp',
+  Down: 'mc_CursorDown',
+  PageUp: 'mc_CursorPageUp',
+  PageDown: 'mc_CursorPageDown',
+  Home: 'mc_CursorHome',
+  End: 'mc_CursorEnd',
+  Left: 'mc_CursorLeft',
+  Right: 'mc_CursorRight',
+  'Shift+Up': 'mc_MarkUp',
+  'Shift+Down': 'mc_MarkDown',
+
   Tab: 'mc_FocusNextGroup',
   'Shift+Tab': 'mc_FocusPrevGroup',
   Enter: 'cm_Return',

@@ -1,9 +1,11 @@
-import type { Entry } from "../ipc/types";
-import { matchMask } from "../lib/mask";
+import type { Drive, Entry } from "../ipc/types";
+import { compileMask } from "../lib/mask";
 
 export type SortKey = "name" | "ext" | "size" | "date" | "none";
 export interface Row extends Entry {
   isParent?: boolean;
+  /** Solo nella pseudo-cartella `drives:`: l'unità rappresentata dalla riga. */
+  drive?: Drive;
 }
 export interface TabView {
   rows: Row[];
@@ -72,11 +74,12 @@ export function buildRows(
       default: return 0;
     }
   };
+  const match = compileMask(opts.filter);
   const visible = entries.filter(
     (e) =>
       (opts.showHidden || !(e.attributes & ATTR_HIDDEN)) &&
       (opts.showSystem || !(e.attributes & ATTR_SYSTEM)) &&
-      (e.isDir || !opts.filter || matchMask(e.name, opts.filter)),
+      (e.isDir || !opts.filter || match(e.name)),
   );
   // Array.sort è stabile: con "none" restano l'ordine del listing dentro ogni blocco.
   const sorted = visible.sort((a, b) => {
@@ -111,8 +114,9 @@ export function selectByMask(v: TabView, mask: string, select: boolean): TabView
   const include = mask.split("|")[0].trim();
   const withDirs = include === "*" || include === "*.*";
   const marked = new Set(v.marked);
+  const match = compileMask(mask);
   for (const r of v.rows) {
-    if (r.isParent || (r.isDir && !withDirs) || !matchMask(r.name, mask)) continue;
+    if (r.isParent || (r.isDir && !withDirs) || !match(r.name)) continue;
     if (select) marked.add(r.name);
     else marked.delete(r.name);
   }
@@ -149,6 +153,10 @@ export const back = (v: TabView): TabView =>
 
 export const forward = (v: TabView): TabView =>
   v.historyIndex >= v.history.length - 1 ? v : moved(v, v.history, v.historyIndex + 1);
+
+/** Salto a una voce qualsiasi della history (menu Alt+↓). */
+export const jumpTo = (v: TabView, index: number): TabView =>
+  index < 0 || index >= v.history.length || index === v.historyIndex ? v : moved(v, v.history, index);
 
 export function quickSearch(rows: Row[], prefix: string, from: number): number {
   if (!prefix) return -1;

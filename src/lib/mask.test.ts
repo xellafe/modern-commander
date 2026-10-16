@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchMask } from "./mask";
+import { compileMask, matchMask, quickFilterMask } from "./mask";
 
 describe("matchMask (semantica TC)", () => {
   it("copre i casi base", () => {
@@ -26,5 +26,20 @@ describe("matchMask (semantica TC)", () => {
   it("'?' e '*' rispettano la lunghezza", () => {
     expect(matchMask("abc", "a?")).toBe(false);
     expect(matchMask("abc", "a*c")).toBe(true);
+  });
+});
+
+describe("compileMask e quickFilterMask", () => {
+  it("compileMask equivale a matchMask", () => {
+    const m = compileMask("*.txt|a*");
+    expect(m("b.TXT")).toBe(true);
+    expect(m("a.txt")).toBe(false);
+    expect(compileMask("")("x")).toBe(true);
+  });
+
+  it("il filtro rapido senza jolly cerca una sottostringa", () => {
+    expect(quickFilterMask("ell")).toBe("*ell*");
+    expect(quickFilterMask("*.md")).toBe("*.md");
+    expect(quickFilterMask("")).toBe("");
   });
 });

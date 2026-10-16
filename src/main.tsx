@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { registerNavigationCommands } from "./commands/navigation";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
 import { resolveTheme, useSettings } from "./state/settings";
@@ -12,6 +13,7 @@ const applyTheme = () => {
 
 // Tema di default subito, prima di qualsiasi await: niente flash non stilizzato.
 applyTheme();
+registerNavigationCommands();
 
 async function bootstrap() {
   // Se la lettura fallisce l'app parte comunque con i valori di default.

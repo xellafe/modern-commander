@@ -15,7 +15,29 @@ function keyName(code: number): string {
   return NAMED[code] ?? `VK${code}`;
 }
 
-export function chordFromEvent(e: { keyCode: number; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): string {
-  const mods = [e.ctrlKey && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt'].filter(Boolean);
-  return [...mods, keyName(e.keyCode)].join('+');
+interface KeyLike {
+  keyCode: number;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  getModifierState?: (key: string) => boolean;
+}
+
+// AltGr (layout italiano: AltGr+è = '[') arriva come Ctrl+Alt: diventa "AltGr+…",
+// così un carattere digitato non fa mai scattare una scorciatoia Ctrl+Alt.
+const isAltGr = (e: KeyLike) => e.ctrlKey && e.altKey && e.getModifierState?.('AltGraph') === true;
+
+export function chordFromEvent(e: KeyLike): string {
+  const mods = isAltGr(e)
+    ? ['AltGr', e.shiftKey && 'Shift']
+    : [e.ctrlKey && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt'];
+  return [...mods.filter(Boolean), keyName(e.keyCode)].join('+');
+}
+
+/** Carattere per la ricerca rapida: un tasto stampabile senza modificatori, oppure Ctrl+Alt+lettera (mai AltGr). */
+export function quickSearchChar(e: KeyLike & { key: string; metaKey: boolean }): string | null {
+  if (e.metaKey || isAltGr(e)) return null;
+  if (e.ctrlKey && e.altKey) return e.keyCode >= 65 && e.keyCode <= 90 ? String.fromCharCode(e.keyCode).toLowerCase() : null;
+  if (e.ctrlKey || e.altKey || e.key.length !== 1 || e.key === ' ') return null;
+  return e.key;
 }

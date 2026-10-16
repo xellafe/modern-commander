@@ -12,6 +12,24 @@
   --mc-radius: 0;
   --mc-font-ui: "Segoe UI Variable", "Segoe UI", sans-serif;
   --mc-font-mono: "Cascadia Code", Consolas, monospace;
+  /* Lista file: cursore del gruppo inattivo, segno della scheda inattiva, rientro della riga cursore */
+  --mc-selection-inactive: #1f232a;
+  --mc-tab-mark-inactive: #4a505c;
+  --mc-row-inset: 0;
+  --mc-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  /* Icone monocromatiche (variante A) */
+  --mc-icon-folder: var(--mc-muted);
+  --mc-icon-image: var(--mc-muted);
+  --mc-icon-code: var(--mc-muted);
+  --mc-icon-data: var(--mc-muted);
+  --mc-icon-doc: var(--mc-muted);
+  --mc-icon-pdf: var(--mc-muted);
+  --mc-icon-archive: var(--mc-muted);
+  --mc-icon-audio: var(--mc-muted);
+  --mc-icon-video: var(--mc-muted);
+  --mc-icon-sheet: var(--mc-muted);
+  --mc-icon-exec: var(--mc-muted);
+  --mc-icon-file: var(--mc-muted);
 }
 
 [data-theme="light"] {
@@ -28,4 +46,21 @@
   --mc-radius: 6px;
   --mc-font-ui: "Segoe UI Variable", "Segoe UI", sans-serif;
   --mc-font-mono: "Cascadia Code", Consolas, monospace;
+  --mc-selection-inactive: rgba(43, 42, 39, 0.06);
+  --mc-tab-mark-inactive: #c9c5b9;
+  --mc-row-inset: 4px;
+  --mc-shadow: 0 8px 24px rgba(60, 50, 30, 0.16);
+  /* Icone colorate tenui (variante C) */
+  --mc-icon-folder: #c79a4a;
+  --mc-icon-image: #d08a4e;
+  --mc-icon-code: #6f8fb8;
+  --mc-icon-data: #a8973a;
+  --mc-icon-doc: #6f9bb3;
+  --mc-icon-pdf: #c9675f;
+  --mc-icon-archive: #9a7d5c;
+  --mc-icon-audio: #9a7fc0;
+  --mc-icon-video: #b9739a;
+  --mc-icon-sheet: #5f9a64;
+  --mc-icon-exec: #8a877e;
+  --mc-icon-file: #a19d92;
 }
