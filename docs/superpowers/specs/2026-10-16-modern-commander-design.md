@@ -171,7 +171,7 @@ Riferimento visivo: le bozze `layout-v2.html` e `visual-style.html` (variante A 
   - Al primo uso si avvia un **processo helper elevato**: lo stesso eseguibile con un argomento dedicato, lanciato con `ShellExecuteEx` + verbo `runas`, quindi compare il prompt UAC. L'helper resta vivo finché ci sono operazioni elevate, poi esce dopo un periodo di inattività.
   - **Sicurezza** (non semplificabile) **[S]**:
     - L'IPC passa per una named pipe con ACL limitata al SID dell'utente corrente e un token monouso passato all'avvio.
-    - L'helper esegue solo le primitive su file della coda (copia, sposta, elimina, crea cartella, rinomina, attributi). Mai comandi arbitrari, shell o caricamento di codice.
+    - L'helper esegue solo le primitive su file della coda (copia, sposta, elimina, crea cartella, rinomina, attributi, elenco in sola lettura di una cartella; l'elenco serve per "Riprova come amministratore" sulle cartelle illeggibili). Mai comandi arbitrari, shell o caricamento di codice.
     - I percorsi vengono validati e normalizzati nell'helper.
   - La coda tratta le operazioni elevate come le altre: avanzamento, pausa e annullamento passano per la pipe.
 - Calcolo della dimensione delle cartelle: Spazio su una cartella la marca e ne mostra la dimensione nella colonna. Esiste anche un comando "calcola tutte".
