@@ -491,27 +491,27 @@ DEFAULT_KEYMAP: Record<string, string>   // chord -> command id
   | Tasti | Comando | Tasti | Comando |
   |---|---|---|---|
   | F3 | cm_List | F4 | cm_Edit |
-  | F5 | cm_Copy | Shift+F5 | cm_CopySamePanel |
+  | F5 | cm_Copy | Shift+F5 | cm_CopySamepanel |
   | F6 | cm_RenMov | Shift+F6 | cm_RenameOnly |
   | F7 | cm_MkDir | F8, Delete | cm_Delete |
   | Shift+F8, Shift+Delete | mc_DeletePermanent | Alt+F4 | cm_Exit |
-  | Tab / Shift+Tab | mc_FocusNextGroup / mc_FocusPrevGroup | Enter | mc_Open |
+  | Tab / Shift+Tab | mc_FocusNextGroup / mc_FocusPrevGroup | Enter | cm_Return |
   | Backspace, Ctrl+PageUp | cm_GoToParent | Ctrl+Oem5 (Ctrl+\\) | cm_GoToRoot |
-  | Alt+Left / Alt+Right | mc_HistoryBack / mc_HistoryForward | Alt+Down | cm_DirectoryHistory |
-  | Insert | mc_MarkAndDown | Space | mc_MarkOrSize |
+  | Alt+Left / Alt+Right | cm_GotoPreviousDir / cm_GotoNextDir | Alt+Down | cm_DirectoryHistory |
+  | Insert | cm_Reverse | Space | mc_MarkOrSize |
   | NumAdd / NumSubtract / NumMultiply | cm_SpreadSelection / cm_ShrinkSelection / cm_ExchangeSelection | Ctrl+A, Ctrl+NumAdd / Ctrl+NumSubtract | cm_SelectAll / cm_ClearAll |
   | Ctrl+T / Ctrl+W | cm_OpenNewTab / cm_CloseCurrentTab | Ctrl+Tab / Ctrl+Shift+Tab | cm_SwitchToNextTab / cm_SwitchToPreviousTab |
   | Ctrl+R | cm_RereadSource | Ctrl+D | cm_DirectoryHotlist |
   | Ctrl+F1 / Ctrl+F2 | cm_SrcShort / cm_SrcLong | Ctrl+F3…F7 | cm_SrcByName / ByExt / ByDateTime / BySize / Unsorted |
-  | Ctrl+S | mc_QuickFilter | Ctrl+U | cm_Exchange |
-  | Ctrl+Left / Ctrl+Right | mc_OpenInPrevGroup / mc_OpenInNextGroup | Alt+F1 | mc_OpenDrives |
-  | Alt+Enter | cm_Properties | Shift+F10 | mc_ContextMenu |
+  | Ctrl+S | cm_QuickFilter | Ctrl+U | cm_Exchange |
+  | Ctrl+Left / Ctrl+Right | mc_OpenInPrevGroup / mc_OpenInNextGroup | Alt+F1 | cm_SrcOpenDrives |
+  | Alt+Enter | cm_Properties | Shift+F10 | cm_ContextMenu |
   | Alt+Shift+Enter | cm_CountDirContent | Ctrl+Shift+E | mc_ToggleSidebar |
-  | Ctrl+Oem3 (Ctrl+ò) | mc_ToggleBottomPanel | Ctrl+Comma | mc_Settings |
+  | Ctrl+Oem3 (Ctrl+ò) | mc_ToggleBottomPanel | Ctrl+Comma | cm_Config |
 
   La vista miniature (`cm_SrcThumbs`, Ctrl+Shift+F1) passa alla fase 2, perché usa la stessa infrastruttura di anteprime dell'ispettore. In fase 1 `TabView.view` può valere solo `'full'` o `'brief'`.
 
-  `mc_SplitGroup` non ha un tasto di default: va scelto un chord libero nella mappa TC (vedi spec §5.2) e annotato qui. Le lettere senza modificatori e Ctrl+Alt+lettera vanno alla ricerca rapida (Task 11), non a un comando.
+  `mc_SplitGroup` = Ctrl+Shift+Oem5 (Ctrl+Shift+\\), scelto in T10 perché Ctrl+\\ è `cm_GoToRoot`. Gli id sono stati verificati in T10 sulla lista ufficiale dei comandi TC; quelli `cm_*` di questo piano sono già i nomi definitivi. Le lettere senza modificatori e Ctrl+Alt+lettera vanno alla ricerca rapida (Task 11), non a un comando.
 
 - [ ] **Step 1: Test**
 
@@ -584,18 +584,18 @@ test('reload keeps cursor on the same name', async () => { /* rows a,b,c con cur
   - Colonne: icona, Nome, Est., Dim. (`‹dir›` o la dimensione calcolata), Modificato, Attributi.
   - Click sull'intestazione = ordinamento.
   - Il cursore ha lo sfondo `--mc-selection`; i nomi marcati hanno il colore `--mc-accent`.
-  - Mouse: click = cursore; Ctrl+click = marca; Shift+click = intervallo; doppio click = `mc_Open`.
+  - Mouse: click = cursore; Ctrl+click = marca; Shift+click = intervallo; doppio click = `cm_Return`.
   - `TabStrip`: schede con il nome della cartella, "+", chiusura con click centrale, drag per riordinare e per spostare tra gruppi (HTML5 DnD).
   - `Breadcrumb`: segmenti cliccabili; click sullo spazio vuoto → input modificabile, Invio naviga, Esc annulla.
   - `GroupsArea`: gruppi affiancati con separatori trascinabili, larghezza minima 240 px.
   - Gruppo inattivo attenuato come nella bozza.
   - Ricerca rapida: lettere e Ctrl+Alt+lettera → popup con il prefisso, cursore su `quickSearch`, Esc chiude.
-  - `mc_QuickFilter` (Ctrl+S) apre un input che imposta `filter`.
-  - `mc_Open`:
+  - `cm_QuickFilter` (Ctrl+S) apre un input che imposta `filter`.
+  - `cm_Return`:
     - su una cartella naviga
     - su `..` va alla cartella superiore
     - su un file chiama `open_path` (Task 18)
-  - `mc_OpenDrives` apre un menu con le unità per il gruppo attivo.
+  - `cm_SrcOpenDrives` apre un menu con le unità per il gruppo attivo.
   - `cm_DirectoryHistory` (Alt+↓) apre un menu con la `history` della scheda, la più recente in alto.
   - `cm_Exchange` (Ctrl+U) scambia le cartelle della scheda attiva e della scheda attiva di `targetGroup`; con un solo gruppo non fa niente.
   - `mc_OpenInPrevGroup` / `mc_OpenInNextGroup` (Ctrl+←/→) aprono la cartella sotto il cursore, o quella corrente se il cursore è su un file, nella scheda attiva del gruppo adiacente.
@@ -836,7 +836,7 @@ pub enum ErrorAction { Retry, Skip, Cancel, RetryElevated }
   - `formatSize(bytes: number, lang: 'en' | 'it'): string`
   - `formatEta(seconds: number): string`
   - `useJobs` (`Record<JobId, JobView>` + la coda dei prompt in attesa)
-  - i comandi `cm_Copy`, `cm_CopySamePanel`, `cm_RenMov`, `cm_RenameOnly`, `cm_MkDir`, `cm_Delete`, `mc_DeletePermanent`, `cm_SpreadSelection`, `cm_ShrinkSelection`
+  - i comandi `cm_Copy`, `cm_CopySamepanel`, `cm_RenMov`, `cm_RenameOnly`, `cm_MkDir`, `cm_Delete`, `mc_DeletePermanent`, `cm_SpreadSelection`, `cm_ShrinkSelection`
 
 - [ ] **Step 1: Test:** `formatSize(0,'it') === '0 B'`, `formatSize(1536,'it') === '1,5 KB'`, `formatSize(1536,'en') === '1.5 KB'`, `formatSize(2.4*1024**3,'it') === '2,4 GB'`; `formatEta(65) === '1:05'`, `formatEta(3725) === '1:02:05'`.
 - [ ] **Step 2:** `npm test` → FAIL, poi implementare, poi `npm test` → PASS.
@@ -934,11 +934,11 @@ impl ElevatedExecutor { pub fn spawn() -> Result<Self, AppError>; fn spawn_with(
 - Produces:
   - `#[tauri::command] open_path(path: String) -> Result<(), AppError>`, con `ShellExecuteExW` verbo `open`
   - `#[tauri::command] open_with(exe: String, path: String) -> Result<(), AppError>`, con `std::process::Command`, senza shell
-  - i comandi `mc_ContextMenu`, `cm_Properties`, `cm_List`, `cm_Edit`
+  - i comandi `cm_ContextMenu`, `cm_Properties`, `cm_List`, `cm_Edit`
 
 - [ ] **Step 1:** Comandi:
   - Il tasto destro su una riga sposta il cursore lì (o mantiene la marcatura se la riga è già marcata) e chiama `show_context_menu` con `markedOrCursor` e le coordinate × `devicePixelRatio`.
-  - `mc_ContextMenu` (Shift+F10, tasto Menu) apre il menu alla posizione della riga col cursore.
+  - `cm_ContextMenu` (Shift+F10, tasto Menu) apre il menu alla posizione della riga col cursore.
   - `cm_Properties` → `show_properties`.
   - Il drag delle righe fuori dalla finestra chiama `start_drag`; le righe trascinate sono quelle marcate oppure quella sotto il mouse.
   - Fase 1: `cm_List` (F3) apre il file con il programma di default (`open_path`), `cm_Edit` (F4) con `externalEditor` (`open_with`). In fase 2 verranno sostituiti dal viewer e dall'editor interni.
@@ -984,7 +984,7 @@ impl ElevatedExecutor { pub fn spawn() -> Result<Self, AppError>; fn spawn_with(
 
 - [ ] **Step 1: Test:**
   - senza modificatori → F3 cm_List, F4 cm_Edit, F5 cm_Copy, F6 cm_RenMov, F7 cm_MkDir, F8 cm_Delete, Alt+F4 cm_Exit
-  - con Shift → F5 cm_CopySamePanel, F6 cm_RenameOnly, F8 mc_DeletePermanent
+  - con Shift → F5 cm_CopySamepanel, F6 cm_RenameOnly, F8 mc_DeletePermanent
   - un comando non disponibile (per esempio Alt+F5, pacchetto della fase 3) non compare
 - [ ] **Step 2:** `npm test` → FAIL, poi implementare, poi `npm test` → PASS.
 - [ ] **Step 3:** UI:
@@ -1005,7 +1005,7 @@ impl ElevatedExecutor { pub fn spawn() -> Result<Self, AppError>; fn spawn_with(
 - Consumes: Task 6 `useSettings`; Task 10 `getCommands`, `buildKeymap`, `chordFromEvent`
 - Produces:
   - `findConflicts(map: Map<string, string>, chord: string, commandId: string): string | null`, aggiunta a `keymap.ts`
-  - comandi `mc_Settings` (Ctrl+,) e `mc_Keybindings`
+  - comandi `cm_Config` (Ctrl+,) e `mc_Keybindings`
 
 - [ ] **Step 1: Test:** `findConflicts` con un chord già assegnato a un altro comando restituisce quel comando; con lo stesso comando o con un chord libero restituisce `null`.
 - [ ] **Step 2:** `npm test` → FAIL, poi implementare, poi `npm test` → PASS.
