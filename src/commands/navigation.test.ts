@@ -5,7 +5,8 @@ import * as api from "../ipc/api";
 import type { Entry } from "../ipc/types";
 import { activeTab, openFileTab, useLayout } from "../state/layout";
 import { activeTabContext, useTabViews } from "../state/tabViews";
-import { ensureDirTab, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
+import { useViewers } from "../state/viewers";
+import { closeTab, ensureDirTab, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
@@ -77,6 +78,16 @@ test("ensureDirTab returns the directory tab itself, the opener from a file tab,
   const id = ensureDirTab();
   expect(activeTab(useLayout.getState())).toMatchObject({ id, path: "C:\\x" });
   expect(activeTab(useLayout.getState()).file).toBeUndefined();
+});
+
+test("closing a viewer tab frees its viewer state, closing the last tab of the last group does not", () => {
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\f.txt", mode: "viewer" }));
+  const id = activeTab(useLayout.getState()).id;
+  useViewers.setState({ states: { [id]: { mode: "text", encoding: "utf-8", wrap: false, top: 0 }, t1: { mode: "hex", encoding: "utf-8", wrap: false, top: 0 } } });
+  closeTab(id);
+  expect(Object.keys(useViewers.getState().states)).toEqual(["t1"]);
+  closeTab("t1"); // l'ultima scheda dell'ultimo gruppo resta
+  expect(useViewers.getState().states.t1).toBeDefined();
 });
 
 test("tab and group commands are 'group', so they stay available on file tabs", async () => {

@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { Entry } from "../ipc/types";
-import { useLayout } from "../state/layout";
+import { activeTab, useLayout } from "../state/layout";
 import { useSettings } from "../state/settings";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { useUi } from "../state/ui";
@@ -11,7 +11,7 @@ import { dropOnGroup } from "./fileOps";
 import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 import {
-  classifyDrop, dragOut, isExecutable, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
+  classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
   suppressKeyboardContextMenu, toPhysical,
 } from "./shell";
 
@@ -77,19 +77,23 @@ test("cm_Return on a file opens it with the default program", async () => {
   expect(api.listDir).toHaveBeenCalledTimes(1); // nessuna navigazione
 });
 
-test("cm_List opens the cursor file, cm_Edit uses the external editor; folders are ignored", async () => {
-  vi.mocked(api.openPath).mockResolvedValue();
+test("cm_List opens the cursor file in a viewer tab, cm_Edit uses the external editor; folders and '..' are ignored", async () => {
   vi.mocked(api.openWith).mockResolvedValue();
   useSettings.setState({ externalEditor: "code.exe" });
   setCursor("a.txt");
   await executeCommand("cm_List");
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "C:\\x\\a.txt", mode: "viewer" });
+  expect(useLayout.getState().groups[0].tabIds).toHaveLength(2);
+  expect(api.openPath).not.toHaveBeenCalled(); // F3 non apre più programmi esterni
+  useLayout.getState().activateTab("t1");
   await executeCommand("cm_Edit");
-  expect(api.openPath).toHaveBeenCalledWith("C:\\x\\a.txt");
   expect(api.openWith).toHaveBeenCalledWith("code.exe", "C:\\x\\a.txt");
-  setCursor("sub");
-  await executeCommand("cm_List");
-  await executeCommand("cm_Edit");
-  expect(api.openPath).toHaveBeenCalledTimes(1);
+  for (const name of ["sub", ".."]) {
+    setCursor(name);
+    await executeCommand("cm_List");
+    await executeCommand("cm_Edit");
+  }
+  expect(useLayout.getState().groups[0].tabIds).toHaveLength(2);
   expect(api.openWith).toHaveBeenCalledTimes(1);
 });
 
@@ -107,10 +111,10 @@ test("cm_Properties uses the marked rows, or the current folder on '..'", async 
 test("CANCELLED is ignored, other errors become a notice", async () => {
   setCursor("a.txt");
   vi.mocked(api.openPath).mockRejectedValueOnce({ code: "CANCELLED", path: null, detail: null });
-  await executeCommand("cm_List");
+  await executeCommand("cm_Return");
   expect(useTabViews.getState().notice).toBeNull();
   vi.mocked(api.openPath).mockRejectedValueOnce({ code: "ACCESS_DENIED", path: "C:\\x\\a.txt", detail: null });
-  await executeCommand("cm_List");
+  await executeCommand("cm_Return");
   expect(useTabViews.getState().notice).toEqual({ tabId: "t1", code: "ACCESS_DENIED", path: "C:\\x\\a.txt" });
 });
 
@@ -198,21 +202,15 @@ test("drive rows and '..' are never dragged", async () => {
   expect(api.startDrag).not.toHaveBeenCalled();
 });
 
-test("isExecutable matches programs and scripts case-insensitively", () => {
-  for (const n of ["a.EXE", "b.bat", "c.Cmd", "d.ps1", "e.lnk", "f.reg", "g.js", "h.msi", "i.hta"]) expect(isExecutable(n), n).toBe(true);
-  for (const n of ["a.txt", "b.pdf", "exe", ".bat", "c.json", "d.exe.txt"]) expect(isExecutable(n), n).toBe(false);
-});
-
-test("cm_List shows programs in the external editor instead of running them; cm_Return runs them", async () => {
+test("programs open in the viewer with F3 and run with cm_Return", async () => {
   vi.mocked(api.listDir).mockResolvedValueOnce([f("setup.BAT")]);
   await useTabViews.getState().load("t1", "C:\\y");
-  vi.mocked(api.openWith).mockResolvedValue();
   vi.mocked(api.openPath).mockResolvedValue();
-  useSettings.setState({ externalEditor: "notepad.exe" });
   setCursor("setup.BAT");
   await executeCommand("cm_List");
-  expect(api.openWith).toHaveBeenCalledWith("notepad.exe", "C:\\y\\setup.BAT");
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "C:\\y\\setup.BAT", mode: "viewer" });
   expect(api.openPath).not.toHaveBeenCalled();
+  useLayout.getState().activateTab("t1");
   await executeCommand("cm_Return");
   expect(api.openPath).toHaveBeenCalledWith("C:\\y\\setup.BAT");
 });

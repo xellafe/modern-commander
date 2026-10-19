@@ -73,6 +73,22 @@
       "attributes": "Attr."
     }
   },
+  "viewer": {
+    "mode": {
+      "text": "Testo",
+      "hex": "Esadecimale",
+      "image": "Immagine",
+      "pdf": "PDF",
+      "video": "Video",
+      "audio": "Audio"
+    },
+    "modeLabel": "Modalità di visualizzazione",
+    "encodingLabel": "Codifica",
+    "wrap": "A capo automatico",
+    "position": "{{percent}}%",
+    "scrollbar": "Posizione nel file",
+    "nativePending": "La vista nativa non è ancora disponibile."
+  },
   "hotlist": {
     "title": "Hotlist cartelle",
     "addCurrent": "Aggiungi cartella corrente",

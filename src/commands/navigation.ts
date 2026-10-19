@@ -14,6 +14,7 @@ import {
 import { computeDirSize } from "../state/sizeRequests";
 import { activeTabContext, useTabViews, type LoadOpts } from "../state/tabViews";
 import { useUi } from "../state/ui";
+import { useViewers } from "../state/viewers";
 import { registerCommand, type Command } from "./registry";
 import { openFile } from "./shell";
 
@@ -110,10 +111,13 @@ export function ensureDirTab(path?: string): string {
   return activeTab(layout()).id;
 }
 
-/** Chiude la scheda e ne libera lo stato (watcher, listing). L'ultima scheda dell'ultimo gruppo resta. */
+/** Chiude la scheda e ne libera lo stato (watcher, listing, viewer). L'ultima scheda dell'ultimo gruppo resta. */
 export function closeTab(tabId: string) {
   layout().closeTab(tabId);
-  if (!layout().tabs[tabId]) views().dispose(tabId);
+  if (!layout().tabs[tabId]) {
+    views().dispose(tabId);
+    useViewers.getState().dispose(tabId);
+  }
 }
 
 function goHistory(delta: 1 | -1) {

@@ -1,0 +1,37 @@
+/* Viewer F3: barra in alto, testo o esadecimale a righe alte come la lista, barra di scorrimento propria */
+.mc-viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; outline: 0; }
+.mc-viewer-bar {
+  display: flex; align-items: center; gap: 8px; flex: none; height: 26px; padding: 0 10px; box-sizing: border-box;
+  color: var(--mc-muted); border-bottom: 1px solid var(--mc-border);
+}
+.mc-viewer-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mc-text); font-weight: 500; }
+.mc-viewer-meta, .mc-viewer-pos { flex: none; white-space: nowrap; }
+.mc-viewer-pos { margin-left: auto; min-width: 3em; text-align: right; }
+.mc-viewer-bar select {
+  flex: none; max-width: 130px; height: 20px; padding: 0 4px; font: inherit; color: var(--mc-text);
+  background: var(--mc-panel); border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
+}
+.mc-shell .mc-viewer-bar button { flex: none; width: 24px; height: 20px; border-radius: var(--mc-radius); }
+.mc-shell .mc-viewer-bar button.on { color: var(--mc-text); border-color: var(--mc-border); background: var(--mc-bg); }
+.mc-viewer-note { padding: 12px 10px; color: var(--mc-muted); }
+.mc-viewer-note span { margin-left: 8px; }
+
+.mc-vpane { display: flex; flex: 1; min-height: 0; }
+.mc-vtext, .mc-vhex {
+  flex: 1; min-width: 0; padding: 0 10px; overflow-x: auto; overflow-y: hidden; user-select: text;
+  font-family: var(--mc-font-mono); font-size: 12px; font-variant-ligatures: none; /* "--" e "==" di Cascadia Code */
+  tab-size: 8; white-space: pre;
+}
+.mc-vtext.wrap { overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mc-vline { height: var(--mc-row-height); line-height: var(--mc-row-height); }
+.mc-vtext.wrap .mc-vline { height: auto; min-height: var(--mc-row-height); }
+.mc-vhex .off { color: var(--mc-muted); }
+.mc-vhex .hex { margin: 0 16px; }
+.mc-vhex .asc { color: var(--mc-muted); }
+
+.mc-rail { position: relative; flex: none; width: 12px; touch-action: none; border-left: 1px solid var(--mc-border); --mc-rail-handle: 32px; }
+.mc-rail-handle {
+  position: absolute; left: 2px; right: 2px; height: var(--mc-rail-handle);
+  background: var(--mc-border); border-radius: var(--mc-radius);
+}
+.mc-rail:hover .mc-rail-handle, .mc-rail:active .mc-rail-handle { background: var(--mc-muted); }

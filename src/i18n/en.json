@@ -73,6 +73,22 @@
       "attributes": "Attr"
     }
   },
+  "viewer": {
+    "mode": {
+      "text": "Text",
+      "hex": "Hex",
+      "image": "Image",
+      "pdf": "PDF",
+      "video": "Video",
+      "audio": "Audio"
+    },
+    "modeLabel": "View mode",
+    "encodingLabel": "Encoding",
+    "wrap": "Word wrap",
+    "position": "{{percent}}%",
+    "scrollbar": "Position in the file",
+    "nativePending": "The native preview is not available yet."
+  },
   "hotlist": {
     "title": "Directory hotlist",
     "addCurrent": "Add current folder",
