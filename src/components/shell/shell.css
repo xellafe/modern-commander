@@ -10,6 +10,8 @@ body {
 .mc-shell {
   display: grid;
   grid-template-rows: 30px minmax(0, 1fr) auto auto 22px;
+  /* Colonna esplicita: quella implicita (auto) si allarga al contenuto più largo, per esempio una riga lunga nel viewer */
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   background: var(--mc-bg);
 }
