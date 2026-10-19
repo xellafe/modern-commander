@@ -10,7 +10,10 @@ import { folderName } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
 import { alignTop, initialViewerState, nativeMode, useViewers, type ViewerMode } from "../../state/viewers";
 import { HexPane } from "./HexPane";
+import { ImagePane } from "./ImagePane";
+import { MediaPane } from "./MediaPane";
 import type { PaneHandle } from "./pane";
+import { PdfPane } from "./PdfPane";
 import { TextPane } from "./TextPane";
 import "./viewer.css";
 
@@ -138,7 +141,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
               </button>
             </>
           )}
-          <span className="mc-viewer-pos">{t("viewer.position", { percent })}</span>
+          {(state.mode === "text" || state.mode === "hex") && <span className="mc-viewer-pos">{t("viewer.position", { percent })}</span>}
         </div>
       )}
       {error ? (
@@ -151,8 +154,12 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
           <TextPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} encoding={state.encoding} wrap={state.wrap} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "hex" ? (
           <HexPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} onError={(e) => setError(toAppError(e))} />
+        ) : state.mode === "image" ? (
+          <ImagePane ref={pane} path={path} />
+        ) : state.mode === "pdf" ? (
+          <PdfPane ref={pane} path={path} />
         ) : (
-          <div className="mc-viewer-note">{t("viewer.nativePending")}</div>
+          <MediaPane path={path} kind={state.mode} autoPlay={false} />
         )
       ) : null}
     </div>

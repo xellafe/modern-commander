@@ -87,7 +87,10 @@
     "wrap": "Word wrap",
     "position": "{{percent}}%",
     "scrollbar": "Position in the file",
-    "nativePending": "The native preview is not available yet."
+    "unsupportedImage": "This image format cannot be displayed. Use Text or Hex to see the file.",
+    "unsupportedMedia": "This file cannot be played here.",
+    "unsupportedPdf": "This PDF cannot be opened. Use Text or Hex to see the file.",
+    "openExternal": "Open with default program"
   },
   "hotlist": {
     "title": "Directory hotlist",

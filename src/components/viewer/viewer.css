@@ -35,3 +35,18 @@
   background: var(--mc-border); border-radius: var(--mc-radius);
 }
 .mc-rail:hover .mc-rail-handle, .mc-rail:active .mc-rail-handle { background: var(--mc-muted); }
+
+.mc-vimage { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.mc-vimage img { margin: auto; cursor: zoom-in; }
+.mc-vimage.fit img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.mc-vimage:not(.fit) img { cursor: zoom-out; }
+.mc-vpdf {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 0;
+  padding: 8px; overflow-x: hidden; overflow-y: scroll; /* sempre presente: la larghezza utile non cambia */
+}
+.mc-vpdf-page { flex: none; background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 30%); }
+.mc-vpdf-page canvas { display: block; width: 100%; height: 100%; }
+.mc-vmedia { display: flex; flex: 1; min-width: 0; min-height: 0; align-items: center; justify-content: center; }
+.mc-vmedia video { max-width: 100%; max-height: 100%; }
+.mc-vmedia audio { width: min(480px, 90%); }
+.mc-viewer-note button { margin-left: 12px; }

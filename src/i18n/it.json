@@ -87,7 +87,10 @@
     "wrap": "A capo automatico",
     "position": "{{percent}}%",
     "scrollbar": "Posizione nel file",
-    "nativePending": "La vista nativa non è ancora disponibile."
+    "unsupportedImage": "Questo formato di immagine non si può mostrare. Usa Testo o Esadecimale per vedere il file.",
+    "unsupportedMedia": "Questo file non si può riprodurre qui.",
+    "unsupportedPdf": "Questo PDF non si può aprire. Usa Testo o Esadecimale per vedere il file.",
+    "openExternal": "Apri con il programma predefinito"
   },
   "hotlist": {
     "title": "Hotlist cartelle",

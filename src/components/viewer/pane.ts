@@ -37,3 +37,18 @@ export function usePaneRows(ref: RefObject<HTMLElement | null>): number {
   }, [ref]);
   return rows;
 }
+
+/** Pixel per "riga" nei pannelli che scorrono col browser (PDF, immagine ingrandita). */
+const LINE_PX = 40;
+
+/** Comandi della tastiera per un pannello che scorre nativamente: l'elemento si legge al momento dell'uso. */
+export function scrollHandle(get: () => HTMLElement | null): PaneHandle {
+  return {
+    scroll: (lines) => get()?.scrollBy({ top: lines * LINE_PX }),
+    page: (dir) => {
+      const el = get();
+      el?.scrollBy({ top: dir * el.clientHeight * 0.9 });
+    },
+    edge: (end) => get()?.scrollTo({ top: end ? get()!.scrollHeight : 0 }),
+  };
+}
