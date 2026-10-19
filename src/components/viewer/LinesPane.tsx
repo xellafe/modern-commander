@@ -522,6 +522,7 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
             else if (e.deltaY) scroll(Math.sign(e.deltaY) * WHEEL_LINES);
           }}
         >
+          {!ready && <div className="mc-vline pending">…</div>}
           {texts.map((t, i) => (t === null ? <div key={i} className="mc-vline pending">…</div> : <div key={i} className="mc-vline">{t}</div>))}
           {Array.from({ length: Math.max(0, pending) }, (_, i) => <div key={`p${i}`} className="mc-vline pending">…</div>)}
         </div>

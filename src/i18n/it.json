@@ -90,6 +90,7 @@
     "position": "{{percent}}%",
     "scrollbar": "Posizione nel file",
     "lineScrollbar": "Posizione nella riga",
+    "scanning": "Scansione {{percent}} % · Esc annulla",
     "unsupportedImage": "Questo formato di immagine non si può mostrare. Usa Testo o Esadecimale per vedere il file.",
     "shellPreview": "Anteprima della shell: questo formato non si può mostrare direttamente.",
     "unsupportedMedia": "Questo file non si può riprodurre qui.",

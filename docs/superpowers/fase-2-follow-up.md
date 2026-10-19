@@ -16,13 +16,25 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 **Viewer testo ed esadecimale e file da GB** (Task 4)
 - File di prova: `scripts\make-big-files.ps1 -Path D:\mc-test` crea `big.log` (5 GB), `one-line.json` (200 MB, una riga) e `zeros.bin` (5 GB). Per una prova veloce: `-LogBytes 5MB -JsonBytes 1MB -ZerosBytes 1MB`. Lo script non è rieseguibile due volte nella stessa sessione PowerShell (`Add-Type`).
 - `big.log`: F3 si apre in meno di 300 ms; Fine mostra l'ultima riga; trascinando la barra a metà si vede una riga intera vicino a 2,5 GB; ↑ e ↓ in fondo e in cima non saltano righe.
-- `one-line.json`: lo scorrimento procede a spezzoni da 4096 byte, senza blocchi della UI. Con l'a capo attivo: Fine e ↓ su questo file e su uno di righe lunghe (una riga logica più alta del viewport resta tagliata in basso).
+- `one-line.json` con l'a capo attivo: Fine e ↓ su questo file e su uno di righe lunghe (una riga logica più alta del viewport resta tagliata in basso). Con l'a capo spento vedi "Viewer righe lunghe".
 - `zeros.bin`: si apre in esadecimale; Ctrl+Fine mostra l'ultimo offset.
 - Memoria del processo WebView2 (Gestione attività) sotto 300 MB in tutte le prove.
 - Un file che cambia su disco mentre è aperto nel viewer (log in scrittura) mantiene la dimensione vista all'apertura e non si ricarica da solo: verificare che sia accettabile. Il costo per tasto di `layoutAt` non è stato misurato (solo il tasto tenuto premuto, vedi sopra).
 - Un file UTF-16 con BOM e uno ANSI con lettere accentate si leggono bene; `A`, `7`, `6` cambiano la codifica. Passando da esadecimale a testo la prima riga può comparire a metà.
 - Le lettere nel viewer non aprono la ricerca rapida; Tab passa all'altro gruppo; Ctrl+W ed Esc chiudono e tornano alla lista sul file di partenza.
 - Tasto tenuto premuto (↓/↑) fluido (tasto → cursore < 16 ms), rotella da 3 righe, cambio scheda e ritorno alla stessa posizione, viewer in entrambi i gruppi, tema chiaro e scuro, selettori in barra.
+
+**Viewer righe lunghe** (a capo spento, `LinesPane`; spec `specs/2026-10-19-viewer-righe-lunghe-design.md`). Sostituisce la prova a spezzoni da 4096 byte su `one-line.json`. Nessuna è stata eseguita.
+- `one-line.json`: una riga sola; la barra verticale non compare (resta finché la fine della riga non è nota). Fine porta in fondo alla riga con l'indicatore "Scansione … % · Esc annulla" (solo dopo circa 200 ms); Esc ferma la scansione, la vista resta e la scheda resta aperta; un secondo Esc chiude la scheda. ← → fluidi dopo, e ← subito dopo Fine resta sotto 16 ms (punti d'avanzamento ogni 1 MiB).
+- Su `one-line.json` → e ← sono fluidi, Fine arriva alla fine della riga, la barra orizzontale trascinata a metà mostra testo coerente; trascinata lontano e poi Esc compaiono i segnaposto, non il testo di prima.
+- File con poche righe enormi: la barra verticale trascinata a metà porta all'inizio della riga che contiene quel punto. Con una riga da 200 MB tra righe normali, ↓ oltre la riga enorme mostra il segnaposto e poi la riga successiva. ↑ durante la scansione di `one-line.json`, poi ↓; ↓ tenuto premuto con `top` a metà di una riga enorme.
+- Passando dall'a capo attivo allo spento a metà di `one-line.json` si torna all'inizio della riga, senza errori. Se Esc annulla quella normalizzazione compare un segnaposto "…" finché una navigazione non la rilancia.
+- `big.log` invariato: apertura sotto 300 ms, ↓ tenuto premuto fluido (anche con `left > 0`, al massimo la riga in fondo mostra un attimo il segnaposto), Ctrl+Fine e barra come prima, WebView sotto 300 MB.
+- Un TSV con tab e un testo accentato (UTF-8 e ANSI, `D:\mc-testsset`) restano allineati dopo lo scorrimento; → arriva alla fine anche su un TSV corto in byte ma largo per i tab. `A`, `7` e `6` su un testo accentato scorso a destra ricalcolano le colonne.
+- → ripetuti oltre la stima su un TSV con tab, con un ← durante il conteggio: vince il ←.
+- File UTF-16 e UTF-8 con BOM: Ctrl+Home e ↑ non vanno sotto il BOM.
+- Barra orizzontale: una riga lunga che entra dall'ultima riga non fa lampeggiare la barra; Maiusc+rotella e trackpad scorrono in orizzontale. Ctrl+←/→ scorrono di una pagina, Home e Fine vanno a inizio riga e alla fine della più lunga visibile.
+- Con `left > 0` dopo uno spostamento verticale su righe più corte `left` può superare il limite: il primo ← o → lo riporta al limite con un salto (da confermare accettabile). Tra `left` diverse le righe già mostrate tengono il testo di prima finché arriva il nuovo (decisione di Task 5).
 
 **Immagini, PDF e media** (Task 5)
 - PNG, JPEG, SVG e WebP si vedono; un TIFF mostra l'avviso (e, con il Task 9, la miniatura della shell).
@@ -124,7 +136,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - TOCTOU sulle giunzioni per le primitive elevate (già nel follow-up della fase 1): tocca l'helper UAC, va in un piano a parte.
 
 **Viewer**
-- Con l'a capo attivo una riga logica più alta del viewport (pezzi da 4096 byte) resta tagliata in basso: lo scorrimento è per righe logiche.
+- Con l'a capo attivo una riga logica più alta del viewport (pezzi da 4096 byte) resta tagliata in basso: lo scorrimento è per righe logiche. **Risolto con l'a capo spento** (righe intere, `LinesPane`); resta per l'a capo attivo.
 - `lineUp` su righe senza LF con base > 0 può dare spezzoni diversi da quelli della discesa (come da piano). Cambiando modalità o codifica `top` si allinea solo all'unità di codice.
 - Flash vuoto a ogni miss della finestra (`lines=[]` mentre il layout è `null`).
 - Il focus non torna al viewer dopo un click su tab strip o sidebar (effetto `[active]`).

@@ -18,6 +18,9 @@ import { PdfPane } from "./PdfPane";
 import { TextPane } from "./TextPane";
 import "./viewer.css";
 
+/** Le scansioni più brevi non mostrano l'indicatore. */
+const SCAN_DELAY = 200;
+
 /** Campione per scegliere modalità e codifica: non si legge altro all'apertura. */
 const SAMPLE = 65536;
 
@@ -34,6 +37,9 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
   const [error, setError] = useState<AppError | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const pane = useRef<PaneHandle>(null);
+  // Avanzamento delle scansioni del pannello (null se non ce ne sono); `slow`: durano da più di SCAN_DELAY.
+  const [busy, setBusy] = useState<number | null>(null);
+  const [slow, setSlow] = useState(false);
 
   // Apertura: dimensione e un campione; se la scheda ha già uno stato (ritorno alla scheda) non si ricalcola.
   useEffect(() => {
@@ -51,6 +57,14 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
       live = false;
     };
   }, [tabId, path]);
+
+  // L'indicatore compare dopo SCAN_DELAY di scansione continua; con `null` il timer si azzera.
+  const scanning = busy !== null;
+  useEffect(() => {
+    if (!scanning) return setSlow(false);
+    const id = setTimeout(() => setSlow(true), SCAN_DELAY);
+    return () => clearTimeout(id);
+  }, [scanning]);
 
   // I tasti arrivano al contenitore che ha il focus: lo ha solo il viewer del gruppo attivo.
   useEffect(() => {
@@ -73,14 +87,17 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const p = pane.current;
     if (e.ctrlKey) {
-      if (key !== "Home" && key !== "End") return;
-      p?.edge(key === "End");
-    } else if (key === "Escape") closeTab(tabId);
-    else if (key === "ArrowUp") p?.scroll(-1);
+      if (key === "Home" || key === "End") p?.edge(key === "End");
+      else if ((key === "ArrowLeft" || key === "ArrowRight") && p?.hpage) p.hpage(key === "ArrowRight" ? 1 : -1);
+      else return;
+    } else if (key === "Escape") {
+      if (!p?.cancel?.()) closeTab(tabId); // prima si ferma la scansione, poi si chiude
+    } else if (key === "ArrowUp") p?.scroll(-1);
     else if (key === "ArrowDown") p?.scroll(1);
+    else if ((key === "ArrowLeft" || key === "ArrowRight") && p?.hscroll) p.hscroll(key === "ArrowRight" ? 1 : -1);
     else if (key === "PageUp") p?.page(-1);
     else if (key === "PageDown") p?.page(1);
-    else if (key === "Home" || key === "End") p?.edge(key === "End");
+    else if (key === "Home" || key === "End") (p?.hedge ? p.hedge(key === "End") : p?.edge(key === "End"));
     else if (key === "1") patch({ mode: "text" });
     else if (key === "3") patch({ mode: "hex" });
     else if (key === "4") {
@@ -142,7 +159,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
               </button>
             </>
           )}
-          {(state.mode === "text" || state.mode === "hex") && <span className="mc-viewer-pos">{t("viewer.position", { percent })}</span>}
+          {(state.mode === "text" || state.mode === "hex") && <span className="mc-viewer-pos">{slow && busy !== null ? t("viewer.scanning", { percent: Math.floor(busy * 100) }) : t("viewer.position", { percent })}</span>}
         </div>
       )}
       {error ? (
@@ -152,7 +169,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
         </div>
       ) : state && size !== null ? (
         state.mode === "text" && !state.wrap ? (
-          <LinesPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} left={state.left} encoding={state.encoding} onBusy={() => {}} onError={(e) => setError(toAppError(e))} />
+          <LinesPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} left={state.left} encoding={state.encoding} onBusy={setBusy} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "text" ? (
           <TextPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} encoding={state.encoding} wrap={state.wrap} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "hex" ? (
