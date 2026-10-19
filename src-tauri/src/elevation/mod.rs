@@ -29,11 +29,34 @@
 //!   prima di inviare il token, valida in modo stretto nome della pipe e token e rifiuta percorsi
 //!   relativi, `.`/`..`, dispositivi e le condivisioni `pipe`/`IPC$`/`mailslot` (niente
 //!   richieste ad altre pipe tramite UNC).
+//! - Giunzioni e collegamenti nei componenti intermedi (`pathlock`): per tutta la durata della
+//!   primitiva l'helper tiene aperte le cartelle antenate, una a una, con
+//!   `FILE_FLAG_OPEN_REPARSE_POINT` e senza `FILE_SHARE_DELETE`: non si possono rinominare né
+//!   eliminare né sostituire (la radice dell'unità o della condivisione non si apre, e non ha
+//!   sentinella: non può diventare giunzione). Un reparse point come componente intermedio è
+//!   rifiutato (`Unsupported`, `reparse_point_in_path`); come bersaglio (`reparse_point`) solo per
+//!   la sorgente di una copia, l'elenco e l'eliminazione nel Cestino. Spostamento, rinomina ed
+//!   eliminazione definitiva operano sul collegamento stesso, senza seguirlo.
+//! - Sentinella: una cartella vuota si trasforma sul posto in giunzione anche se bloccata
+//!   (`FSCTL_SET_REPARSE_POINT` chiede solo `FILE_WRITE_ATTRIBUTES`). Il blocco crea quindi nella
+//!   cartella bloccata più profonda un file `.mc-lock-<uuid>` (condivisione 0, `DELETE_ON_CLOSE`) che
+//!   la tiene non vuota; l'elenco non lo mostra. Senza sentinella il blocco fallisce.
+//! - L'app risolve (giunzioni, `subst`, unità di rete) solo le radici del job, una volta, quando il
+//!   job passa all'helper (`ops::rooted`): una giunzione comparsa dopo sotto una radice arriva
+//!   all'helper come giunzione e, come componente intermedio, viene rifiutata. I blocchi si rilasciano prima della risposta finale.
 //!
 //! **Rischi residui.**
-//! - Le API Win32 seguono giunzioni e collegamenti nei componenti intermedi: un percorso valido può
-//!   finire in un'altra cartella. Chi controlla una cartella intermedia (anche tra la validazione
-//!   e l'esecuzione) può redirigere un'operazione elevata: in v1 non è mitigato.
+//! - Una radice del job sostituita con una giunzione prima della prima elevazione viene seguita:
+//!   l'app la risolve prima di inviarla.
+//! - Eliminazione nel Cestino: l'elemento si controlla ma non si blocca (il Cestino non sposta un
+//!   elemento aperto senza `FILE_SHARE_DELETE`); resta una finestra in cui si può scambiare con un
+//!   collegamento, che finisce nel Cestino come collegamento.
+//! - Anche i reparse point che non sono collegamenti sono rifiutati come componenti intermedi: volumi montati in una cartella,
+//!   OneDrive "File su richiesta", deduplicazione.
+//! - Una cartella in cui l'amministratore non può creare file (supporti in sola lettura) non si
+//!   blocca: la sentinella non si crea e l'operazione fallisce.
+//! - Percorsi che l'app non riesce a risolvere arrivano invariati; l'helper li rifiuta se
+//!   contengono un collegamento.
 //! - Il codice che gira già con l'utente corrente può pilotare l'app (input, debug) e quindi le
 //!   operazioni elevate: è fuori dal confine, come per qualsiasi app che usa l'UAC.
 //! - L'eseguibile non deve essere scrivibile dall'utente, altrimenti il binario lanciato con
