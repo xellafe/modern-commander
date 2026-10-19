@@ -66,6 +66,19 @@ test("scanTree passa i limiti e un canale che inoltra i lotti", async () => {
   }));
 });
 
+test("nextLineStart e lineStart passano i parametri al backend", async () => {
+  const { nextLineStart, lineStart } = await import("./api");
+  vi.mocked(invoke).mockResolvedValue(9);
+  expect(await nextLineStart(1, "C:\\a", 4, 2, false, () => {})).toBe(9);
+  expect(invoke).toHaveBeenCalledWith("next_line_start", {
+    requestId: 1, path: "C:\\a", from: 4, unit: 2, bigEndian: false, onProgress: expect.anything(),
+  });
+  expect(await lineStart(2, "C:\\a", 4, 1, true, () => {})).toBe(9);
+  expect(invoke).toHaveBeenCalledWith("line_start", {
+    requestId: 2, path: "C:\\a", at: 4, unit: 1, bigEndian: true, onProgress: expect.anything(),
+  });
+});
+
 test("thumbnail legge larghezza e altezza little-endian e lascia i pixel RGBA", async () => {
   const { thumbnail } = await import("./api");
   const buf = new Uint8Array([2, 0, 0, 0, 1, 0, 0, 0, 10, 20, 30, 255, 40, 50, 60, 255]).buffer;

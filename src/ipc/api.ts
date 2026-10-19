@@ -50,6 +50,40 @@ export const scanTree = (
   return invoke<boolean>("scan_tree", { requestId, root, ...limits, onBatch: channel });
 };
 
+/**
+ * Byte dopo il primo LF a `from` o oltre (LF su confini di unità: `unit` 1 = UTF-8/ANSI, 2 = UTF-16); senza LF, la
+ * dimensione del file. `onProgress` riceve l'offset fino a cui si è già cercato. `cancelRequest(requestId)` annulla.
+ */
+export const nextLineStart = (
+  requestId: number,
+  path: string,
+  from: number,
+  unit: 1 | 2,
+  bigEndian: boolean,
+  onProgress: (offset: number) => void,
+) => {
+  const channel = new Channel<number>();
+  channel.onmessage = onProgress;
+  return invoke<number>("next_line_start", { requestId, path, from, unit, bigEndian, onProgress: channel });
+};
+
+/**
+ * Inizio della riga che contiene `at` (0 senza LF prima). `onProgress` riceve l'offset più basso già esaminato.
+ * `cancelRequest(requestId)` annulla.
+ */
+export const lineStart = (
+  requestId: number,
+  path: string,
+  at: number,
+  unit: 1 | 2,
+  bigEndian: boolean,
+  onProgress: (offset: number) => void,
+) => {
+  const channel = new Channel<number>();
+  channel.onmessage = onProgress;
+  return invoke<number>("line_start", { requestId, path, at, unit, bigEndian, onProgress: channel });
+};
+
 /** Hash del file in esadecimale minuscolo; `cancelRequest(requestId)` lo annulla (errore `CANCELLED`). */
 export const calcHash = (requestId: number, path: string, algo: HashAlgo) =>
   invoke<string>("calc_hash", { requestId, path, algo });

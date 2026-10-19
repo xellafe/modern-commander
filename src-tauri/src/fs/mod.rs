@@ -3,6 +3,7 @@
 pub mod content;
 pub mod drives;
 pub mod hash;
+pub mod lines;
 pub mod listing;
 pub mod scan;
 pub mod size;
@@ -96,6 +97,48 @@ pub async fn scan_tree(
         // Un canale chiuso (palette già chiusa) si scopre con l'annullamento: qui l'invio fallito si ignora.
         scan::scan_tree(Path::new(&root), &limits, guard.flag(), &mut |b| {
             let _ = on_batch.send(b);
+        })
+    })
+    .await?
+}
+
+/// Byte dopo il primo LF a `from` o oltre (vedi `lines::next_line_start`); `on_progress` riceve l'offset già cercato.
+/// Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+#[tauri::command]
+pub async fn next_line_start(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    from: u64,
+    unit: u8,
+    big_endian: bool,
+    on_progress: Channel<u64>,
+) -> Result<u64, AppError> {
+    let guard = requests.register(request_id);
+    blocking(move || {
+        lines::next_line_start(Path::new(&path), from, unit, big_endian, guard.flag(), &mut |p| {
+            let _ = on_progress.send(p);
+        })
+    })
+    .await?
+}
+
+/// Inizio della riga che contiene `at` (vedi `lines::line_start`); `on_progress` riceve l'offset più basso già esaminato.
+/// Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+#[tauri::command]
+pub async fn line_start(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    at: u64,
+    unit: u8,
+    big_endian: bool,
+    on_progress: Channel<u64>,
+) -> Result<u64, AppError> {
+    let guard = requests.register(request_id);
+    blocking(move || {
+        lines::line_start(Path::new(&path), at, unit, big_endian, guard.flag(), &mut |p| {
+            let _ = on_progress.send(p);
         })
     })
     .await?
