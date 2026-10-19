@@ -36,7 +36,7 @@ export default function App() {
           </div>
           {inspectorVisible && <Inspector />}
         </div>
-        {bottomPanelVisible && <BottomPanel />}
+        <BottomPanel hidden={!bottomPanelVisible} />
         <FKeyBar />
         <StatusBar />
         <HotlistMenu />

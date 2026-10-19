@@ -93,8 +93,11 @@ body {
   display: flex; align-items: center; gap: 14px; padding: 4px 12px;
   font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mc-muted);
 }
+.mc-panel[hidden] { display: none; } /* `display: flex` batterebbe l'attributo */
+.mc-panel-head button { padding: 0 0 1px; border-radius: 0; letter-spacing: inherit; text-transform: inherit; }
 .mc-panel-head .on { color: var(--mc-text); border-bottom: 1px solid var(--mc-accent); }
 .mc-panel-body { flex: 1; min-height: 0; overflow: auto; }
+.mc-panel-term { overflow: hidden; }
 
 /* Splitter: maniglia di 5px a cavallo del bordo */
 .mc-splitter { position: absolute; z-index: 5; touch-action: none; }

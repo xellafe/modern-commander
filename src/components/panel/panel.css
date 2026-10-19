@@ -23,3 +23,14 @@
 .mc-op-errors .mc-path { color: var(--mc-muted); font-family: var(--mc-font-mono); }
 .mc-op-actions { display: flex; gap: 2px; }
 .mc-op-actions button { width: 22px; height: 20px; border-radius: var(--mc-radius); }
+
+/* Scheda Terminale del pannello in basso: le istanze xterm stanno una sopra l'altra, si vede quella attiva */
+.mc-term-view { position: relative; height: 100%; display: flex; flex-direction: column; }
+.mc-term-view .mc-tabs { position: relative; overflow: visible; }
+.mc-term-new { position: relative; display: flex; margin-left: auto; }
+.mc-term-new .mc-term-menu { top: 100%; left: auto; right: 0; min-width: 180px; }
+.mc-term-new .mc-term-menu .mc-menu-item { width: 100%; justify-content: flex-start; }
+.mc-term-host { position: relative; flex: 1; min-height: 0; background: var(--mc-panel); }
+.mc-term { position: absolute; inset: 0; visibility: hidden; }
+.mc-term.on { visibility: visible; }
+.mc-term .xterm { height: 100%; padding: 4px 6px; box-sizing: border-box; }

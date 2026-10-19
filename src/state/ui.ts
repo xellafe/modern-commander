@@ -65,6 +65,8 @@ interface UiState {
   closeDialog: () => void;
   toggleSidebar: () => void;
   toggleBottomPanel: () => void;
+  /** Mostra il pannello in basso sulla scheda `tab`. */
+  showBottomPanel: (tab: "operations" | "terminal") => void;
   toggleInspector: () => void;
   /** Cambia vista e mostra la barra laterale se era nascosta. */
   setSidebarView: (v: SidebarView) => void;
@@ -91,6 +93,7 @@ export const useUi = create<UiState>((set) => ({
   closeDialog: () => set({ dialog: null }),
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleBottomPanel: () => set((s) => ({ bottomPanelVisible: !s.bottomPanelVisible })),
+  showBottomPanel: (bottomPanelTab) => set({ bottomPanelVisible: true, bottomPanelTab }),
   toggleInspector: () => set((s) => ({ inspectorVisible: !s.inspectorVisible })),
   setSidebarView: (sidebarView) => set({ sidebarView, sidebarVisible: true }),
   setSidebarWidth: (w) => set({ sidebarWidth: clamp(w, SIDEBAR_MIN, SIDEBAR_MAX) }),

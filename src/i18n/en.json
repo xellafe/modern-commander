@@ -24,6 +24,7 @@
       "settings": "Settings"
     },
     "panel": {
+      "terminal": "Terminal",
       "operations": "Operations",
       "operationsCount": "Operations ({{count}})"
     },
@@ -139,6 +140,12 @@
     "edit": "Edit favorites",
     "done": "Done"
   },
+  "terminal": {
+    "new": "New terminal",
+    "close": "Close terminal",
+    "shellMenu": "Choose the shell of the new terminal",
+    "empty": "No terminal open."
+  },
   "palette": {
     "placeholder": "Type a command…",
     "empty": "No matching commands",
@@ -196,6 +203,8 @@
     "cm_SrcLong": "Detailed view",
     "cm_SrcThumbs": "Thumbnails view",
     "mc_ToggleSidebar": "Show/hide sidebar",
+    "mc_ToggleTerminal": "Show/hide terminal",
+    "mc_NewTerminal": "New terminal",
     "mc_ToggleBottomPanel": "Show/hide bottom panel",
     "cm_Exit": "Exit",
     "cm_Copy": "Copy",
@@ -333,7 +342,8 @@
       "all": "All",
       "appearance": "Appearance",
       "files": "Files",
-      "editor": "Editor"
+      "editor": "Editor",
+      "terminal": "Terminal"
     },
     "items": {
       "theme": {
@@ -363,6 +373,10 @@
       "externalEditor": {
         "label": "External editor",
         "desc": "Program that opens files with F4 when the external editor is enabled (command or full path)."
+      },
+      "terminalShell": {
+        "label": "Terminal shell",
+        "desc": "Shell of new terminals. Only the shells found on this computer are listed."
       }
     },
     "options": {
@@ -374,6 +388,13 @@
       "language": {
         "en": "English",
         "it": "Italiano"
+      },
+      "terminalShell": {
+        "auto": "Automatic (best available)",
+        "pwsh": "PowerShell 7",
+        "powershell": "Windows PowerShell",
+        "cmd": "cmd",
+        "wsl": "WSL"
       }
     },
     "errors": {

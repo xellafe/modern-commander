@@ -22,7 +22,7 @@ const DISPLAY: Record<string, string> = {
 /** Un chord canonico ('Ctrl+Oem3') come elenco di tasti da mostrare (['Ctrl', '`']). */
 export const chordParts = (chord: string): string[] => chord.split('+').map((k) => DISPLAY[k] ?? k);
 
-interface KeyLike {
+export interface KeyLike {
   keyCode: number;
   ctrlKey: boolean;
   shiftKey: boolean;

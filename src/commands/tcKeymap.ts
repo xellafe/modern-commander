@@ -75,7 +75,8 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   Apps: 'cm_ContextMenu', // tasto Menu: in TC lo gestisce Windows, non la mappa
   'Ctrl+Q': 'cm_SrcQuickview', // in TC apre la vista rapida: qui l'ispettore
   'Ctrl+Shift+E': 'mc_ToggleSidebar',
-  'Ctrl+Oem3': 'mc_ToggleBottomPanel', // Ctrl+ò sul layout italiano
+  'Ctrl+Oem3': 'mc_ToggleTerminal', // Ctrl+ò sul layout italiano
+  'Ctrl+Shift+Oem3': 'mc_NewTerminal',
   'Ctrl+Comma': 'cm_Config',
   'Ctrl+P': 'mc_QuickJump', // come VS Code; in TC è "percorso nella riga di comando", che qui non esiste
   'Ctrl+Shift+P': 'mc_CommandPalette', // come VS Code; libero in TC
