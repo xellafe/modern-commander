@@ -14,7 +14,7 @@ import { activeTabContext, useTabViews } from "../state/tabViews";
 import { useUi } from "../state/ui";
 import { useViewers } from "../state/viewers";
 import { closeTab, closeTabNow, cursorStep, ensureDirTab, initCloseGuard, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands, setGridColumns, setPageSize } from "./navigation";
-import { executeCommand } from "./registry";
+import { executeCommand, getCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
 const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
@@ -74,6 +74,13 @@ test("every navigation command has a title in both languages", async () => {
     expect(en.commands[id], id).toBeTruthy();
     expect(it.commands[id], id).toBeTruthy();
   }
+});
+
+test("cm_SrcQuickview is a group command (not inside fields or dialogs) and toggles the inspector", async () => {
+  expect(getCommand("cm_SrcQuickview")?.when).toBe("group");
+  useUi.setState({ inspectorVisible: false });
+  await executeCommand("cm_SrcQuickview");
+  expect(useUi.getState().inspectorVisible).toBe(true);
 });
 
 test("ensureDirTab returns the directory tab itself, the opener from a file tab, or opens a new directory tab", () => {

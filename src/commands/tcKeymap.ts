@@ -73,6 +73,7 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
 
   // Scorciatoie nuove (non presenti nella mappa di fabbrica di TC)
   Apps: 'cm_ContextMenu', // tasto Menu: in TC lo gestisce Windows, non la mappa
+  'Ctrl+Q': 'cm_SrcQuickview', // in TC apre la vista rapida: qui l'ispettore
   'Ctrl+Shift+E': 'mc_ToggleSidebar',
   'Ctrl+Oem3': 'mc_ToggleBottomPanel', // Ctrl+ò sul layout italiano
   'Ctrl+Comma': 'cm_Config',

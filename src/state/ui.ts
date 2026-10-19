@@ -11,6 +11,8 @@ export const SIDEBAR_MIN = 160;
 export const SIDEBAR_MAX = 480;
 export const PANEL_MIN = 100;
 export const PANEL_MAX_RATIO = 0.6;
+export const INSPECTOR_MIN = 220;
+export const INSPECTOR_MAX_RATIO = 0.5;
 
 /** Gruppo scelto come destinazione con i tasti 1…9 (`n` = posizione nel layout). */
 export interface CopyTarget { n: number; groupId: string; path: string }
@@ -52,6 +54,8 @@ interface UiState {
   bottomPanelVisible: boolean;
   bottomPanelTab: "operations" | "terminal";
   bottomPanelHeight: number;
+  inspectorVisible: boolean;
+  inspectorWidth: number;
   dialog: DialogRequest | null;
   page: PageKind | null;
   openPage: (p: PageKind) => void;
@@ -61,10 +65,12 @@ interface UiState {
   closeDialog: () => void;
   toggleSidebar: () => void;
   toggleBottomPanel: () => void;
+  toggleInspector: () => void;
   /** Cambia vista e mostra la barra laterale se era nascosta. */
   setSidebarView: (v: SidebarView) => void;
   setSidebarWidth: (w: number) => void;
   setBottomPanelHeight: (h: number) => void;
+  setInspectorWidth: (w: number) => void;
 }
 
 // Dimensioni non persistite in questa fase.
@@ -75,6 +81,8 @@ export const useUi = create<UiState>((set) => ({
   bottomPanelVisible: true,
   bottomPanelTab: "operations",
   bottomPanelHeight: 180,
+  inspectorVisible: false,
+  inspectorWidth: 320,
   dialog: null,
   page: null,
   openPage: (page) => set({ page }),
@@ -83,8 +91,11 @@ export const useUi = create<UiState>((set) => ({
   closeDialog: () => set({ dialog: null }),
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleBottomPanel: () => set((s) => ({ bottomPanelVisible: !s.bottomPanelVisible })),
+  toggleInspector: () => set((s) => ({ inspectorVisible: !s.inspectorVisible })),
   setSidebarView: (sidebarView) => set({ sidebarView, sidebarVisible: true }),
   setSidebarWidth: (w) => set({ sidebarWidth: clamp(w, SIDEBAR_MIN, SIDEBAR_MAX) }),
   setBottomPanelHeight: (h) =>
     set({ bottomPanelHeight: clamp(h, PANEL_MIN, Math.max(PANEL_MIN, window.innerHeight * PANEL_MAX_RATIO)) }),
+  setInspectorWidth: (w) =>
+    set({ inspectorWidth: clamp(w, INSPECTOR_MIN, Math.max(INSPECTOR_MIN, window.innerWidth * INSPECTOR_MAX_RATIO)) }),
 }));

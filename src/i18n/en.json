@@ -8,7 +8,8 @@
     },
     "toggle": {
       "sidebar": "Show/hide sidebar",
-      "panel": "Show/hide bottom panel"
+      "panel": "Show/hide bottom panel",
+      "inspector": "Show/hide inspector"
     },
     "window": {
       "close": "Close",
@@ -93,6 +94,27 @@
     "unsupportedPdf": "This PDF cannot be opened. Use Text or Hex to see the file.",
     "openExternal": "Open with default program"
   },
+  "inspector": {
+    "title": "Inspector",
+    "empty": "Select a file or folder to see its details.",
+    "loading": "Loading…",
+    "binary": "Binary file: no preview available.",
+    "truncated": "Showing only the first {{size}}.",
+    "folderCalculating": "Calculating size…",
+    "folderContent": "Files: {{files}} · Folders: {{dirs}}",
+    "folderSkipped": "Unreadable folders (not counted): {{n}}",
+    "driveFree": "{{free}} free of {{total}}",
+    "archiveTotal": "Entries: {{n}}",
+    "archiveFirst": "First {{n}} entries; the archive contains more.",
+    "size": "Size",
+    "sizeExact": "{{bytes}} bytes",
+    "created": "Created",
+    "modified": "Modified",
+    "accessed": "Accessed",
+    "attributes": "Attributes",
+    "hashing": "Calculating…",
+    "copy": "Copy"
+  },
   "editor": {
     "unsavedTitle": "Unsaved changes",
     "unsavedText": "“{{name}}” has unsaved changes. Save them before closing?",
@@ -154,6 +176,7 @@
     "cm_RereadSource": "Refresh",
     "cm_SrcOpenDrives": "Choose drive",
     "cm_QuickFilter": "Quick filter",
+    "cm_SrcQuickview": "Show/hide inspector",
     "cm_OpenNewTab": "New tab",
     "cm_CloseCurrentTab": "Close tab",
     "cm_SwitchToNextTab": "Next tab",

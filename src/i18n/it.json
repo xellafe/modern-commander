@@ -8,7 +8,8 @@
     },
     "toggle": {
       "sidebar": "Mostra/nascondi barra laterale",
-      "panel": "Mostra/nascondi pannello in basso"
+      "panel": "Mostra/nascondi pannello in basso",
+      "inspector": "Mostra/nascondi ispettore"
     },
     "window": {
       "close": "Chiudi",
@@ -93,6 +94,27 @@
     "unsupportedPdf": "Questo PDF non si può aprire. Usa Testo o Esadecimale per vedere il file.",
     "openExternal": "Apri con il programma predefinito"
   },
+  "inspector": {
+    "title": "Ispettore",
+    "empty": "Seleziona un file o una cartella per vederne i dettagli.",
+    "loading": "Caricamento…",
+    "binary": "File binario: nessuna anteprima disponibile.",
+    "truncated": "Mostrati solo i primi {{size}}.",
+    "folderCalculating": "Calcolo della dimensione…",
+    "folderContent": "File: {{files}} · Cartelle: {{dirs}}",
+    "folderSkipped": "Cartelle illeggibili (non conteggiate): {{n}}",
+    "driveFree": "{{free}} liberi su {{total}}",
+    "archiveTotal": "Voci: {{n}}",
+    "archiveFirst": "Prime {{n}} voci; l'archivio ne contiene altre.",
+    "size": "Dimensione",
+    "sizeExact": "{{bytes}} byte",
+    "created": "Creazione",
+    "modified": "Modifica",
+    "accessed": "Ultimo accesso",
+    "attributes": "Attributi",
+    "hashing": "Calcolo in corso…",
+    "copy": "Copia"
+  },
   "editor": {
     "unsavedTitle": "Modifiche non salvate",
     "unsavedText": "«{{name}}» ha modifiche non salvate. Salvarle prima di chiudere?",
@@ -154,6 +176,7 @@
     "cm_RereadSource": "Aggiorna",
     "cm_SrcOpenDrives": "Scegli unità",
     "cm_QuickFilter": "Filtro rapido",
+    "cm_SrcQuickview": "Mostra/nascondi ispettore",
     "cm_OpenNewTab": "Nuova scheda",
     "cm_CloseCurrentTab": "Chiudi scheda",
     "cm_SwitchToNextTab": "Scheda successiva",

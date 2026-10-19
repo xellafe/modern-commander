@@ -310,6 +310,7 @@ const DEFS: Def[] = [
   // Finestra
   ["mc_ToggleSidebar", () => useUi.getState().toggleSidebar(), { global: true }],
   ["mc_ToggleBottomPanel", () => useUi.getState().toggleBottomPanel(), { global: true }],
+  ["cm_SrcQuickview", () => useUi.getState().toggleInspector(), G],
   ["cm_Exit", () => getCurrentWindow().close(), { global: true }],
 ];
 

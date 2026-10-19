@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { cssToHex, languageFor } from "./monaco";
+import { cssToHex, languageFor, worthColorizing } from "./monaco";
 
 const langs = [
   { id: "typescript", extensions: [".ts", ".tsx"] },
@@ -22,4 +22,15 @@ test("cssToHex turns token values into the hex colors Monaco accepts", () => {
   expect(cssToHex("rgb(43, 42, 39)")).toBe("#2b2a27");
   expect(cssToHex("var(--x)")).toBeUndefined();
   expect(cssToHex("")).toBeUndefined();
+});
+
+test("worthColorizing skips plain text, no language and very long lines, with a linear scan", () => {
+  expect(worthColorizing("let a", "typescript")).toBe(true);
+  expect(worthColorizing("let a", "plaintext")).toBe(false);
+  expect(worthColorizing("let a", null)).toBe(false);
+  expect(worthColorizing("x".repeat(2000) + "\ny", "typescript")).toBe(true); // 2000 ok, oltre no
+  expect(worthColorizing("a\n" + "x".repeat(2001) + "\nb", "typescript")).toBe(false);
+  expect(worthColorizing("x".repeat(2001), "typescript")).toBe(false); // ultima riga senza a capo
+  expect(worthColorizing("", "typescript")).toBe(true);
+  expect(worthColorizing("a\n".repeat(100_000), "typescript")).toBe(true);
 });

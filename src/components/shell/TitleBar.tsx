@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, PanelBottom, PanelLeft, Search, Square, X } from "lucide-react";
+import { Minus, PanelBottom, PanelLeft, PanelRight, Search, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { chordParts } from "../../commands/keys";
 import { chordsOf } from "../../commands/keymap";
@@ -12,8 +12,10 @@ export function TitleBar() {
   const { t } = useTranslation();
   const sidebarVisible = useUi((s) => s.sidebarVisible);
   const bottomPanelVisible = useUi((s) => s.bottomPanelVisible);
+  const inspectorVisible = useUi((s) => s.inspectorVisible);
   const toggleSidebar = useUi((s) => s.toggleSidebar);
   const toggleBottomPanel = useUi((s) => s.toggleBottomPanel);
+  const toggleInspector = useUi((s) => s.toggleInspector);
   const keymap = useKeybindings((s) => s.keymap);
   const paletteKeys = chordsOf(keymap, PALETTE_COMMAND_ID)[0];
   const win = getCurrentWindow();
@@ -50,6 +52,15 @@ export function TitleBar() {
           onClick={toggleBottomPanel}
         >
           <PanelBottom size={15} />
+        </button>
+        <button
+          className={inspectorVisible ? "on" : ""}
+          title={t("shell.toggle.inspector")}
+          aria-label={t("shell.toggle.inspector")}
+          aria-pressed={inspectorVisible}
+          onClick={toggleInspector}
+        >
+          <PanelRight size={15} />
         </button>
       </div>
       <div className="mc-title-window">

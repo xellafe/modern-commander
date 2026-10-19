@@ -11,6 +11,22 @@ export function languageFor(name: string, languages: { id: string; extensions?: 
   return languages.find((l) => l.extensions?.includes(ext))?.id ?? null;
 }
 
+/**
+ * Se conviene colorare con `colorize`: non per il testo semplice (`plaintext`, che ha l'estensione `.txt`) né per
+ * righe oltre `MAX_COLORIZE_LINE` (minificati). `colorize` costa più che lineare nelle righe e gira sul thread della UI.
+ */
+export function worthColorizing(text: string, language: string | null): language is string {
+  if (!language || language === "plaintext") return false;
+  for (let start = 0; start < text.length; ) {
+    const nl = text.indexOf("\n", start);
+    const end = nl < 0 ? text.length : nl;
+    if (end - start > MAX_COLORIZE_LINE) return false;
+    start = end + 1;
+  }
+  return true;
+}
+const MAX_COLORIZE_LINE = 2000;
+
 /** Colore CSS dei token (`#rgb`, `#rrggbb`, `rgb()`, `rgba()`) in esadecimale, l'unico formato dei temi di Monaco. */
 export function cssToHex(value: string): string | undefined {
   const v = value.trim().toLowerCase();
