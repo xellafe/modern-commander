@@ -79,6 +79,8 @@ export function mergeMarks(marks: Mark[] | undefined, add: Mark[]): Mark[] {
 /**
  * `text` parte dalla colonna assoluta `column ≤ left`. Espande i tab sulle colonne assolute (multipli di 8),
  * scarta le colonne `< left` (di un tab tagliato restano gli spazi dopo `left`) e tiene al massimo `width` colonne.
+ * Gli altri caratteri di controllo (una colonna per il backend, spesso larghi zero a schermo) diventano i simboli
+ * U+2400…U+241F e U+2421.
  */
 export function renderSlice(text: string, column: number, left: number, width: number): string {
   const end = left + width;
@@ -91,7 +93,8 @@ export function renderSlice(text: string, column: number, left: number, width: n
       out += " ".repeat(Math.max(0, stop - Math.max(col, left)));
       col += 8 - (col % 8);
     } else {
-      if (col >= left) out += ch;
+      const c = ch.charCodeAt(0);
+      if (col >= left) out += c < 0x20 || c === 0x7f ? String.fromCharCode(c === 0x7f ? 0x2421 : 0x2400 + c) : ch;
       col++;
     }
   }
@@ -271,6 +274,14 @@ export async function columnHits(cache: LineCache, lines: Line[], target: number
  */
 export function lineExtent(lines: Line[], cache: LineCache, size: number, unit: 1 | 2): number {
   return Math.max(0, ...lines.map((l) => cache.widths.get(l.start) ?? Math.ceil(((l.end ?? l.next ?? size) - l.start) / unit)));
+}
+
+/**
+ * Le righe da contare prima di limitare un →: quelle senza larghezza nota con la fine nella finestra (la stima in byte
+ * può superare le colonne, in UTF-8 multibyte) e, oltre il limite stimato (`past`), anche le altre.
+ */
+export function hopLines(lines: Line[], cache: LineCache, past: boolean): Line[] {
+  return lines.filter((l) => !cache.widths.has(l.start) && (past || l.end !== null));
 }
 
 /** `left` massimo: l'ultima colonna della riga più lunga resta visibile, con una colonna libera dopo. */

@@ -3,7 +3,7 @@ import { cancelRequest, columnOffsets, LINE_END, lineStart, nextLineStart, nextR
 import type { AppError, ColumnHit, ColumnProgress } from "../../ipc/types";
 import { codeUnit, detectEncoding } from "../../lib/encoding";
 import {
-  columnHits, lastPageTop, lineAt, lineExtent, maxLeft, nextStart, queueNav, renderSlice, stepDown, stepUp, visibleLines,
+  columnHits, hopLines, lastPageTop, lineAt, lineExtent, maxLeft, nextStart, queueNav, renderSlice, stepDown, stepUp, visibleLines,
   type Columns, type Line, type Nav, type NavCtx, type Scans,
 } from "../../lib/longLines";
 import type { Win } from "../../lib/textPaging";
@@ -91,7 +91,6 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
   const gen = useRef(0);
   const latest = useRef({ rows, cols, unit, bigEndian, size, encoding, onBusy, onError });
   latest.current = { rows, cols, unit, bigEndian, size, encoding, onBusy, onError };
-  const linesRef = useRef<Line[]>([]);
   const allRef = useRef<Line[]>([]);
 
   const getTop = () => useViewers.getState().states[tabId]?.top ?? 0;
@@ -240,7 +239,10 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     fr.seq++;
     fr.key = null;
     if (stop) drop();
+    // Fuori da `active` subito, senza aspettare la risposta del backend: l'indicatore sparisce e un secondo Esc chiude.
     const ids = [...active.current.keys()];
+    active.current.clear();
+    busy();
     for (const id of ids) run(cancelRequest(id));
     return ids.length > 0;
   }
@@ -335,9 +337,10 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     if (id != null && active.current.has(id)) run(cancelRequest(id));
   }
 
-  // ← →: `left` subito, limitato all'estensione. La stima in byte non conta i tab: oltre il limite stimato si contano
-  // prima le righe senza larghezza nota (corte, se il limite è vicino), poi si limita col conteggio esatto. I → premuti
-  // nel frattempo si sommano e si applicano alla `left` di quel momento.
+  // ← →: `left` subito, limitato all'estensione. La stima in byte sbaglia nei due sensi (i tab valgono più colonne, le
+  // lettere UTF-8 multibyte meno): prima di un → si contano le righe senza larghezza nota nella finestra (una richiesta
+  // dopo uno spostamento verticale) e, oltre il limite stimato, anche le altre; poi si limita col conteggio esatto. I →
+  // premuti nel frattempo si sommano e si applicano alla `left` di quel momento.
   function hscroll(n: number) {
     if (!n || !ready) return;
     if (hop.current && n > 0) return void (hop.current.delta += n);
@@ -345,12 +348,12 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     const max = () => maxLeft(extentNow(), latest.current.cols);
     const to = Math.max(0, getLeft() + n);
     const cache = lineCache(tabId, latest.current.encoding);
-    const unknown = allRef.current.filter((l) => !cache.widths.has(l.start));
-    if (n < 0 || to <= max() || !unknown.length) return setLeft(Math.min(to, max()));
+    const ask = n > 0 ? hopLines(allRef.current, cache, to > max()) : [];
+    if (!ask.length) return setLeft(Math.min(to, max()));
     const op: { delta: number; id: number | null } = { delta: n, id: null };
     hop.current = op;
     run(
-      columnHits(cache, unknown, LINE_END, columns(cache.encoding, (id) => (op.id = id)))
+      columnHits(cache, ask, LINE_END, columns(cache.encoding, (id) => (op.id = id)))
         .then(() => {
           if (hop.current === op) setLeft(Math.min(Math.max(0, getLeft() + op.delta), max()));
         })
@@ -442,7 +445,6 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
   );
   const lines = useMemo(() => all.slice(0, rows), [all, rows]);
   allRef.current = all;
-  linesRef.current = lines;
 
   // Finestra da rileggere, oppure la riga in fondo senza fine nota: la cerca il backend da solo.
   useEffect(() => {

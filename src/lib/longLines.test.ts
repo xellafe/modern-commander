@@ -3,7 +3,7 @@ import { lineCache } from "../state/lineCache";
 import { LINE_END } from "../ipc/api";
 import type { Mark } from "../ipc/types";
 import {
-  columnHits, isLineStart, lastPageTop, lineAt, lineExtent, maxLeft, mergeMarks, nearestMark, nextStart, prevLineStart,
+  columnHits, hopLines, isLineStart, lastPageTop, lineAt, lineExtent, maxLeft, mergeMarks, nearestMark, nextStart, prevLineStart,
   queueNav, renderSlice, stepDown, stepUp, visibleLines, wholeLines, type Columns, type NavCtx, type Scans,
 } from "./longLines";
 import type { Win } from "./textPaging";
@@ -377,6 +377,23 @@ test("columnHits: results arriving after an encoding change are not cached", asy
   await columnHits(cache, lines, 5 << 20, columns);
   expect(cache.marks.size).toBe(0);
   expect(cache.widths.size).toBe(0);
+});
+
+test("renderSlice: control characters become one-column visible glyphs", () => {
+  expect(renderSlice("a\u0000b\u001bc\rd\u007fe", 0, 0, 20)).toBe("a\u2400b\u241bc\u240dd\u2421e");
+  expect(renderSlice("\u0001\u0002x", 0, 1, 20)).toBe("\u2402x"); // una colonna ciascuno
+  expect(renderSlice("a\tb", 0, 0, 20)).toBe("a       b"); // il tab resta espanso
+});
+
+test("hopLines: before clamping a → count the in-window lines without width, the others only past the estimate", () => {
+  const cache = lineCache(`col${++tabs}`, "utf-8");
+  const near = { start: 0, end: 30, next: 31 };
+  const far = { start: 31, end: null, next: null };
+  expect(hopLines([near, far], cache, false)).toEqual([near]);
+  expect(hopLines([near, far], cache, true)).toEqual([near, far]);
+  cache.widths.set(0, 20); // larghezza nota: nessun conteggio
+  expect(hopLines([near, far], cache, false)).toEqual([]);
+  expect(hopLines([near, far], cache, true)).toEqual([far]);
 });
 
 test("lineExtent: exact widths when known, otherwise bytes (halved in UTF-16); maxLeft keeps the rail within 0…1", () => {
