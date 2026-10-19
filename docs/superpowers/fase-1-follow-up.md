@@ -34,7 +34,6 @@ Non si possono automatizzare: richiedono UAC, hardware reale o l'osservazione de
 
 **Prima del rilascio pubblico**
 - CSP stretta in `tauri.conf.json` (oggi `csp: null`), da provare sulla build.
-- Le unità di rete mappate non sono visibili all'helper elevato: convertire in UNC o documentarlo. In attesa della verifica manuale di `docs/superpowers/plans/2026-10-19-helper-uac-toctou.md` (Task 3, Step 2): la risoluzione lato app potrebbe averlo già risolto.
 
 **Operazioni su file**
 - `runner.rs` `dir()`: nei nuovi tentativi usare `self.items[i].unlisted`. Oggi il difetto è latente.
