@@ -127,23 +127,34 @@ fn chars(units: &[u16]) -> u64 {
 
 /// Primo carattere (o gruppo inseparabile) di `pend`, come `(byte, caratteri)`; `None` se il decoder aspetta altri byte.
 /// Il gruppo è il prefisso più corto la cui decodifica, seguita da quella del resto con un decoder nuovo, dà la stessa
-/// uscita di tutto `pend`: dove finisce si può ripartire da zero. Così U+FFFD seguito da un byte ASCII riletto (un
-/// iniziale Shift_JIS davanti a uno spazio) dà due caratteri su due byte.
+/// uscita di tutto `pend`, sia con `last` sia con il flush: dove finisce si può ripartire da zero. Così U+FFFD seguito
+/// da un byte ASCII riletto (un iniziale Shift_JIS davanti a uno spazio) dà due caratteri su due byte. Il confronto con
+/// il flush scarta il resto che il decoder tiene in sospeso: in una coppia non mappata il secondo byte, anche se è un
+/// iniziale valido, appartiene al U+FFFD.
 fn split(enc: &'static Encoding, pend: &[u8], last: bool) -> Option<(usize, u64)> {
-    let (mut all, mut head, mut rest) = ([0; 16], [0; 16], [0; 16]);
+    let (mut all, mut flushed, mut head, mut rest) = ([0; 16], [0; 16], [0; 16], [0; 16]);
     let n = decode(enc, pend, last, &mut all);
     if n == 0 {
         return None;
     }
+    let nf = decode(enc, pend, true, &mut flushed);
+    let same_rest = |out: &[u16], rest_bytes: &[u8], last: bool, buf: &mut [u16; 16]| {
+        let r = decode(enc, rest_bytes, last, buf);
+        out == &buf[..r]
+    };
     for j in 1..pend.len() {
         let h = decode(enc, &pend[..j], true, &mut head);
-        if h > 0 && all[..n].starts_with(&head[..h]) {
-            let r = decode(enc, &pend[j..], last, &mut rest);
-            if all[h..n] == rest[..r] {
-                return Some((j, chars(&head[..h])));
-            }
+        if h > 0
+            && all[..n].starts_with(&head[..h])
+            && same_rest(&all[h..n], &pend[j..], last, &mut rest)
+            && flushed[..nf].starts_with(&head[..h])
+            && same_rest(&flushed[h..nf], &pend[j..], true, &mut rest)
+        {
+            return Some((j, chars(&head[..h])));
         }
     }
+    // Tutto `pend` è un gruppo: con le code page ammesse il decoder qui non ha byte in sospeso, che andrebbero persi.
+    debug_assert!(flushed[..nf] == all[..n], "byte in sospeso nel ripiego di `split`: {pend:02X?}");
     Some((pend.len(), chars(&all[..n])))
 }
 
@@ -419,12 +430,30 @@ mod tests {
             ("shift_jis", &[0x82, 0xFF, 0x62]), // secondo byte non ASCII non valido: un solo U+FFFD
             ("gbk", &[0x81, 0x30, 0x81, 0x20]), // quattro byte interrotti: tre byte si rileggono
             ("big5", &[0x88, 0x62, 0x61]),      // una coppia che dà due caratteri
+            // Coppie non mappate con secondo byte non ASCII, che è anche un iniziale: un solo U+FFFD.
+            ("shift_jis", &[0x81, 0xE9, 0x40]),
+            ("shift_jis", &[0x81, 0xE9, 0xE9, 0x40]),
+            ("big5", &[0x81, 0xA1, 0xA4, 0x40]),
+            ("euc-kr", &[0xC9, 0xA1, 0xB0, 0xA1]),
         ];
         for (label, bytes) in cases {
             let enc = encoding_rs::Encoding::for_label(label.as_bytes()).unwrap();
-            let want = enc.decode_without_bom_handling(bytes).0.chars().count() as u64;
-            assert_eq!(col(bytes, label, u64::MAX), hit(bytes.len() as u64, want, true), "{label} {bytes:02X?}");
+            let text = |b: &[u8]| enc.decode_without_bom_handling(b).0.into_owned();
+            let all = text(bytes);
+            let want = all.chars().count() as u64;
+            let ctx = format!("{label} {bytes:02X?}");
+            assert_eq!(col(bytes, label, u64::MAX), hit(bytes.len() as u64, want, true), "{ctx}");
+            // Per ogni colonna: ripartendo da zero dall'offset trovato si decodificano proprio i caratteri da
+            // `column` in poi (la colonna è uguale al target, tranne dentro un gruppo inseparabile di Big5). La testa
+            // non si decodifica a parte: a fine file gb18030 non rilegge i byte di una sequenza interrotta.
+            for t in 0..want {
+                let h = col(bytes, label, t);
+                let rest: String = all.chars().skip(h.column as usize).collect();
+                assert_eq!(text(&bytes[h.offset as usize..]), rest, "{ctx} target {t}");
+                assert!(h.column == t || (*label == "big5" && h.column < t), "{ctx} target {t}: {h:?}");
+            }
         }
+        assert_eq!(col(&[0x81, 0xE9, 0x40], "shift_jis", 1), hit(2, 1, false));
         // U+FFFD sul byte iniziale, lo spazio e la `b` ognuno sul proprio byte.
         assert_eq!(col(&[0x82, 0x20, 0x62], "shift_jis", 1), hit(1, 1, false));
         assert_eq!(col(&[0x82, 0x20, 0x62], "shift_jis", 2), hit(2, 2, false));
