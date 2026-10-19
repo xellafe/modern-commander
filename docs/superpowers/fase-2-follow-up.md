@@ -13,6 +13,8 @@ Non si possono automatizzare: richiedono la GUI, file da GB o l'osservazione del
 
 Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: annotarlo qui e nel README (sezione "Limiti accettati").
 
+✅ Verificato il 2026-10-19 (`tauri dev`, URL `http://asset.localhost/` + `encodeURIComponent`): `win.ini` 200 (92 byte), con Range 206 (10 byte), UNC `\\localhost\C$` 200, nome con `#`, `%25` e spazi 200, percorso di 270 caratteri 200.
+
 **Viewer testo ed esadecimale e file da GB** (Task 4)
 - File di prova: `scripts\make-big-files.ps1 -Path D:\mc-test` crea `big.log` (5 GB), `one-line.json` (200 MB, una riga) e `zeros.bin` (5 GB). Per una prova veloce: `-LogBytes 5MB -JsonBytes 1MB -ZerosBytes 1MB`. Lo script non è rieseguibile due volte nella stessa sessione PowerShell (`Add-Type`).
 - `big.log`: F3 si apre in meno di 300 ms; Fine mostra l'ultima riga; trascinando la barra a metà si vede una riga intera vicino a 2,5 GB; ↑ e ↓ in fondo e in cima non saltano righe.
