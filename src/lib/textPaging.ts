@@ -2,11 +2,19 @@
 // (log da 5 GB, JSON minificato su una riga, file di zeri) si spezza in righe da MAX_LINE byte, così
 // ogni passo di scorrimento resta limitato. Gli offset sono sempre multipli dell'unità di codice.
 
+/** Finestra di byte letta dal file: `buf` parte da `base`. */
+export interface Win {
+  base: number;
+  buf: Uint8Array;
+  /** La lettura è arrivata a fine file. */
+  eof: boolean;
+}
+
 /** Byte; una riga più lunga si spezza in righe da MAX_LINE. */
 export const MAX_LINE = 4096;
 
 // LF all'indice `i`: `0A` (unit 1), `0A 00` (UTF-16LE) o `00 0A` (UTF-16BE).
-function isLf(buf: Uint8Array, i: number, unit: 1 | 2, bigEndian: boolean): boolean {
+export function isLf(buf: Uint8Array, i: number, unit: 1 | 2, bigEndian: boolean): boolean {
   if (unit === 1) return buf[i] === 0x0a;
   return bigEndian ? buf[i] === 0 && buf[i + 1] === 0x0a : buf[i] === 0x0a && buf[i + 1] === 0;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { readChunk } from "../../ipc/api";
 import { codeUnit } from "../../lib/encoding";
-import { lineUp, MAX_LINE, seekLine, splitLines } from "../../lib/textPaging";
+import { lineUp, MAX_LINE, seekLine, splitLines, type Win } from "../../lib/textPaging";
 import { useViewers } from "../../state/viewers";
 import { usePaneRows, WHEEL_LINES, type PaneHandle } from "./pane";
 import { ScrollRail } from "./ScrollRail";
@@ -11,13 +11,6 @@ import { ScrollRail } from "./ScrollRail";
 const WINDOW = 256 * 1024;
 const HEAD = 64 * 1024;
 const BLOCK = 64 * 1024;
-
-interface Win {
-  base: number;
-  buf: Uint8Array;
-  /** La lettura è arrivata a fine file. */
-  eof: boolean;
-}
 
 interface Layout {
   chunk: Uint8Array;

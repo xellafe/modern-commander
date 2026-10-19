@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { codeUnit, detectEncoding } from "../lib/encoding";
 import { looksBinary, previewKind } from "../lib/preview";
+import { disposeLineCache } from "./lineCache";
 
 export type ViewerMode = "text" | "hex" | "image" | "pdf" | "video" | "audio";
 
@@ -50,9 +51,11 @@ export const useViewers = create<ViewersStore>((set) => ({
       if (!cur && patch.mode === undefined) return s;
       return { states: { ...s.states, [tabId]: { ...cur, ...patch } as ViewerState } };
     }),
-  dispose: (tabId) =>
+  dispose: (tabId) => {
+    disposeLineCache(tabId);
     set((s) => {
       const { [tabId]: _removed, ...states } = s.states;
       return { states };
-    }),
+    });
+  },
 }));
