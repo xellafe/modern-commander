@@ -2,6 +2,7 @@
 // lavorano sulla finestra di byte già letta; ciò che non sta nella finestra resta ignoto (null) e lo
 // risolve il backend (ricerca degli inizi riga e conteggio delle colonne a blocchi).
 import type { Mark } from "../ipc/types";
+import type { LineCache } from "../state/lineCache";
 import { isLf, type Win } from "./textPaging";
 
 export interface Line {
@@ -103,4 +104,113 @@ export type Nav = { dir: 1 | -1; n: number };
 export function queueNav(pending: Nav | null, dir: 1 | -1, n: number): { pending: Nav; cancel: boolean } {
   if (!pending || pending.dir === dir) return { pending: { dir, n: (pending?.n ?? 0) + n }, cancel: false };
   return { pending: { dir, n }, cancel: true };
+}
+
+/** Scansioni del backend (`nextLineStart`, `lineStart`), iniettate perché la navigazione si provi senza Tauri. */
+export interface Scans {
+  next(from: number, onProgress: (offset: number) => void): Promise<number>;
+  start(at: number, onProgress: (offset: number) => void): Promise<number>;
+}
+
+/** Ciò che serve alla navigazione verticale per righe intere: finestra, cache della scheda e backend. */
+export interface NavCtx {
+  win: Win | null;
+  cache: LineCache;
+  unit: 1 | 2;
+  bigEndian: boolean;
+  size: number;
+  /** Byte del BOM: la prima riga inizia lì e `top` non scende sotto. */
+  bom: number;
+  scans: Scans;
+  /** Scansioni in avanti in corso per inizio riga: due richieste per la stessa riga ne fanno una. */
+  inflight: Map<number, Promise<number>>;
+}
+
+// Una risposta arrivata dopo un cambio di codifica non scrive nella cache, che nel frattempo è stata reimpostata.
+const sameEncoding = (cache: LineCache, encoding: string) => cache.encoding === encoding;
+
+/**
+ * Righe visibili da `top`, al massimo `max`: dalla finestra, poi da `next` in cache. Si ferma alla prima riga di cui
+ * non si conosce l'inizio della successiva; la riga vuota dopo l'ultimo LF non c'è.
+ */
+export function visibleLines(ctx: NavCtx, top: number, max: number): Line[] {
+  const lines = ctx.win ? wholeLines(ctx.win, top, max, ctx.unit, ctx.bigEndian) : [];
+  if (!lines.length) lines.push({ start: top, end: null, next: null });
+  for (;;) {
+    const last = lines[lines.length - 1];
+    last.next ??= ctx.cache.next.get(last.start) ?? null;
+    if (last.next === null || last.next >= ctx.size || lines.length >= max) break;
+    lines.push({ start: last.next, end: null, next: null });
+  }
+  return lines.filter((l, i) => i === 0 || l.start < ctx.size);
+}
+
+/** Inizio della riga dopo quella che parte da `s`: dalla finestra, dalla cache o dal backend (che aggiorna `fwd` e `next`). */
+export function nextStart(ctx: NavCtx, s: number): Promise<number> {
+  const known = visibleLines(ctx, s, 1)[0].next;
+  if (known !== null) return Promise.resolve(known);
+  const running = ctx.inflight.get(s);
+  if (running) return running;
+  const { win, cache } = ctx;
+  const encoding = cache.encoding;
+  // Nella finestra non c'è LF da `s` alla sua fine: si cerca da lì, o dal punto più avanzato già noto.
+  const winEnd = win && s >= win.base ? win.base + win.buf.length : s;
+  const from = cache.fwd.get(s) ?? Math.max(s, winEnd);
+  const p = ctx.scans
+    .next(from, (o) => sameEncoding(cache, encoding) && cache.fwd.set(s, o))
+    .then((r) => {
+      if (sameEncoding(cache, encoding)) cache.next.set(s, r);
+      return r;
+    })
+    .finally(() => ctx.inflight.delete(s));
+  ctx.inflight.set(s, p);
+  return p;
+}
+
+/** `top` della riga sotto; null se l'ultima riga del file è già l'ultima del viewport (come `maxScroll` senza a capo). */
+export async function stepDown(ctx: NavCtx, top: number, rows: number): Promise<number | null> {
+  let s = top;
+  let first = top;
+  for (let i = 0; i < rows; i++) {
+    s = await nextStart(ctx, s);
+    if (s >= ctx.size) return null;
+    if (i === 0) first = s;
+  }
+  return first;
+}
+
+/** `top` della riga sopra; null alla prima riga. Senza finestra né cache, `lineStart` dal backend (che aggiorna `back`). */
+export async function stepUp(ctx: NavCtx, top: number): Promise<number | null> {
+  if (top <= ctx.bom) return null;
+  const { win, cache } = ctx;
+  let p = win ? prevLineStart(win, top, ctx.unit, ctx.bigEndian) : null;
+  // ponytail: ricerca lineare di chi ha `top` come successiva; la mappa contiene solo righe passate dal backend.
+  if (p === null) for (const [s, n] of cache.next) if (n === top) p = s;
+  if (p === null) {
+    const encoding = cache.encoding;
+    p = await ctx.scans.start(cache.back.get(top) ?? top - ctx.unit, (o) => sameEncoding(cache, encoding) && cache.back.set(top, o));
+    if (sameEncoding(cache, encoding)) cache.next.set(p, top);
+  }
+  return Math.max(p, ctx.bom);
+}
+
+/** Inizio della riga che contiene `at`, mai prima del BOM: dalla finestra se basta, altrimenti dal backend. */
+export async function lineAt(ctx: NavCtx, at: number): Promise<number> {
+  if (at <= ctx.bom) return ctx.bom;
+  const here = ctx.win ? isLineStart(ctx.win, at, ctx.unit, ctx.bigEndian) : null;
+  if (here) return at;
+  // A metà riga l'unità prima di `at` non è un LF: `prevLineStart` trova l'inizio della riga stessa.
+  const s = (here === false ? prevLineStart(ctx.win!, at, ctx.unit, ctx.bigEndian) : null) ?? (await ctx.scans.start(at, () => {}));
+  return Math.max(s, ctx.bom);
+}
+
+/** Ctrl+Fine: risale di `rows` righe dalla fine del file, come `endRows(rows, false)` di `TextPane`. */
+export async function lastPageTop(ctx: NavCtx, rows: number): Promise<number> {
+  let t = ctx.size - (ctx.size % ctx.unit);
+  for (let i = 0; i < rows; i++) {
+    const p = await stepUp(ctx, t);
+    if (p === null) break;
+    t = p;
+  }
+  return Math.max(t, ctx.bom);
 }

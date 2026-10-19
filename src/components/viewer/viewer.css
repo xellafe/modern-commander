@@ -25,6 +25,7 @@
 .mc-vtext.wrap { overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mc-vline { height: var(--mc-row-height); line-height: var(--mc-row-height); }
 .mc-vtext.wrap .mc-vline { height: auto; min-height: var(--mc-row-height); }
+.mc-vline.pending { color: var(--mc-muted); } /* riga non ancora risolta dal backend */
 .mc-vhex .off { color: var(--mc-muted); }
 .mc-vhex .hex { margin: 0 16px; }
 .mc-vhex .asc { color: var(--mc-muted); }

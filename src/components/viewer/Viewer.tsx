@@ -11,6 +11,7 @@ import { useLayout } from "../../state/layout";
 import { alignTop, initialViewerState, nativeMode, useViewers, type ViewerMode } from "../../state/viewers";
 import { HexPane } from "./HexPane";
 import { ImagePane } from "./ImagePane";
+import { LinesPane } from "./LinesPane";
 import { MediaPane } from "./MediaPane";
 import type { PaneHandle } from "./pane";
 import { PdfPane } from "./PdfPane";
@@ -150,7 +151,9 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
           {error.path && <span>{error.path}</span>}
         </div>
       ) : state && size !== null ? (
-        state.mode === "text" ? (
+        state.mode === "text" && !state.wrap ? (
+          <LinesPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} left={0} encoding={state.encoding} onBusy={() => {}} onError={(e) => setError(toAppError(e))} />
+        ) : state.mode === "text" ? (
           <TextPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} encoding={state.encoding} wrap={state.wrap} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "hex" ? (
           <HexPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} onError={(e) => setError(toAppError(e))} />

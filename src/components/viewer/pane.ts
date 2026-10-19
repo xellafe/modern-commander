@@ -8,6 +8,14 @@ export interface PaneHandle {
   page(dir: 1 | -1): void;
   /** Inizio o fine del file. */
   edge(end: boolean): void;
+  /** Di `cols` colonne; negativo = verso sinistra. Solo con l'a capo spento. */
+  hscroll?(cols: number): void;
+  /** Di una larghezza del viewport meno una colonna. */
+  hpage?(dir: 1 | -1): void;
+  /** Inizio riga o fine della riga visibile più lunga. */
+  hedge?(end: boolean): void;
+  /** Annulla le scansioni in corso; vero se ce n'era almeno una. */
+  cancel?(): boolean;
 }
 
 /** Righe per tacca della rotella. */

@@ -44,7 +44,7 @@ export const endRows = (rows: number, wrap: boolean) => (wrap ? 1 : rows);
 export const maxScroll = (lay: Pick<Layout, "n" | "all">, rows: number, wrap: boolean) =>
   lay.all ? Math.max(0, lay.n - endRows(rows, wrap)) : lay.n - 1;
 
-function decoderFor(encoding: string): TextDecoder {
+export function decoderFor(encoding: string): TextDecoder {
   try {
     return new TextDecoder(encoding);
   } catch {

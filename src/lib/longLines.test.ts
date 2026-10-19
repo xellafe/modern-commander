@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { isLineStart, mergeMarks, nearestMark, prevLineStart, queueNav, renderSlice, wholeLines } from "./longLines";
+import { lineCache } from "../state/lineCache";
+import {
+  isLineStart, lastPageTop, lineAt, mergeMarks, nearestMark, nextStart, prevLineStart, queueNav, renderSlice, stepDown,
+  stepUp, visibleLines, wholeLines, type NavCtx, type Scans,
+} from "./longLines";
 import type { Win } from "./textPaging";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -99,4 +103,158 @@ test("queueNav: same direction accumulates, opposite cancels", () => {
   expect(queueNav(null, 1, 3)).toEqual({ pending: { dir: 1, n: 3 }, cancel: false });
   expect(queueNav({ dir: 1, n: 3 }, 1, 2)).toEqual({ pending: { dir: 1, n: 5 }, cancel: false });
   expect(queueNav({ dir: 1, n: 3 }, -1, 2)).toEqual({ pending: { dir: -1, n: 2 }, cancel: true });
+});
+
+// Navigazione con un backend simulato sul contenuto intero: registra le chiamate.
+const CANCELLED = { code: "CANCELLED", path: null, detail: null };
+
+function backend(data: Uint8Array) {
+  const calls: [string, number][] = [];
+  const scans: Scans = {
+    next: async (from) => {
+      calls.push(["next", from]);
+      for (let p = from; p < data.length; p++) if (data[p] === 0x0a) return p + 1;
+      return data.length;
+    },
+    start: async (at) => {
+      calls.push(["start", at]);
+      for (let p = at - 1; p >= 0; p--) if (data[p] === 0x0a) return p + 1;
+      return 0;
+    },
+  };
+  return { calls, scans };
+}
+
+let tabs = 0;
+const ctx = (data: Uint8Array, win: Win | null, scans: Scans, bom = 0): NavCtx => ({
+  win, cache: lineCache(`nav${++tabs}`, "utf-8"), unit: 1, bigEndian: false, size: data.length, bom, scans, inflight: new Map(),
+});
+// Finestra sui byte [base, base + len) di `data`.
+const slice = (data: Uint8Array, base: number, len: number): Win => ({
+  base, buf: data.subarray(base, base + len), eof: base + len >= data.length,
+});
+const long = enc("a\n" + "x".repeat(100) + "\nb\nc\n"); // la riga lunga va da 2 a 103
+
+test("stepDown: a line whose LF is beyond the window asks the backend once, then uses the cache", async () => {
+  const { calls, scans } = backend(long);
+  const c = ctx(long, slice(long, 0, 10), scans);
+  expect(await stepDown(c, 0, 1)).toBe(2);
+  expect(calls).toEqual([]);
+  expect(await stepDown(c, 2, 1)).toBe(103);
+  expect(calls).toEqual([["next", 10]]); // riparte dalla fine della finestra
+  expect(c.cache.next.get(2)).toBe(103);
+  expect(await stepDown(c, 2, 1)).toBe(103);
+  expect(calls).toHaveLength(1);
+});
+
+test("stepUp: a line start not in the window asks the backend from back.get(top)", async () => {
+  const { calls, scans } = backend(long);
+  const c = ctx(long, slice(long, 50, 60), scans);
+  c.cache.back.set(103, 60);
+  expect(await stepUp(c, 103)).toBe(2);
+  expect(calls).toEqual([["start", 60]]);
+  expect(c.cache.next.get(2)).toBe(103);
+  // la seconda volta basta la cache
+  expect(await stepUp(c, 103)).toBe(2);
+  expect(calls).toHaveLength(1);
+  // senza `back` si parte dall'LF sopra `top`
+  expect(await stepUp(ctx(long, slice(long, 50, 60), scans), 103)).toBe(2);
+  expect(calls[1]).toEqual(["start", 102]);
+  // dentro la finestra nessuna chiamata
+  expect(await stepUp(ctx(long, slice(long, 0, long.length), scans), 105)).toBe(103);
+  expect(calls).toHaveLength(2);
+});
+
+test("progress updates fwd and back even when the scan is then cancelled", async () => {
+  const cancelled: Scans = {
+    next: async (_from, onProgress) => { onProgress(50); throw CANCELLED; },
+    start: async (_at, onProgress) => { onProgress(40); throw CANCELLED; },
+  };
+  const c = ctx(long, slice(long, 0, 10), cancelled);
+  await expect(stepDown(c, 2, 1)).rejects.toBe(CANCELLED);
+  expect(c.cache.fwd.get(2)).toBe(50);
+  expect(c.cache.next.has(2)).toBe(false);
+  expect(c.inflight.size).toBe(0);
+  const u = ctx(long, slice(long, 60, 20), cancelled);
+  await expect(stepUp(u, 103)).rejects.toBe(CANCELLED);
+  expect(u.cache.back.get(103)).toBe(40);
+  // la scansione ripetuta riparte dal punto più avanzato
+  const { calls, scans } = backend(long);
+  c.scans = scans;
+  expect(await nextStart(c, 2)).toBe(103);
+  expect(calls).toEqual([["next", 50]]);
+});
+
+test("a result arriving after an encoding change is not cached", async () => {
+  let resolve = (_: number) => {};
+  const scans: Scans = { next: () => new Promise((r) => (resolve = r)), start: async () => 0 };
+  const c = ctx(long, slice(long, 0, 10), scans);
+  const p = nextStart(c, 2);
+  lineCache(`nav${tabs}`, "utf-16le"); // la stessa cache, reimpostata sul posto
+  resolve(103);
+  expect(await p).toBe(103);
+  expect(c.cache.next.size).toBe(0);
+});
+
+test("nextStart: two requests for the same line share one scan", async () => {
+  const { calls, scans } = backend(long);
+  const c = ctx(long, slice(long, 0, 10), scans);
+  expect(await Promise.all([nextStart(c, 2), nextStart(c, 2)])).toEqual([103, 103]);
+  expect(calls).toHaveLength(1);
+});
+
+test("stepDown stops when the last line of the file is the last of the viewport", async () => {
+  for (const text of ["a\nb\nc\n", "a\nb\nc"]) {
+    const data = enc(text);
+    const c = ctx(data, slice(data, 0, data.length), backend(data).scans);
+    expect(await stepDown(c, 0, 2)).toBe(2);
+    expect(await stepDown(c, 2, 2)).toBeNull();
+    expect(await stepDown(c, 0, 5)).toBeNull();
+    expect(await lastPageTop(c, 2)).toBe(2); // Ctrl+Fine arriva allo stesso punto
+    expect(await lastPageTop(c, 5)).toBe(0);
+  }
+  const empty = enc("");
+  expect(await lastPageTop(ctx(empty, slice(empty, 0, 0), backend(empty).scans), 3)).toBe(0);
+});
+
+test("lastPageTop from a window near the end climbs over a long line with the backend", async () => {
+  const { calls, scans } = backend(long);
+  expect(await lastPageTop(ctx(long, slice(long, 90, 17), scans), 3)).toBe(2);
+  expect(calls).toEqual([["start", 102]]);
+});
+
+test("BOM: the first line starts after it and top never goes below it", async () => {
+  const data = new Uint8Array([0xef, 0xbb, 0xbf, ...enc("a\nb\n")]);
+  const c = ctx(data, slice(data, 0, data.length), backend(data).scans, 3);
+  expect(await stepUp(c, 5)).toBe(3);
+  expect(await stepUp(c, 3)).toBeNull();
+  expect(await lineAt(c, 0)).toBe(3);
+  expect(await lineAt(c, 3)).toBe(3);
+  expect(await lineAt(c, 4)).toBe(3);
+  expect(await lineAt(c, 6)).toBe(5);
+  expect(await lastPageTop(c, 5)).toBe(3);
+});
+
+test("lineAt: inside the window no backend, outside the line start from the backend", async () => {
+  const { calls, scans } = backend(long);
+  expect(await lineAt(ctx(long, slice(long, 0, long.length), scans), 50)).toBe(2);
+  expect(await lineAt(ctx(long, slice(long, 40, 20), scans), 50)).toBe(2);
+  expect(calls).toEqual([["start", 50]]);
+});
+
+test("visibleLines: window first, then the cached next, without the empty line after the last LF", () => {
+  const { scans } = backend(long);
+  const c = ctx(long, slice(long, 0, 10), scans);
+  expect(visibleLines(c, 0, 5)).toEqual([
+    { start: 0, end: 1, next: 2 },
+    { start: 2, end: null, next: null },
+  ]);
+  c.cache.next.set(2, 103);
+  expect(visibleLines(c, 0, 5).map((l) => [l.start, l.next])).toEqual([[0, 2], [2, 103], [103, null]]);
+  expect(visibleLines(c, 0, 2).map((l) => l.start)).toEqual([0, 2]);
+  const full = ctx(long, slice(long, 0, long.length), scans);
+  expect(visibleLines(full, 103, 5)).toEqual([
+    { start: 103, end: 104, next: 105 },
+    { start: 105, end: 106, next: 107 },
+  ]);
 });
