@@ -74,6 +74,15 @@ export interface ScanEntry {
   isDir: boolean;
 }
 
+/** terminal/mod.rs: le shell che il pannello terminale sa avviare. */
+export type ShellKind = "pwsh" | "powershell" | "cmd" | "wsl";
+
+/** Evento `term-exit`: sessione finita; `code` è nullo se il codice di uscita non si è potuto leggere. */
+export interface TermExitEvent {
+  id: number;
+  code: number | null;
+}
+
 export type HashAlgo = "md5" | "sha1" | "sha256";
 
 /** archive/mod.rs. `path` con `\`, senza barra finale. */

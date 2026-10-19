@@ -67,3 +67,25 @@ test("calcHash e listArchive passano id, percorso e parametri ai comandi", async
   expect((await listArchive(6, "C:\a.zip", 500)).total).toBe(0);
   expect(invoke).toHaveBeenCalledWith("list_archive", { requestId: 6, path: "C:\a.zip", limit: 500 });
 });
+
+test("termSpawn passa solo shell, cartella e dimensioni e inoltra i blocchi come Uint8Array", async () => {
+  const { termSpawn } = await import("./api");
+  vi.mocked(invoke).mockImplementation(async (_cmd, args) => {
+    (args as { onOutput: { onmessage: (b: unknown) => void } }).onOutput.onmessage(new Uint8Array([104, 105]).buffer);
+    return 7;
+  });
+  const chunks: Uint8Array[] = [];
+  expect(await termSpawn("cmd", "C:\\x", 80, 24, (b) => chunks.push(b))).toBe(7);
+  expect(chunks).toEqual([new Uint8Array([104, 105])]);
+  expect(invoke).toHaveBeenCalledWith("term_spawn", expect.objectContaining({ shell: "cmd", cwd: "C:\\x", cols: 80, rows: 24 }));
+});
+
+test("termWrite, termResize e termKill chiamano i comandi con l'id", async () => {
+  const { termWrite, termResize, termKill } = await import("./api");
+  await termWrite(1, "dir\r");
+  await termResize(1, 100, 30);
+  await termKill(1);
+  expect(invoke).toHaveBeenCalledWith("term_write", { id: 1, data: "dir\r" });
+  expect(invoke).toHaveBeenCalledWith("term_resize", { id: 1, cols: 100, rows: 30 });
+  expect(invoke).toHaveBeenCalledWith("term_kill", { id: 1 });
+});

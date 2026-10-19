@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ArchiveListing, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry } from "./types";
+import type { ArchiveListing, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -112,6 +112,38 @@ export const thumbnail = async (path: string, size: number) => {
   const head = new DataView(buf);
   return { width: head.getUint32(0, true), height: head.getUint32(4, true), data: new Uint8ClampedArray(buf, 8) };
 };
+
+/** Shell avviabili (eseguibile nel PATH), nell'ordine pwsh, powershell, cmd, wsl. */
+export const termShells = () => invoke<ShellKind[]>("term_shells");
+
+/**
+ * Apre un terminale ConPTY e ne restituisce l'id; `shell` nullo sceglie la migliore disponibile, `cwd` vuota o non
+ * valida diventa la cartella utente. L'output arriva a blocchi grezzi su `onOutput` (un carattere UTF-8 può essere
+ * spezzato tra due blocchi: lo ricompone xterm.js). Il primo blocco contiene una richiesta di posizione del cursore
+ * a cui il terminale deve rispondere (xterm.js lo fa da sé, via `onData`) o la shell non parte.
+ *
+ * Contratto: `onOutput` può scattare PRIMA che la promessa si risolva, cioè quando l'id ancora non c'è. Chi chiama
+ * deve quindi collegare `onData` di xterm prima di chiamare `termSpawn`, tenendo in coda le scritture finché non
+ * ha l'id; con `const id = await termSpawn(...); term.onData((d) => termWrite(id, d))` la risposta al cursore si
+ * perde e la shell resta appesa. Lo stesso vale per `onTermExit`, che può arrivare prima della promessa se il
+ * processo muore subito, e i cui ultimi blocchi di output possono raggiungere `onOutput` anche dopo l'evento:
+ * alla ricezione di `term-exit` il terminale non va distrutto.
+ */
+export const termSpawn = (shell: ShellKind | null, cwd: string, cols: number, rows: number, onOutput: (bytes: Uint8Array) => void) => {
+  const channel = new Channel<ArrayBuffer>();
+  channel.onmessage = (buf) => onOutput(new Uint8Array(buf));
+  return invoke<number>("term_spawn", { shell, cwd, cols, rows, onOutput: channel });
+};
+
+export const termWrite = (id: number, data: string) => invoke<void>("term_write", { id, data });
+
+export const termResize = (id: number, cols: number, rows: number) => invoke<void>("term_resize", { id, cols, rows });
+
+/** Ferma la shell; la chiusura arriva poi come `term-exit`. */
+export const termKill = (id: number) => invoke<void>("term_kill", { id });
+
+export const onTermExit = (cb: (e: TermExitEvent) => void): Promise<UnlistenFn> =>
+  listen<TermExitEvent>("term-exit", (e) => cb(e.payload));
 
 export const readConfig = (name: string) => invoke<unknown | null>("read_config", { name });
 

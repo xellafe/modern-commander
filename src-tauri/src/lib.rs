@@ -8,6 +8,7 @@ pub mod ops;
 pub mod paths;
 pub mod requests;
 pub mod shell;
+pub mod terminal;
 
 use ops::queue::{Event, Queue};
 use std::sync::Arc;
@@ -18,6 +19,15 @@ pub fn run() {
     tauri::Builder::default()
         .manage(fs::watch::Watchers::default())
         .manage(requests::Requests::default())
+        .manage(terminal::Terminals::default())
+        // Un ricaricamento della pagina (anche il reload di Vite) perde i canali e non esegue la pulizia dei
+        // componenti: i terminali aperti si chiudono qui. All'avvio non ce n'è nessuno: nessun effetto.
+        // ponytail: vale con la finestra unica; con più finestre servirebbe la proprietà della sessione per webview.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                webview.state::<terminal::Terminals>().kill_all();
+            }
+        })
         .setup(|app| {
             if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
                 elevation::set_owner_window(hwnd);
@@ -65,7 +75,18 @@ pub fn run() {
             ops::queue::reply_prompt,
             ops::queue::list_jobs,
             ops::queue::clear_finished,
+            terminal::term_shells,
+            terminal::term_spawn,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_kill,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Nessun processo orfano: i terminali aperti si fermano con l'app.
+            if let tauri::RunEvent::Exit = event {
+                app.state::<terminal::Terminals>().kill_all();
+            }
+        });
 }
