@@ -120,6 +120,11 @@ export function parseHotlist(raw: unknown): HotlistItem[] | null {
   return Array.isArray(raw) && raw.every(ok) ? (raw as HotlistItem[]) : null;
 }
 
+/** Le cartelle dei Preferiti, anche dentro i sottomenu, nell'ordine in cui compaiono nel menu (separatori esclusi). */
+export function hotlistDirs(items: HotlistItem[]): { name: string; path: string }[] {
+  return items.flatMap((i) => (i.type === "dir" ? [{ name: i.name, path: i.path }] : i.type === "submenu" ? hotlistDirs(i.items) : []));
+}
+
 /** Dove aprire il menu: all'angolo (riga col cursore) o centrato (nessuna riga visibile). */
 export interface MenuAnchor {
   x: number;

@@ -2,7 +2,8 @@ import { expect, test } from 'vitest';
 import { initialLayout, openFileTab, useLayout } from '../state/layout';
 import { usePalette } from '../state/palette';
 import { DEFAULT_KEYMAP } from './tcKeymap';
-import { paletteCommands, togglePalette } from './palette';
+import { useUi } from '../state/ui';
+import { jumpItems, jumpTarget, paletteCommands, quickJump, togglePalette } from './palette';
 import type { Command } from './registry';
 
 const cmd = (id: string, when: Command['when']): Command => ({ id, titleKey: id, when, run: () => {} });
@@ -41,4 +42,35 @@ test('togglePalette opens the commands palette and closes it when already open',
   expect(usePalette.getState().mode).toBe('commands');
   togglePalette();
   expect(usePalette.getState().mode).toBeNull();
+});
+
+test('jumpItems keeps recent, favorites, files order', () => {
+  const items = jumpItems(['C:\\r'], [{ name: 'Fav', path: 'C:\\f' }], [{ rel: 'x\\y.txt', isDir: false }]);
+  expect(items.map((i) => i.kind)).toEqual(['recent', 'favorite', 'file']);
+  expect(items.map((i) => i.label)).toEqual(['C:\\r', 'Fav', 'x\\y.txt']);
+});
+
+test('jump shortcut is Ctrl+P', () => {
+  expect(DEFAULT_KEYMAP['Ctrl+P']).toBe('mc_QuickJump');
+});
+
+test('quickJump opens the jump palette, but not over a dialog', () => {
+  useUi.setState({ dialog: { kind: 'unsaved', tabId: 't' } });
+  quickJump();
+  expect(usePalette.getState().mode).toBeNull();
+  useUi.setState({ dialog: null });
+  quickJump();
+  expect(usePalette.getState().mode).toBe('jump');
+  usePalette.getState().close();
+});
+
+test('jumpTarget: folders open as they are, files open their folder with the file focused', () => {
+  const root = 'C:\\r';
+  expect(jumpTarget({ kind: 'recent', path: 'C:\\a', label: 'C:\\a' }, root)).toEqual({ dir: 'C:\\a' });
+  expect(jumpTarget({ kind: 'favorite', path: 'C:\\f', label: 'F' }, root)).toEqual({ dir: 'C:\\f' });
+  expect(jumpTarget({ kind: 'file', rel: 'sub', isDir: true, label: 'sub' }, root)).toEqual({ dir: 'C:\\r\\sub' });
+  expect(jumpTarget({ kind: 'file', rel: 'sub\\a.txt', isDir: false, label: 'sub\\a.txt' }, root))
+    .toEqual({ dir: 'C:\\r\\sub', focus: 'a.txt' });
+  expect(jumpTarget({ kind: 'file', rel: 'a.txt', isDir: false, label: 'a.txt' }, 'C:\\'))
+    .toEqual({ dir: 'C:\\', focus: 'a.txt' });
 });

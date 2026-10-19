@@ -119,7 +119,12 @@
   "palette": {
     "placeholder": "Type a command…",
     "empty": "No matching commands",
-    "results": "Results"
+    "results": "Results",
+    "placeholderJump": "Go to folder or file…",
+    "emptyJump": "No matching folders or files",
+    "scanning": "Scanning…",
+    "truncated": "Results truncated",
+    "folder": "Folder"
   },
   "commands": {
     "mc_CursorUp": "Cursor up",
@@ -183,7 +188,8 @@
     "cm_Edit": "Edit",
     "cm_Config": "Settings",
     "mc_Keybindings": "Keyboard shortcuts",
-    "mc_CommandPalette": "Command palette"
+    "mc_CommandPalette": "Command palette",
+    "mc_QuickJump": "Quick jump"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",

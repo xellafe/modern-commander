@@ -119,7 +119,12 @@
   "palette": {
     "placeholder": "Scrivi un comando…",
     "empty": "Nessun comando trovato",
-    "results": "Risultati"
+    "results": "Risultati",
+    "placeholderJump": "Vai a cartella o file…",
+    "emptyJump": "Nessuna cartella o file trovato",
+    "scanning": "Scansione in corso…",
+    "truncated": "Risultati troncati",
+    "folder": "Cartella"
   },
   "commands": {
     "mc_CursorUp": "Cursore su",
@@ -183,7 +188,8 @@
     "cm_Edit": "Modifica",
     "cm_Config": "Impostazioni",
     "mc_Keybindings": "Scorciatoie da tastiera",
-    "mc_CommandPalette": "Palette dei comandi"
+    "mc_CommandPalette": "Palette dei comandi",
+    "mc_QuickJump": "Salto rapido"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",

@@ -75,6 +75,7 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   'Ctrl+Shift+E': 'mc_ToggleSidebar',
   'Ctrl+Oem3': 'mc_ToggleBottomPanel', // Ctrl+ò sul layout italiano
   'Ctrl+Comma': 'cm_Config',
+  'Ctrl+P': 'mc_QuickJump', // come VS Code; in TC è "percorso nella riga di comando", che qui non esiste
   'Ctrl+Shift+P': 'mc_CommandPalette', // come VS Code; libero in TC
   'Ctrl+Shift+Oem5': 'mc_SplitGroup', // Ctrl+Shift+\ (come "vai alla parentesi" di VS Code; libero in TC)
 };

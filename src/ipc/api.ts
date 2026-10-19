@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DirSizeEvent, Drive, Entry, FileInfo, JobId, JobSpec, JobView, Prompt, PromptReply } from "./types";
+import type { DirSizeEvent, Drive, Entry, FileInfo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -31,6 +31,22 @@ export const nextRequestId = () => ++lastRequestId;
 
 /** Alza il flag di annullamento della richiesta; un id già finito o sconosciuto non ha effetto. */
 export const cancelRequest = (requestId: number) => invoke<void>("cancel_request", { requestId });
+
+/**
+ * Scandisce l'albero sotto `root` in ampiezza: le voci arrivano a lotti su `onBatch` mentre la richiesta è in corso;
+ * si risolve a scansione finita con `true` se si è fermata al limite di voci. `cancelRequest(requestId)` la annulla
+ * (errore `CANCELLED`).
+ */
+export const scanTree = (
+  requestId: number,
+  root: string,
+  limits: { maxDepth: number; maxEntries: number; includeHidden: boolean },
+  onBatch: (batch: ScanEntry[]) => void,
+) => {
+  const channel = new Channel<ScanEntry[]>();
+  channel.onmessage = onBatch;
+  return invoke<boolean>("scan_tree", { requestId, root, ...limits, onBatch: channel });
+};
 
 export const onDirSize = (cb: (e: DirSizeEvent) => void): Promise<UnlistenFn> =>
   listen<DirSizeEvent>("dir-size", (e) => cb(e.payload));

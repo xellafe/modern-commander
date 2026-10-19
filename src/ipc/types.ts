@@ -68,6 +68,12 @@ export interface FileInfo {
   attributes: number;
 }
 
+/** fs/scan.rs. `rel`: percorso relativo alla cartella scandita, con `\`. */
+export interface ScanEntry {
+  rel: string;
+  isDir: boolean;
+}
+
 export interface DirSizeEvent {
   requestId: number;
   path: string;

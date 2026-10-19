@@ -3,7 +3,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 vi.mock("../ipc/api", () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
 import { readConfig, writeConfig } from "../ipc/api";
 import {
-  addDir, addSubmenu, isInside, moveItem, parseHotlist, removeItem, renameItem, resolveDrop, useHotlist,
+  addDir, addSubmenu, hotlistDirs, isInside, moveItem, parseHotlist, removeItem, renameItem, resolveDrop, useHotlist,
   type HotlistItem,
 } from "./hotlist";
 
@@ -138,4 +138,14 @@ test("changes are persisted in call order; a failed write does not block the nex
   expect(write.mock.calls[0][0]).toBe("hotlist");
   expect(err).toHaveBeenCalledTimes(1);
   err.mockRestore();
+});
+
+test("hotlistDirs flattens submenus in menu order and skips separators", () => {
+  const list: HotlistItem[] = [dir("A"), sub("S", [dir("B"), { type: "separator", id: "sep" }]), dir("C")];
+  expect(hotlistDirs(list)).toEqual([
+    { name: "A", path: "C:\\A" },
+    { name: "B", path: "C:\\B" },
+    { name: "C", path: "C:\\C" },
+  ]);
+  expect(hotlistDirs([])).toEqual([]);
 });

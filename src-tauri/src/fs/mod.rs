@@ -3,12 +3,15 @@
 pub mod content;
 pub mod drives;
 pub mod listing;
+pub mod scan;
 pub mod size;
 pub mod watch;
 
 use crate::error::{AppError, ErrorCode};
+use crate::requests::Requests;
 use std::path::{Path, PathBuf};
-use tauri::ipc::Response;
+use tauri::ipc::{Channel, Response};
+use tauri::State;
 
 pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError {
@@ -72,4 +75,27 @@ pub async fn write_text_file(
 #[tauri::command]
 pub fn ansi_encoding() -> String {
     content::encoding_for_acp(content::ansi_code_page()).to_string()
+}
+
+/// Scansione dell'albero sotto `root` per il salto rapido: le voci arrivano a lotti su `on_batch`, il risultato
+/// è `true` se si è fermata al limite di voci. Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+#[tauri::command]
+pub async fn scan_tree(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    root: String,
+    max_depth: u32,
+    max_entries: u32,
+    include_hidden: bool,
+    on_batch: Channel<Vec<scan::ScanEntry>>,
+) -> Result<bool, AppError> {
+    let guard = requests.register(request_id);
+    let limits = scan::ScanLimits { max_depth, max_entries, include_hidden };
+    blocking(move || {
+        // Un canale chiuso (palette già chiusa) si scopre con l'annullamento: qui l'invio fallito si ignora.
+        scan::scan_tree(Path::new(&root), &limits, guard.flag(), &mut |b| {
+            let _ = on_batch.send(b);
+        })
+    })
+    .await?
 }

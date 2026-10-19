@@ -39,6 +39,7 @@ pub fn run() {
             fs::watch::watch_dir,
             fs::watch::unwatch_dir,
             fs::size::calc_dir_size,
+            fs::scan_tree,
             requests::cancel_request,
             fs::file_info,
             fs::read_chunk,

@@ -21,3 +21,4 @@
   border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
 }
 .mc-palette-empty { padding: 8px 10px; color: var(--mc-muted); border-top: 1px solid var(--mc-border); margin-top: 4px; }
+.mc-palette-status { padding: 4px 10px; color: var(--mc-muted); font-size: 11px; border-top: 1px solid var(--mc-border); }

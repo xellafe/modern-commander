@@ -1,6 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core");
+// `Channel` finto con una proprietà `onmessage` vera: l'automock di Vitest scarta il setter.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage: ((b: unknown) => void) | undefined; } }));
 import { invoke } from "@tauri-apps/api/core";
 
 // `ansiEncoding` memorizza la promessa a livello di modulo: ogni test lo reimporta da zero.
@@ -31,4 +32,19 @@ test("ansiEncoding chiede al backend una volta sola, ma riprova se fallisce", as
   expect(await ansiEncoding()).toBe("windows-1250");
   expect(await ansiEncoding()).toBe("windows-1250");
   expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+test("scanTree passa i limiti e un canale che inoltra i lotti", async () => {
+  const { scanTree } = await import("./api");
+  vi.mocked(invoke).mockImplementation(async (_cmd, args) => {
+    (args as { onBatch: { onmessage: (b: unknown) => void } }).onBatch.onmessage([{ rel: "a", isDir: false }]);
+    return true;
+  });
+  const batches: unknown[] = [];
+  const truncated = await scanTree(3, "C:\\r", { maxDepth: 8, maxEntries: 20000, includeHidden: false }, (b) => batches.push(b));
+  expect(truncated).toBe(true);
+  expect(batches).toEqual([[{ rel: "a", isDir: false }]]);
+  expect(invoke).toHaveBeenCalledWith("scan_tree", expect.objectContaining({
+    requestId: 3, root: "C:\\r", maxDepth: 8, maxEntries: 20000, includeHidden: false,
+  }));
 });
