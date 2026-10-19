@@ -16,7 +16,7 @@
 - Le regole di sicurezza di §6.2 restano tutte: questo piano le aggiunge, non ne toglie nessuna. `validate` (lessicale) resta il primo controllo.
 - L'helper non esegue un'operazione se non tiene aperti, per tutta la sua durata, gli handle di ogni cartella antenata del bersaglio.
 - Gli handle di blocco chiedono un diritto di accesso ai dati: `FILE_LIST_DIRECTORY` (in alternativa `FILE_TRAVERSE` se il primo è negato) per le cartelle e `FILE_READ_DATA` per i file, con condivisione `FILE_SHARE_READ | FILE_SHARE_WRITE`, `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT`. Un handle con i soli attributi (`FILE_READ_ATTRIBUTES`) non partecipa al controllo della condivisione e quindi non blocca niente.
-- Il blocco impedisce di rinominare o eliminare una cartella, non di trasformarla sul posto in giunzione: `FSCTL_SET_REPARSE_POINT` basta un handle con `FILE_WRITE_ATTRIBUTES`, che la condivisione non esclude, ma la cartella deve essere vuota (`ERROR_DIR_NOT_EMPTY`, verificato). Le cartelle antenate più in alto contengono un figlio bloccato e quindi non si svuotano; la più profonda sì. Per questo il blocco crea una **sentinella** nella cartella bloccata più profonda (e, con `lock_with_item` su una cartella, dentro l'elemento): file `.mc-lock-<uuid v4>` aperto con `DELETE | FILE_READ_ATTRIBUTES`, condivisione 0, `CREATE_NEW`, `FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE`. Nessuno può eliminarla finché l'handle è aperto, la cartella resta non vuota e sparisce da sola alla chiusura (anche se l'helper termina). Se la sentinella non si crea, il blocco fallisce con l'errore di `CreateFileW` sul percorso della cartella: niente operazione senza sentinella.
+- Il blocco impedisce di rinominare o eliminare una cartella, non di trasformarla sul posto in giunzione: `FSCTL_SET_REPARSE_POINT` basta un handle con `FILE_WRITE_ATTRIBUTES`, che la condivisione non esclude, ma la cartella deve essere vuota (`ERROR_DIR_NOT_EMPTY`, verificato). Le cartelle antenate più in alto contengono un figlio bloccato e quindi non si svuotano; la più profonda sì. Per questo `lock_ancestors` crea una **sentinella** nella cartella bloccata più profonda; `lock_with_item` no (l'handle sull'elemento, senza `FILE_SHARE_DELETE`, lo tiene nel padre, che quindi non si svuota; una sentinella lì impedirebbe la copia elevata da supporti in sola lettura), ma ne crea una dentro l'elemento se è una cartella: file `.mc-lock-<uuid v4>` aperto con `DELETE | FILE_READ_ATTRIBUTES`, condivisione 0, `CREATE_NEW`, `FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE`. Nessuno può eliminarla finché l'handle è aperto, la cartella resta non vuota e sparisce da sola alla chiusura (anche se l'helper termina). Al rilascio del blocco, prima della chiusura, `SetFileInformationByHandle(FileDispositionInfoEx, DELETE | POSIX_SEMANTICS | ON_CLOSE)`: il nome sparisce anche se altri tengono un handle di soli attributi (antivirus, indicizzatore); se fallisce resta `DELETE_ON_CLOSE`. Se la sentinella non si crea, il blocco fallisce con l'errore di `CreateFileW` sul percorso della cartella: niente operazione senza sentinella.
 - Errore per un reparse point dove non è ammesso: `ErrorCode::Unsupported` con `detail` `reparse_point_in_path` (componente intermedio) o `reparse_point` (bersaglio; è il valore che `expand` usa già). Nessun nuovo codice di errore.
 
 ## Review Focus
@@ -55,7 +55,7 @@ pub fn lock_with_item(path: &Path) -> Result<PathLock, AppError>;
   - Ogni componente si apre con le opzioni delle Global Constraints. Si legge `GetFileInformationByHandle`: con `FILE_ATTRIBUTE_REPARSE_POINT` → `Unsupported` / `reparse_point_in_path`, con `path` uguale al componente. Un componente che non è una cartella → `NotFound` (stesso esito che avrebbe la primitiva).
   - `ACCESS_DENIED` su `FILE_LIST_DIRECTORY` → nuovo tentativo con `FILE_TRAVERSE`; se fallisce anche quello, l'errore con il percorso del componente.
   - `lock_with_item` blocca anche l'elemento finale (cartella o file, `FILE_LIST_DIRECTORY` / `FILE_READ_DATA` = stesso valore `0x1`); se è un reparse point → `Unsupported` / `reparse_point`.
-  - Sentinella (Global Constraints): `lock_ancestors` la crea nella cartella padre del percorso; `lock_with_item` la crea anche dentro l'elemento se è una cartella. Gli handle delle sentinelle vivono nel `PathLock`. `PathLock::hides(&self, name: &OsStr) -> bool` dice se `name` è una delle sue sentinelle: serve all'elenco elevato per non mostrarla.
+  - Sentinella (Global Constraints): `lock_ancestors` la crea nella cartella padre del percorso; `lock_with_item` non la crea nel padre (lo tiene non vuoto l'handle sull'elemento) ma dentro l'elemento se è una cartella. Gli handle delle sentinelle vivono nel `PathLock`. `PathLock::hides(&self, name: &OsStr) -> bool` dice se `name` è una delle sue sentinelle: serve all'elenco elevato per non mostrarla.
 
 - [ ] **Step 1: Test** (in `pathlock.rs`; le giunzioni si creano con `cmd /c mklink /J`, che non richiede l'amministratore)
 
@@ -100,7 +100,13 @@ fn junction(link: &Path, target: &Path) {
 #[test] fn sentinel_keeps_the_deepest_folder_non_empty() {
     /* d\a vuota; lock_ancestors(d\a\x): d\a contiene esattamente un elemento, e `lock.hides` lo riconosce;
        eliminarlo dà ERROR_SHARING_VIOLATION; dopo drop(lock) d\a è di nuovo vuota.
-       lock_with_item(d\a): una sentinella dentro d\a e una in d. */
+       lock_with_item(d\a): una sentinella dentro d\a e nessuna in d. */
+}
+#[test] fn item_lock_keeps_the_parent_non_empty_without_a_sentinel() {
+    /* d\a\f.txt; lock_with_item(f.txt): d\a contiene solo f.txt; eliminarlo dà ERROR_SHARING_VIOLATION; dopo drop si elimina. */
+}
+#[test] fn sentinel_name_goes_away_despite_other_handles() {
+    /* lock_ancestors(d\a\x), poi un handle di soli attributi sulla sentinella: dopo drop(lock) d\a si elimina subito. */
 }
 #[test] fn traverse_fallback_and_access_denied() {
     /* d\a\b; icacls d\a /deny <utente corrente>:(RD) (niente elenco, attraversamento ammesso):
@@ -142,17 +148,18 @@ fn junction(link: &Path, target: &Path) {
 /// Blocchi da tenere durante l'esecuzione di `req` (percorsi già validati e normalizzati).
 fn locks_for(req: &Request) -> Result<Vec<PathLock>, AppError>;
 // ops/rooted.rs
-/// Cartella risolta con GetFinalPathNameByHandleW (segue giunzioni, `subst` e unità di rete mappate).
-/// Se `dir` non esiste si risolve l'antenato esistente più profondo e si riattacca il resto;
-/// se non si risolve niente, `dir` invariato.
-pub(crate) fn resolve_dir(dir: &Path) -> PathBuf;
+/// Àncora di `dir`: `dir` stesso o, se non esiste, l'antenato esistente più profondo, con il suo
+/// percorso risolto da GetFinalPathNameByHandleW (segue giunzioni, `subst` e unità di rete mappate).
+/// `None` se non si risolve niente.
+pub(crate) fn resolve_dir(dir: &Path) -> Option<(PathBuf, PathBuf)>;
 /// Radici di un job, normalizzate: la cartella padre di ogni sorgente; `dest` se è la cartella di
 /// destinazione di Copy/Move, altrimenti (nome di file, `file_target`, o Rename) la sua cartella padre.
 /// Una radice non è mai l'elemento su cui si opera: risolverla seguirebbe un collegamento.
 pub(crate) fn job_roots(spec: &JobSpec) -> Vec<PathBuf>;
-/// Esecutore elevato di un job: ogni percorso che sta sotto una radice (la più lunga) riceve il
-/// prefisso risolto di quella radice; gli altri passano invariati. Le radici si risolvono una sola
-/// volta, alla creazione.
+/// Esecutore elevato di un job: ogni percorso che sta sotto l'àncora di una radice (la più lunga)
+/// riceve il prefisso risolto di quell'àncora; gli altri passano invariati. L'àncora è la radice o,
+/// se non esiste ancora, il suo antenato esistente più profondo (così si mappano anche le cartelle
+/// intermedie che il job crea); mai l'elemento su cui si opera. Si risolvono una sola volta, alla creazione.
 pub(crate) struct RootedExecutor { /* inner: Arc<dyn Executor>, roots: Vec<(PathBuf, PathBuf)> */ }
 impl RootedExecutor { pub(crate) fn new(inner: Arc<dyn Executor>, roots: Vec<PathBuf>) -> Self; }
 impl Executor for RootedExecutor { /* mappa i percorsi e delega */ }
@@ -193,10 +200,12 @@ impl Executor for RootedExecutor { /* mappa i percorsi e delega */ }
 #[test] fn ordinary_requests_still_work() { /* Mkdir, Copy, Rename, Move, Delete definitivo, List su un albero senza collegamenti: tutti Ok */ }
 // ops/rooted.rs
 #[test] fn resolve_dir_follows_junctions_and_keeps_unresolvable_paths() {
-    /* d\link giunzione a d\real: resolve_dir(d\link) → long_path(d\real) (confronto con same_path;
-       long_path perché %TEMP% può contenere nomi 8.3, che GetFinalPathNameByHandleW espande);
-       resolve_dir(d\link\nuova\sotto) → long_path(d\real)\nuova\sotto; resolve_dir(Z:\inesistente con unità assente) → invariato;
-       il risultato passa sempre `validate` se lo passava l'originale */
+    /* d\link giunzione a d\real: resolve_dir(d\link) e resolve_dir(d\link\nuova\sotto) → (d\link, long_path(d\real))
+       (confronto con same_path; long_path perché %TEMP% può contenere nomi 8.3, che GetFinalPathNameByHandleW espande);
+       il percorso risolto passa `validate`; resolve_dir(Z:\inesistente con unità assente) → None */
+}
+#[test] fn missing_root_maps_through_the_junction_above() {
+    /* radice d\link\a\b che non esiste: mkdir(d\link\a) → d\real\a, mkdir(d\link\a\b\c) → d\real\a\b\c */
 }
 #[test] fn rooted_executor_maps_under_roots_only_and_resolves_once() {
     /* esecutore finto che registra i percorsi ricevuti. Radici [d\link, d\altro]; d\link giunzione a d\real.

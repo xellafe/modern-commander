@@ -13,9 +13,10 @@ use std::path::{Component, Path, PathBuf};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_NONE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FILE_TRAVERSE, GetFileInformationByHandle, OPEN_EXISTING,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TEMPORARY, FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_ON_CLOSE,
+    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX, FILE_DISPOSITION_INFO_EX_FLAGS,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_NONE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, FileDispositionInfoEx, GetFileInformationByHandle, OPEN_EXISTING, SetFileInformationByHandle,
 };
 use windows::core::HSTRING;
 
@@ -23,16 +24,34 @@ use windows::core::HSTRING;
 /// sull'elemento stesso). Finché vive, quelle cartelle non si possono rinominare né eliminare.
 /// Le sentinelle (`.mc-lock-<uuid>`) tengono non vuota la cartella più profonda, che altrimenti
 /// si potrebbe trasformare sul posto in giunzione (`FSCTL_SET_REPARSE_POINT` richiede la cartella
-/// vuota e solo `FILE_WRITE_ATTRIBUTES`, che la condivisione non esclude).
+/// vuota e solo `FILE_WRITE_ATTRIBUTES`, che la condivisione non esclude). Con l'elemento bloccato
+/// il padre non ha sentinella (lo tiene non vuoto l'elemento); una cartella bloccata ne ha una dentro.
 pub struct PathLock {
     _handles: Vec<OwnedHandle>,
-    sentinels: Vec<OsString>,
+    sentinels: Vec<(OwnedHandle, OsString)>,
 }
 
 impl PathLock {
     /// `true` se `name` è una delle sentinelle di questo blocco (l'elenco non deve mostrarla).
     pub fn hides(&self, name: &OsStr) -> bool {
-        self.sentinels.iter().any(|s| s == name)
+        self.sentinels.iter().any(|(_, s)| s == name)
+    }
+}
+
+impl Drop for PathLock {
+    /// Eliminazione POSIX delle sentinelle alla chiusura: il nome sparisce anche se altri tengono un
+    /// handle di soli attributi (antivirus, indicizzatore); con `DELETE_ON_CLOSE` legacy resterebbe
+    /// fino all'ultimo handle e un'eliminazione della cartella subito dopo fallirebbe. Serve
+    /// `ON_CLOSE`: senza, sull'handle già `DELETE_ON_CLOSE` prevale la semantica legacy (verificato).
+    /// Se la chiamata fallisce resta `DELETE_ON_CLOSE`.
+    fn drop(&mut self) {
+        let flags = FILE_DISPOSITION_FLAG_DELETE.0 | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS.0 | FILE_DISPOSITION_FLAG_ON_CLOSE.0;
+        let info = FILE_DISPOSITION_INFO_EX { Flags: FILE_DISPOSITION_INFO_EX_FLAGS(flags) };
+        for (h, _) in &self.sentinels {
+            let _ = unsafe {
+                SetFileInformationByHandle(raw(h), FileDispositionInfoEx, (&raw const info).cast(), size_of_val(&info) as u32)
+            };
+        }
     }
 }
 
@@ -97,14 +116,13 @@ fn lock(path: &Path, with_item: bool) -> Result<PathLock, AppError> {
         }
     }
     let n = parts.len();
-    let (mut handles, mut sentinels) = (Vec::with_capacity(n + 2), Vec::new());
+    let (mut handles, mut sentinels) = (Vec::with_capacity(n + 1), Vec::new());
     for (i, name) in parts.into_iter().enumerate() {
         let last = i + 1 == n;
-        if last && i > 0 {
-            // `cur` è il padre, già bloccato: la sentinella lo tiene non vuoto.
-            let (h, s) = sentinel(&cur)?;
-            handles.push(h);
-            sentinels.push(s);
+        if last && i > 0 && !with_item {
+            // `cur` è il padre, già bloccato: la sentinella lo tiene non vuoto. Con l'elemento non
+            // serve: il suo handle (senza `FILE_SHARE_DELETE`) lo tiene nel padre.
+            sentinels.push(sentinel(&cur)?);
         }
         cur.push(name);
         if last && !with_item {
@@ -119,9 +137,7 @@ fn lock(path: &Path, with_item: bool) -> Result<PathLock, AppError> {
         }
         handles.push(h);
         if last && attrs & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
-            let (h, s) = sentinel(&cur)?;
-            handles.push(h);
-            sentinels.push(s);
+            sentinels.push(sentinel(&cur)?);
         }
     }
     Ok(PathLock { _handles: handles, sentinels })
@@ -226,8 +242,38 @@ mod tests {
         assert!(names(&a).is_empty());
         let lock = lock_with_item(&a).unwrap();
         assert_eq!(names(&a).len(), 1);
-        let in_d: Vec<_> = names(d.path()).into_iter().filter(|n| lock.hides(n)).collect();
-        assert_eq!(in_d.len(), 1);
+        // Nessuna sentinella nel padre: l'handle sull'elemento basta a tenerlo non vuoto.
+        assert_eq!(names(d.path()).into_iter().filter(|n| lock.hides(n)).count(), 0);
+    }
+
+    #[test]
+    fn item_lock_keeps_the_parent_non_empty_without_a_sentinel() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        fs::create_dir(&a).unwrap();
+        let f = a.join("f.txt");
+        fs::write(&f, b"x").unwrap();
+        let lock = lock_with_item(&f).unwrap();
+        assert_eq!(fs::read_dir(&a).unwrap().count(), 1);
+        assert_eq!(fs::remove_file(&f).unwrap_err().raw_os_error(), Some(32)); // ERROR_SHARING_VIOLATION
+        drop(lock);
+        fs::remove_file(&f).unwrap();
+    }
+
+    /// Un handle di soli attributi sulla sentinella (antivirus, indicizzatore) non la lascia nella
+    /// cartella dopo il rilascio.
+    #[test]
+    fn sentinel_name_goes_away_despite_other_handles() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        fs::create_dir(&a).unwrap();
+        let lock = lock_ancestors(&a.join("x")).unwrap();
+        let name = fs::read_dir(&a).unwrap().next().unwrap().unwrap().file_name();
+        let other = fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES.0).share_mode(7).open(a.join(&name)).unwrap();
+        drop(lock);
+        fs::remove_dir(&a).unwrap();
+        drop(other);
     }
 
     /// Toglie all'utente corrente i permessi negati con icacls, anche se il test fallisce.

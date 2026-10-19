@@ -39,11 +39,16 @@
 //!   eliminazione definitiva operano sul collegamento stesso, senza seguirlo.
 //! - Sentinella: una cartella vuota si trasforma sul posto in giunzione anche se bloccata
 //!   (`FSCTL_SET_REPARSE_POINT` chiede solo `FILE_WRITE_ATTRIBUTES`). Il blocco crea quindi nella
-//!   cartella bloccata più profonda un file `.mc-lock-<uuid>` (condivisione 0, `DELETE_ON_CLOSE`) che
-//!   la tiene non vuota; l'elenco non lo mostra. Senza sentinella il blocco fallisce.
+//!   cartella bloccata più profonda un file `.mc-lock-<uuid>` (condivisione 0, `DELETE_ON_CLOSE`,
+//!   eliminazione POSIX al rilascio) che la tiene non vuota; l'elenco elevato non lo mostra. Se
+//!   l'elemento stesso è bloccato (sorgente di una copia, elenco) il padre non ha
+//!   sentinella: lo tiene non vuoto l'handle sull'elemento; una cartella bloccata ne ha una dentro.
+//!   Senza sentinella il blocco fallisce.
 //! - L'app risolve (giunzioni, `subst`, unità di rete) solo le radici del job, una volta, quando il
-//!   job passa all'helper (`ops::rooted`): una giunzione comparsa dopo sotto una radice arriva
-//!   all'helper come giunzione e, come componente intermedio, viene rifiutata. I blocchi si rilasciano prima della risposta finale.
+//!   job passa all'helper (`ops::rooted`); una radice che non esiste ancora si risolve dal suo
+//!   antenato esistente più profondo. Una giunzione comparsa dopo sotto quel punto arriva
+//!   all'helper come giunzione e, come componente intermedio, viene rifiutata. I blocchi si
+//!   rilasciano prima della risposta finale.
 //!
 //! **Rischi residui.**
 //! - Una radice del job sostituita con una giunzione prima della prima elevazione viene seguita:
@@ -51,10 +56,15 @@
 //! - Eliminazione nel Cestino: l'elemento si controlla ma non si blocca (il Cestino non sposta un
 //!   elemento aperto senza `FILE_SHARE_DELETE`); resta una finestra in cui si può scambiare con un
 //!   collegamento, che finisce nel Cestino come collegamento.
-//! - Anche i reparse point che non sono collegamenti sono rifiutati come componenti intermedi: volumi montati in una cartella,
-//!   OneDrive "File su richiesta", deduplicazione.
+//! - Anche i reparse point che non sono collegamenti sono rifiutati: i volumi montati in una
+//!   cartella come componenti intermedi; i file deduplicati e i segnaposto di OneDrive ("File su
+//!   richiesta") soprattutto come bersaglio (sorgente di una copia, elenco, Cestino).
 //! - Una cartella in cui l'amministratore non può creare file (supporti in sola lettura) non si
-//!   blocca: la sentinella non si crea e l'operazione fallisce.
+//!   blocca dove serve la sentinella: scriverci o elencarla come amministratore fallisce. La
+//!   copia da quei supporti funziona (la sorgente non ha sentinella nel padre).
+//! - Durante un'operazione elevata il file nascosto `.mc-lock-*` è visibile nella cartella
+//!   bloccata (pannelli con i file nascosti mostrati, eventi del watcher); dopo un'interruzione
+//!   di corrente a metà richiesta può restare come file normale, da eliminare a mano.
 //! - Percorsi che l'app non riesce a risolvere arrivano invariati; l'helper li rifiuta se
 //!   contengono un collegamento.
 //! - Il codice che gira già con l'utente corrente può pilotare l'app (input, debug) e quindi le

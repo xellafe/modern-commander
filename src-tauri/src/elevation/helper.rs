@@ -255,6 +255,8 @@ mod tests {
         junction(&link, &real);
 
         refused(Request::List { path: link.clone() }, "reparse_point");
+        refused(Request::Copy { src: link.clone(), dst: d.path().join("copia"), overwrite: false, flush: false }, "reparse_point");
+        assert!(!d.path().join("copia").exists());
         refused(Request::Delete { path: link.clone(), is_dir: true, permanent: false }, "reparse_point");
         assert!(link.exists());
         exec(Request::Delete { path: link.clone(), is_dir: true, permanent: true }).0.unwrap();

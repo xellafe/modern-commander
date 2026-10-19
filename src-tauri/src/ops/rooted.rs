@@ -21,18 +21,11 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::core::HSTRING;
 
-/// Cartella risolta con GetFinalPathNameByHandleW (segue giunzioni, `subst` e unità di rete mappate).
-/// Se `dir` non esiste si risolve l'antenato esistente più profondo e si riattacca il resto;
-/// se non si risolve niente, `dir` invariato.
-pub(crate) fn resolve_dir(dir: &Path) -> PathBuf {
-    for a in dir.ancestors() {
-        if let Some(r) = final_path(a) {
-            let mut out = r;
-            out.extend(dir.components().skip(a.components().count()));
-            return out;
-        }
-    }
-    dir.to_path_buf()
+/// Àncora di `dir`: `dir` stesso o, se non esiste, l'antenato esistente più profondo, con il suo
+/// percorso risolto da GetFinalPathNameByHandleW (segue giunzioni, `subst` e unità di rete mappate).
+/// `None` se non si risolve niente.
+pub(crate) fn resolve_dir(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    dir.ancestors().find_map(|a| final_path(a).map(|r| (a.to_path_buf(), r)))
 }
 
 /// Percorso finale di una cartella esistente, solo in forma `C:\…` o `\\server\share\…` (quella che
@@ -78,19 +71,21 @@ pub(crate) fn job_roots(spec: &JobSpec) -> Vec<PathBuf> {
     spec.sources.iter().filter_map(|s| parent(s)).chain(dest_dir).collect()
 }
 
-/// Esecutore elevato di un job: ogni percorso che sta sotto una radice (la più lunga) riceve il
-/// prefisso risolto di quella radice; gli altri passano invariati. Le radici si risolvono una sola
-/// volta, alla creazione.
+/// Esecutore elevato di un job: ogni percorso che sta sotto l'àncora di una radice (la più lunga)
+/// riceve il prefisso risolto di quell'àncora; gli altri passano invariati. L'àncora (`resolve_dir`)
+/// è la radice o, se non esiste ancora, il suo antenato esistente più profondo: così si mappano
+/// anche le cartelle intermedie che il job crea. Non è mai l'elemento su cui si opera. Le radici
+/// si risolvono una sola volta, alla creazione.
 #[derive(Clone)]
 pub struct RootedExecutor {
     inner: Arc<dyn Executor>,
-    /// (radice normalizzata, radice risolta)
+    /// (àncora normalizzata, àncora risolta)
     roots: Vec<(PathBuf, PathBuf)>,
 }
 
 impl RootedExecutor {
     pub fn new(inner: Arc<dyn Executor>, roots: Vec<PathBuf>) -> Self {
-        let roots = roots.iter().map(|r| normalize_lexical(r)).map(|r| (r.clone(), resolve_dir(&r))).collect();
+        let roots = roots.iter().filter_map(|r| resolve_dir(&normalize_lexical(r))).collect();
         Self { inner, roots }
     }
 
@@ -161,16 +156,14 @@ mod tests {
         let (real, link) = (d.path().join("real"), d.path().join("link"));
         fs::create_dir(&real).unwrap();
         junction(&link, &real);
-        let r = resolve_dir(&link);
-        assert!(same_path(&r, &long_path(&real)), "{r:?}");
-        let r = resolve_dir(&link.join(r"nuova\sotto"));
-        assert!(same_path(&r, &long_path(&real).join(r"nuova\sotto")), "{r:?}");
-        let absent = (b'D'..=b'Z').map(|c| format!(r"{}:\", c as char)).find(|r| !Path::new(r).exists()).expect("lettera libera");
-        let missing = Path::new(&absent).join("inesistente");
-        assert_eq!(resolve_dir(&missing), missing);
-        for p in [link.clone(), link.join(r"nuova\sotto"), missing] {
-            assert!(validate(&Request::Mkdir { path: resolve_dir(&p) }).is_ok(), "{p:?}");
+        for p in [link.clone(), link.join(r"nuova\sotto")] {
+            let (anchor, r) = resolve_dir(&p).unwrap();
+            assert_eq!(anchor, link);
+            assert!(same_path(&r, &long_path(&real)), "{r:?}");
+            assert!(validate(&Request::Mkdir { path: r }).is_ok(), "{p:?}");
         }
+        let absent = (b'D'..=b'Z').map(|c| format!(r"{}:\", c as char)).find(|r| !Path::new(r).exists()).expect("lettera libera");
+        assert_eq!(resolve_dir(&Path::new(&absent).join("inesistente")), None);
     }
 
     /// Registra i percorsi ricevuti senza toccare il disco.
@@ -222,6 +215,23 @@ mod tests {
         assert!(same_path(&got[0], &long_path(&real).join(r"a\b")), "{got:?}");
         assert_eq!(got[1], fuori);
         assert!(same_path(&got[2], &long_path(&real).join("c")), "{got:?}");
+    }
+
+    /// Radice non ancora esistente sotto una giunzione legittima: si mappa dall'antenato risolto,
+    /// anche per le cartelle intermedie che il job crea.
+    #[test]
+    fn missing_root_maps_through_the_junction_above() {
+        let d = tempfile::tempdir().unwrap();
+        let (real, link) = (d.path().join("real"), d.path().join("link"));
+        fs::create_dir(&real).unwrap();
+        junction(&link, &real);
+        let rec = Arc::new(Recorder::default());
+        let x = RootedExecutor::new(rec.clone(), vec![link.join(r"a\b")]);
+        x.mkdir(&link.join("a")).unwrap();
+        x.mkdir(&link.join(r"a\b\c")).unwrap();
+        let got = rec.0.lock().unwrap().clone();
+        assert!(same_path(&got[0], &long_path(&real).join("a")), "{got:?}");
+        assert!(same_path(&got[1], &long_path(&real).join(r"a\b\c")), "{got:?}");
     }
 
     fn spec(kind: JobKind, src: PathBuf, dest: PathBuf) -> JobSpec {
