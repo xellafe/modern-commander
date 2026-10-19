@@ -116,6 +116,11 @@
     "edit": "Edit favorites",
     "done": "Done"
   },
+  "palette": {
+    "placeholder": "Type a command…",
+    "empty": "No matching commands",
+    "results": "Results"
+  },
   "commands": {
     "mc_CursorUp": "Cursor up",
     "mc_CursorDown": "Cursor down",
@@ -177,7 +182,8 @@
     "cm_List": "View",
     "cm_Edit": "Edit",
     "cm_Config": "Settings",
-    "mc_Keybindings": "Keyboard shortcuts"
+    "mc_Keybindings": "Keyboard shortcuts",
+    "mc_CommandPalette": "Command palette"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",

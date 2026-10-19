@@ -116,6 +116,11 @@
     "edit": "Modifica preferiti",
     "done": "Fine"
   },
+  "palette": {
+    "placeholder": "Scrivi un comando…",
+    "empty": "Nessun comando trovato",
+    "results": "Risultati"
+  },
   "commands": {
     "mc_CursorUp": "Cursore su",
     "mc_CursorDown": "Cursore giù",
@@ -177,7 +182,8 @@
     "cm_List": "Visualizza",
     "cm_Edit": "Modifica",
     "cm_Config": "Impostazioni",
-    "mc_Keybindings": "Scorciatoie da tastiera"
+    "mc_Keybindings": "Scorciatoie da tastiera",
+    "mc_CommandPalette": "Palette dei comandi"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",

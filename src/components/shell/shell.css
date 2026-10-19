@@ -28,18 +28,16 @@ body {
   background: var(--mc-panel); border-bottom: 1px solid var(--mc-border);
 }
 .mc-title-name { color: var(--mc-muted); font-size: 11px; pointer-events: none; }
-.mc-title-search {
-  flex: 0 0 42%; margin: 0 auto; height: 20px; display: flex; align-items: center; gap: 6px;
-  padding: 0 8px; box-sizing: border-box;
-  border: 1px solid var(--mc-border); border-radius: calc(var(--mc-radius) + 2px);
+/* Pulsante con l'aspetto di un campo di ricerca: apre la palette dei comandi */
+.mc-shell .mc-title-search {
+  flex: 0 0 42%; margin: 0 auto; height: 20px; gap: 6px;
+  padding: 0 8px; box-sizing: border-box; font-size: 11px;
+  border-color: var(--mc-border); border-radius: calc(var(--mc-radius) + 2px);
   background: var(--mc-bg); color: var(--mc-muted);
 }
-.mc-title-search > * { pointer-events: none; }
-.mc-title-search input {
-  flex: 1; min-width: 0; border: 0; background: none; outline: 0; padding: 0;
-  color: var(--mc-muted); font: inherit; font-size: 11px; text-align: center;
-}
-.mc-title-search input::placeholder { color: var(--mc-muted); opacity: 1; }
+.mc-shell .mc-title-search:hover { border-color: var(--mc-muted); }
+.mc-title-search span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-title-search kbd { margin-left: 6px; font: inherit; font-size: 10px; opacity: 0.8; }
 .mc-title-toggles { display: flex; gap: 4px; }
 .mc-title-toggles button {
   width: 24px; height: 20px; border-radius: var(--mc-radius);

@@ -4,6 +4,7 @@ import App from "./App";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
 import { initCloseGuard, registerNavigationCommands } from "./commands/navigation";
+import { registerPaletteCommands } from "./commands/palette";
 import { registerSettingsCommands } from "./commands/settings";
 import { registerShellCommands, suppressKeyboardContextMenu } from "./commands/shell";
 import "./styles/tokens.css";
@@ -26,6 +27,7 @@ registerHotlistCommands();
 registerFileOpCommands();
 registerShellCommands();
 registerSettingsCommands();
+registerPaletteCommands();
 window.addEventListener("contextmenu", suppressKeyboardContextMenu);
 // Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
 initJobs().catch(console.error);

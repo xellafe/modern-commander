@@ -1,0 +1,23 @@
+/* Palette dei comandi (Ctrl+Shift+P): riquadro in alto al centro; lo sfondo è trasparente e chiude col click */
+.mc-palette-backdrop { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding-top: 36px; }
+.mc-palette {
+  box-sizing: border-box; width: min(600px, 92vw); display: flex; flex-direction: column; outline: 0; overflow: hidden;
+  background: var(--mc-panel); color: var(--mc-text); border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
+  box-shadow: var(--mc-shadow); font: 12px/1.45 var(--mc-font-ui);
+}
+.mc-palette input {
+  box-sizing: border-box; width: 100%; margin: 6px 0 0; padding: 4px 10px; outline: 0; border: 0;
+  background: none; color: var(--mc-text); font: inherit; user-select: text;
+}
+.mc-palette ul { max-height: 50vh; overflow: auto; margin: 4px 0 0; padding: 0 0 4px; list-style: none; border-top: 1px solid var(--mc-border); }
+.mc-palette li { display: flex; align-items: center; gap: 8px; height: var(--mc-row-height); padding: 0 10px; white-space: nowrap; }
+.mc-palette li.sel { background: var(--mc-selection); }
+.mc-palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mc-palette-detail { color: var(--mc-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.mc-palette mark { background: none; color: var(--mc-accent); font-weight: 600; }
+.mc-palette-chord { display: flex; gap: 2px; }
+.mc-palette kbd {
+  min-width: 12px; padding: 0 4px; text-align: center; color: var(--mc-muted); font: 10px/16px var(--mc-font-ui);
+  border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
+}
+.mc-palette-empty { padding: 8px 10px; color: var(--mc-muted); border-top: 1px solid var(--mc-border); margin-top: 4px; }

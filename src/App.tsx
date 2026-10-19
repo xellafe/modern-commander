@@ -2,6 +2,7 @@ import { useKeyboard } from "./commands/useKeyboard";
 import { DialogHost } from "./components/dialogs/Dialog";
 import { HotlistMenu } from "./components/dialogs/HotlistMenu";
 import { GroupsArea } from "./components/groups/GroupsArea";
+import { Palette } from "./components/palette/Palette";
 import { PageHost } from "./components/settings/PageHost";
 import "./components/shell/shell.css";
 import { ActivityBar } from "./components/shell/ActivityBar";
@@ -38,6 +39,7 @@ export default function App() {
         <HotlistMenu />
       </div>
       <DialogHost />
+      <Palette />
     </>
   );
 }
