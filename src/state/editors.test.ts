@@ -16,7 +16,7 @@ import * as api from "../ipc/api";
 import type { FileInfo } from "../ipc/types";
 import { useTabViews } from "./tabViews";
 import { useUi } from "./ui";
-import { decodeForEditor, dirtyEditorCount, editorModel, retryOptions, useEditors } from "./editors";
+import { blockUnloadIfDirty, decodeForEditor, dirtyEditorCount, editorModel, retryOptions, useEditors } from "./editors";
 
 class FakeModel {
   /** Versione alternativa: cronologia di versioni, l'undo torna a una già vista. */
@@ -102,6 +102,19 @@ test("a tab closed while the file is loading does not come back", async () => {
   await opening;
   expect(useEditors.getState().docs.t1).toBeUndefined();
   expect(editorModel("t1")).toBeUndefined();
+});
+
+test("blockUnloadIfDirty: la ricarica della pagina si ferma solo con modifiche non salvate", async () => {
+  const ev = () => ({ preventDefault: vi.fn(), returnValue: undefined as unknown });
+  const clean = ev();
+  blockUnloadIfDirty(clean);
+  expect(clean.preventDefault).not.toHaveBeenCalled();
+  await useEditors.getState().open("t1", "C:\\a.ts");
+  model().type("uno");
+  const dirty = ev();
+  blockUnloadIfDirty(dirty);
+  expect(dirty.preventDefault).toHaveBeenCalled();
+  expect(dirty.returnValue).toBe(""); // WebView2 chiede la conferma solo con returnValue impostato
 });
 
 test("dirty follows the version of the last save: undo back to the saved point is clean", async () => {

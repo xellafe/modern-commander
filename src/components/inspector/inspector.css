@@ -29,6 +29,7 @@
 .mc-inspector-md a { color: var(--mc-accent); cursor: default; }
 .mc-inspector-md blockquote { margin: 0.5em 0; padding-left: 10px; color: var(--mc-muted); border-left: 2px solid var(--mc-border); }
 .mc-inspector-facts { padding: 10px; display: flex; flex-direction: column; gap: 4px; user-select: text; }
+.mc-inspector-facts > button { align-self: flex-start; }
 .mc-inspector-archive { margin: 0; padding: 0 0 4px; list-style: none; }
 .mc-inspector-archive li { display: flex; gap: 8px; justify-content: space-between; padding: 0 10px; height: var(--mc-row-height); line-height: var(--mc-row-height); }
 .mc-inspector-archive li span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

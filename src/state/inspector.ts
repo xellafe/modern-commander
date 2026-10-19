@@ -15,6 +15,12 @@ export const PREVIEW_BYTES = 256 * 1024;
 export const DEBOUNCE_MS = 120;
 export const ARCHIVE_LIMIT = 500;
 
+/**
+ * Archivi che l'ispettore elenca solo su richiesta: il crate 7z non ha un limite di memoria, e un file ostile di poche
+ * centinaia di byte può dichiarare intestazioni e dizionari da GB. Con il cursore che corre non deve mai partire da solo.
+ */
+const ON_DEMAND = /\.7z$/i;
+
 /** Proprietario fittizio dei calcoli di dimensione dell'ispettore (`cancelTabSizes`). */
 const OWNER = "inspector";
 
@@ -27,6 +33,8 @@ export type Preview =
   | { kind: "folder"; size: DirSize | null }
   | { kind: "drive"; drive: Drive }
   | { kind: "archive"; listing: ArchiveListing }
+  /** Archivio non elencato da solo (7z, vedi `ON_DEMAND`): si elenca con `requestArchive`. */
+  | { kind: "archiveOnDemand" }
   | { kind: "binary" }
   | { kind: "error"; code: ErrorCode };
 
@@ -46,6 +54,8 @@ interface InspectorState {
   /** Con debounce; null = ispettore nascosto o niente da mostrare (annulla tutto subito). */
   setTarget: (t: InspectorTarget | null) => void;
   requestHash: (algo: HashAlgo) => void;
+  /** Elenca un archivio `archiveOnDemand`; annullata come ogni altra richiesta al cambio di bersaglio. */
+  requestArchive: () => void;
 }
 
 // Fuori dallo store: non sono stato da mostrare e non devono far rendere nessuno.
@@ -104,6 +114,7 @@ async function load(t: InspectorTarget, my: number) {
       return patch({ preview: { kind, path: t.path } });
     }
     if (kind === "archive") {
+      if (ON_DEMAND.test(name)) return patch({ preview: { kind: "archiveOnDemand" } });
       const listing = await tracked((id) => listArchive(id, t.path, ARCHIVE_LIMIT));
       return patch({ preview: { kind: "archive", listing } });
     }
@@ -136,6 +147,16 @@ export const useInspector = create<InspectorState>((set, get) => ({
       set({ target: t, info: null, preview: { kind: "loading" }, hashes: {} });
       void load(t, my);
     }, DEBOUNCE_MS);
+  },
+  requestArchive: () => {
+    const { target, preview } = get();
+    if (shown !== token || !target || preview?.kind !== "archiveOnDemand") return;
+    const my = token;
+    set({ preview: { kind: "loading" } });
+    tracked((id) => listArchive(id, target.path, ARCHIVE_LIMIT)).then(
+      (listing) => my === token && set({ preview: { kind: "archive", listing } }),
+      (e) => my === token && set({ preview: { kind: "error", code: toCode(e) } }),
+    );
   },
   requestHash: (algo) => {
     const { target, hashes } = get();

@@ -63,6 +63,16 @@ export const savedViewState = (tabId: string) => viewStates.get(tabId) ?? null;
 /** Schede editor con modifiche non salvate (la chiusura della finestra le conta). */
 export const dirtyEditorCount = () => Object.values(useEditors.getState().docs).filter((d) => d.dirty).length;
 
+/**
+ * `beforeunload`: una ricarica della pagina con modifiche non salvate chiede conferma (rete di sicurezza: i tasti di
+ * ricarica sono già inghiottiti da `useKeyboard`). WebView2 mostra la richiesta solo con `returnValue` impostato.
+ */
+export function blockUnloadIfDirty(e: { preventDefault(): void; returnValue: unknown }): void {
+  if (dirtyEditorCount() === 0) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+
 export interface SaveOptions {
   /** Sovrascrive anche se il file è cambiato su disco. */
   force?: boolean;

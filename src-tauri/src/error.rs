@@ -61,7 +61,7 @@ impl AppError {
             Some(112) => ErrorCode::DiskFull,
             Some(21) => ErrorCode::NotReady,
             Some(123) => ErrorCode::InvalidName,
-            Some(32 | 33) => ErrorCode::FileInUse,
+            Some(32 | 33 | 1175) => ErrorCode::FileInUse,
             Some(17) => ErrorCode::NotSameDevice,
             Some(1235) => ErrorCode::Cancelled,
             _ => ErrorCode::Io,
@@ -92,6 +92,7 @@ mod tests {
         assert_eq!(e(1235), ErrorCode::Cancelled);
         assert_eq!(e(32), ErrorCode::FileInUse); // ERROR_SHARING_VIOLATION
         assert_eq!(e(33), ErrorCode::FileInUse); // ERROR_LOCK_VIOLATION
+        assert_eq!(e(1175), ErrorCode::FileInUse); // ERROR_UNABLE_TO_REMOVE_REPLACED (ReplaceFileW)
         assert_eq!(serde_json::to_value(ErrorCode::FileInUse).unwrap(), "FILE_IN_USE");
         assert_eq!(e(9999), ErrorCode::Io);
     }

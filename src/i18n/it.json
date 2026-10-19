@@ -107,6 +107,7 @@
     "driveFree": "{{free}} liberi su {{total}}",
     "archiveTotal": "Voci: {{n}}",
     "archiveFirst": "Prime {{n}} voci; l'archivio ne contiene altre.",
+    "showArchiveContents": "Mostra contenuto",
     "size": "Dimensione",
     "sizeExact": "{{bytes}} byte",
     "created": "Creazione",

@@ -19,6 +19,11 @@ test('toggleTerminal', () => {
   expect(toggleTerminal({ visible: false, tab: 'operations' }, false)).toEqual({ visible: true, tab: 'terminal', create: true });
 });
 
+test('toggleTerminal: una sessione ancora in avvio conta, niente secondo terminale', () => {
+  expect(toggleTerminal({ visible: false, tab: 'terminal' }, false, 1)).toEqual({ visible: true, tab: 'terminal', create: false });
+  expect(toggleTerminal({ visible: false, tab: 'terminal' }, false, 0).create).toBe(true);
+});
+
 test('passToShell keeps global shortcuts for the app', () => {
   const km = new Map([['Ctrl+Oem3', 'mc_ToggleTerminal'], ['Ctrl+Shift+P', 'mc_CommandPalette'], ['Ctrl+P', 'mc_QuickJump'], ['Tab', 'mc_FocusNextGroup']]);
   const global = (id: string) => id === 'mc_ToggleTerminal' || id === 'mc_CommandPalette';
@@ -28,6 +33,17 @@ test('passToShell keeps global shortcuts for the app', () => {
   expect(passToShell(k(80, { ctrlKey: true }), km, global)).toBe(true);
   expect(passToShell(k(9), km, global)).toBe(true);
   expect(passToShell(k(67, { ctrlKey: true }), km, global)).toBe(true);
+});
+
+test('passToShell lascia il tasto di incolla al browser (evento paste sulla textarea di xterm), non alla shell', () => {
+  const km = new Map<string, string>();
+  const k = (keyCode: number, m: Partial<KeyLike> = {}) => ({ keyCode, ctrlKey: false, shiftKey: false, altKey: false, ...m });
+  expect(passToShell(k(86, { ctrlKey: true }), km, () => false)).toBe(false); // Ctrl+V
+  expect(passToShell(k(86, { ctrlKey: true, shiftKey: true }), km, () => false)).toBe(false); // Ctrl+Shift+V
+  expect(passToShell(k(45, { shiftKey: true }), km, () => false)).toBe(false); // Shift+Insert
+  expect(passToShell(k(86), km, () => false)).toBe(true); // 'v' semplice
+  expect(passToShell(k(86, { ctrlKey: true, altKey: true }), km, () => false)).toBe(true);
+  expect(passToShell(k(45, { ctrlKey: true }), km, () => false)).toBe(true); // Ctrl+Insert non è incolla
 });
 
 test('resolveShell: auto segue il backend (pwsh, powershell, cmd), una shell assente ripiega su auto', () => {

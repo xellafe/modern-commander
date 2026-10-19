@@ -24,7 +24,9 @@ export const onFsChanged = (cb: (tabId: string) => void): Promise<UnlistenFn> =>
 export const calcDirSize = (requestId: number, path: string) =>
   invoke<void>("calc_dir_size", { requestId, path });
 
-let lastRequestId = 0;
+// Parte dall'ora: dopo un ricaricamento della pagina il registro del backend e gli eventi in volo sopravvivono, e un id
+// ripartito da 1 risolverebbe (o sovrascriverebbe) la richiesta sbagliata.
+let lastRequestId = Date.now();
 
 /** Id per le richieste annullabili (dimensione, hash, scansione, archivi): unico per tutta l'app. */
 export const nextRequestId = () => ++lastRequestId;

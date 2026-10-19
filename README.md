@@ -32,7 +32,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 
 | Tasti | Funzione |
 |---|---|
-| F3 | Viewer interno in una scheda: testo (con codifica), esadecimale, immagini, PDF, audio e video; i file di più GB si leggono a blocchi |
+| F3 | Viewer interno in una scheda: testo (con codifica), esadecimale, immagini, PDF, audio e video; i file si leggono a blocchi, quindi anche quelli di più GB (da verificare) |
 | F4 | Editor Monaco in una scheda, con salvataggio sicuro (file temporaneo e sostituzione, mai sul posto) |
 | Ctrl+Q | Ispettore: anteprima, metadati, MD5/SHA-1/SHA-256 e elenco del contenuto degli archivi |
 | Ctrl+Shift+P | Command palette |
@@ -40,9 +40,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 | Ctrl+ò / Ctrl+Shift+ò | Terminale a schede nel pannello in basso / nuovo terminale |
 | Ctrl+Shift+F1 | Vista a miniature (anteprime della Shell) |
 
+- **Ctrl+ò**: "ò" è il nome sul layout italiano del tasto `Oem3` (il suo carattere cambia con il layout: sul layout US è il backtick, a sinistra dell'1).
 - **Viewer**: nel testo `A`, `7` e `6` scelgono ANSI, UTF-8 e UTF-16LE; `W` va a capo; `1` testo, `3` esadecimale. Esc chiude la scheda.
 - **Editor esterno**: l'opzione `useExternalEditor` nelle impostazioni fa aprire a F4 `externalEditor` invece di Monaco.
-- Monaco, pdf.js, xterm.js e markdown-it si caricano solo al primo uso: non pesano sull'avvio.
+- Monaco, pdf.js, xterm.js e markdown-it si caricano solo al primo uso, in chunk separati dal principale; l'effetto sul tempo di avvio è **da verificare** sulla build release (vedi il follow-up).
 
 ### Limiti accettati
 
@@ -52,7 +53,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 - Un file solo ASCII di un utente con ANSI diverso da UTF-8 è rilevato come UTF-8.
 - Il salvataggio scrive su `<file>.<8 cifre>.mcpart`; dopo un crash del processo può restare un residuo `.mcpart`.
 - Immagini, PDF e media passano dall'asset protocol di Tauri: la verifica di Range 206, percorsi UNC, nomi con `#`, `%` e spazi, percorsi oltre 260 caratteri è **da verificare**; per i file che falliscono restano testo ed esadecimale. Vedi [docs/superpowers/fase-2-follow-up.md](docs/superpowers/fase-2-follow-up.md).
-- Archivi: solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'estrazione arriva con la fase 3. 7z con intestazioni cifrate non supportato; RAR escluso.
+- Archivi: solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'estrazione arriva con la fase 3. 7z con intestazioni cifrate non supportato; RAR escluso. Nell'ispettore ZIP, TAR e TAR.GZ si elencano da soli, il 7z solo su richiesta (pulsante "Mostra contenuto"): il crate non limita la memoria e un 7z costruito ad arte può allocarne molta.
 
 ## Build
 

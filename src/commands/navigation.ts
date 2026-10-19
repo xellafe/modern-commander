@@ -138,8 +138,14 @@ export function ensureDirTab(path?: string): string {
   return activeTab(layout()).id;
 }
 
-/** Chiude la scheda e ne libera lo stato (watcher, listing, viewer, editor), senza chiedere. L'ultima scheda dell'ultimo gruppo resta. */
+/**
+ * Chiude la scheda e ne libera lo stato (watcher, listing, viewer, editor), senza chiedere. L'ultima scheda dell'ultimo
+ * gruppo resta: se è una scheda di file, si sostituisce con una scheda cartella sulla sua cartella.
+ */
 export function closeTabNow(tabId: string) {
+  const l = layout();
+  const tab = l.tabs[tabId];
+  if (tab?.file && l.groups.length === 1 && l.groups[0].tabIds.length === 1) l.newTab(l.groups[0].id, tab.path);
   layout().closeTab(tabId);
   if (!layout().tabs[tabId]) {
     views().dispose(tabId);

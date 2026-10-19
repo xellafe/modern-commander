@@ -107,6 +107,7 @@
     "driveFree": "{{free}} free of {{total}}",
     "archiveTotal": "Entries: {{n}}",
     "archiveFirst": "First {{n}} entries; the archive contains more.",
+    "showArchiveContents": "Show contents",
     "size": "Size",
     "sizeExact": "{{bytes}} bytes",
     "created": "Created",

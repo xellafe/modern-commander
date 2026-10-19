@@ -4,7 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 import { create } from "zustand";
 import { chordFromEvent, type KeyLike } from "../commands/keys";
 import { getCommand } from "../commands/registry";
-import { onTermExit, termKill, termResize, termShells, termSpawn, termWrite } from "../ipc/api";
+import { onTermExit, openPath, termKill, termResize, termShells, termSpawn, termWrite } from "../ipc/api";
 import type { ShellKind } from "../ipc/types";
 import { folderName } from "../lib/paths";
 import { loadXterm, termFont, termTheme, TERM_FONT_SIZE } from "../lib/xterm";
@@ -26,20 +26,32 @@ export function removeSession(sessions: TermSession[], activeId: number | null, 
   return { sessions: rest, activeId: (rest[i] ?? rest[i - 1])?.id ?? null };
 }
 
-/** Ctrl+ò: nasconde il pannello se mostra già il terminale, altrimenti lo mostra su quella scheda (`create`: nessuna sessione ancora). */
-export function toggleTerminal(panel: { visible: boolean; tab: PanelTab }, hasSessions: boolean): { visible: boolean; tab: PanelTab; create: boolean } {
+/**
+ * Ctrl+ò: nasconde il pannello se mostra già il terminale, altrimenti lo mostra su quella scheda (`create`: nessuna
+ * sessione ancora). `pending` = sessioni il cui avvio non è finito: contano, o un secondo Ctrl+ò ne aprirebbe un'altra.
+ */
+export function toggleTerminal(panel: { visible: boolean; tab: PanelTab }, hasSessions: boolean, pending = 0): { visible: boolean; tab: PanelTab; create: boolean } {
   if (panel.visible && panel.tab === "terminal") return { visible: false, tab: "terminal", create: false };
-  return { visible: true, tab: "terminal", create: !hasSessions };
+  return { visible: true, tab: "terminal", create: !hasSessions && pending === 0 };
 }
 
+/** Ctrl+V, Ctrl+Shift+V e Shift+Insert: l'incolla lo fa il browser con l'evento `paste` sulla textarea di xterm. */
+const isPasteChord = (e: KeyLike) => (e.ctrlKey && !e.altKey && e.keyCode === 86) || (e.shiftKey && !e.ctrlKey && !e.altKey && e.keyCode === 45);
+
 /**
- * Per `attachCustomKeyEventHandler`: false = xterm ignora il tasto e l'evento sale a `window`, dove `useKeyboard` lo esegue.
- * Succede solo per i chord legati a un comando `global` (Ctrl+ò, Ctrl+Shift+P…): tutto il resto (Ctrl+C, Tab, frecce) è della shell.
+ * Per `attachCustomKeyEventHandler`: false = xterm ignora il tasto e l'evento prosegue (senza `preventDefault`).
+ * Succede per i chord legati a un comando `global` (Ctrl+ò, Ctrl+Shift+P…), che sale a `window` dove `useKeyboard` lo
+ * esegue, e per l'incolla, che resta al browser (altrimenti xterm manderebbe `^V` e annullerebbe il tasto: `paste` non
+ * scatterebbe mai). Tutto il resto (Ctrl+C, Tab, frecce) è della shell.
  */
 export function passToShell(e: KeyLike, keymap: Map<string, string>, isGlobal: (commandId: string) => boolean): boolean {
+  if (isPasteChord(e)) return false;
   const id = keymap.get(chordFromEvent(e));
   return id === undefined || !isGlobal(id);
 }
+
+/** Sessioni il cui avvio non è ancora finito (vedi `toggleTerminal`). */
+export const pendingTerminals = () => pending.size;
 
 /** La shell di un nuovo terminale: quella scelta se è avviabile, altrimenti la migliore (pwsh, powershell, cmd: come `default_shell` del backend). */
 export function resolveShell(wanted: "auto" | ShellKind, available: ShellKind[]): ShellKind {
@@ -211,6 +223,8 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
         scrollback: 5000,
         theme: termTheme(),
         windowsPty: { backend: "conpty" },
+        // L'output non è fidato: i link OSC 8 si aprono solo se http(s), fuori dall'app (il predefinito usa `window.open`).
+        linkHandler: { activate: (_e, uri) => void (/^https?:/i.test(uri) && openPath(uri).catch(() => {})) },
       });
       const fit = new FitAddon();
       term.loadAddon(fit);

@@ -234,6 +234,47 @@ test("archive: first ARCHIVE_LIMIT entries; the listing is cancelled by a target
   expect(cancelRequest).toHaveBeenCalledWith(id);
 });
 
+test("7z: no automatic listing, only the explicit request lists it", async () => {
+  set("C:\\a.7z");
+  await sleep(DEBOUNCE_MS + 10);
+  expect(listArchive).not.toHaveBeenCalled();
+  expect(state().preview).toEqual({ kind: "archiveOnDemand" });
+  expect(state().info).toEqual(INFO); // i metadati ci sono comunque
+
+  const listing: ArchiveListing = { entries: [], total: 2, truncated: false };
+  listArchive.mockResolvedValueOnce(listing);
+  state().requestArchive();
+  expect(state().preview).toEqual({ kind: "loading" });
+  await sleep(0);
+  expect(listArchive).toHaveBeenCalledWith(expect.any(Number), "C:\\a.7z", ARCHIVE_LIMIT);
+  expect(state().preview).toEqual({ kind: "archive", listing });
+});
+
+test("7z: the explicit listing is cancelled by a target change and its result dropped", async () => {
+  set("C:\\a.7z");
+  await sleep(DEBOUNCE_MS + 10);
+  let done!: (l: ArchiveListing) => void;
+  listArchive.mockReturnValueOnce(new Promise((r) => (done = r)));
+  state().requestArchive();
+  await sleep(0);
+  const id = listArchive.mock.calls[0][0];
+  cancelRequest.mockClear();
+  set("C:\\b.txt");
+  expect(cancelRequest).toHaveBeenCalledWith(id);
+  done({ entries: [], total: 1, truncated: false });
+  await sleep(0);
+  expect(state().preview).not.toMatchObject({ kind: "archive" }); // niente risultato del vecchio bersaglio
+});
+
+test("requestArchive does nothing for a non-7z target or while the preview is not the on-demand one", async () => {
+  readChunk.mockResolvedValue(enc("x"));
+  set("C:\\a.txt");
+  await sleep(DEBOUNCE_MS + 10);
+  state().requestArchive();
+  expect(listArchive).not.toHaveBeenCalled();
+  expect(state().preview).toMatchObject({ kind: "text" });
+});
+
 test("a failing read shows the error code", async () => {
   readChunk.mockRejectedValue({ code: "ACCESS_DENIED", path: "C:\\a.txt", detail: null });
   set("C:\\a.txt");

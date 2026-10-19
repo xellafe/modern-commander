@@ -1,7 +1,9 @@
 import type { editor } from "monaco-editor";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { chordFromEvent } from "../../commands/keys";
 import { closeTab } from "../../commands/navigation";
+import { executeCommand } from "../../commands/registry";
 import type { AppError } from "../../ipc/types";
 import { formatSize } from "../../lib/format";
 import { loadMonaco } from "../../lib/monaco";
@@ -61,7 +63,7 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
       const view = savedViewState(tabId);
       if (view) ed.restoreViewState(view);
       // Il focus è nel campo di testo di Monaco: useKeyboard lascia passare solo i comandi globali, quindi
-      // Ctrl+S e Ctrl+W vanno agganciati qui. `addAction` (non `addCommand`, che registra un tasto globale
+      // Ctrl+S, Ctrl+W e Ctrl+Tab vanno agganciati qui. `addAction` (non `addCommand`, che registra un tasto globale
       // senza contesto e non si può togliere) vale solo per questa istanza e si toglie allo smontaggio.
       actions.push(
         ed.addAction({
@@ -75,6 +77,18 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
           label: i18n.t("groups.closeTab"),
           keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW],
           run: () => closeTab(tabId),
+        }),
+        ed.addAction({
+          id: "mc.nextTab",
+          label: i18n.t("commands.cm_SwitchToNextTab"),
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Tab],
+          run: () => void executeCommand("cm_SwitchToNextTab"),
+        }),
+        ed.addAction({
+          id: "mc.previousTab",
+          label: i18n.t("commands.cm_SwitchToPreviousTab"),
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Tab],
+          run: () => void executeCommand("cm_SwitchToPreviousTab"),
         }),
       );
       if (inActiveGroup(tabId)) ed.focus();
@@ -91,6 +105,20 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
   useEffect(() => {
     if (active) instance.current?.focus();
   }, [active]);
+
+  // Con il focus sul body (per esempio dopo un clic sulla barra delle schede) Monaco non riceve il tasto e il comando di
+  // tastiera di Ctrl+S (`fileList`) non gira su una scheda di file: lo gestisce questa scheda, se è quella attiva.
+  // Col focus altrove (Monaco, una finestra di dialogo, un campo di testo) non si tocca nulla.
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || document.activeElement !== document.body || chordFromEvent(e) !== "Ctrl+S") return;
+      e.preventDefault();
+      void useEditors.getState().save(tabId);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, tabId]);
 
   return (
     <div className="mc-editor" role="region" aria-label={name}>

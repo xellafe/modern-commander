@@ -8,8 +8,9 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react()],
 
-  // Monaco (caricato solo con F4, in chunk propri) supera da solo i 500 kB: il limite lo tiene fuori dall'avviso,
-  // il chunk principale resta sotto i 500 kB (vedi il controllo in dist/assets).
+  // Monaco, pdf.js e gli altri chunk caricati su richiesta superano da soli i 500 kB (Vite conta a 1000 byte): il
+  // limite a 3000 serve a tacere quegli avvisi. Il chunk principale è a circa 507 kB, quindi l'avviso è spento anche
+  // per lui: controllare a mano che non contenga Monaco, pdf.js, xterm né markdown-it (vedi i chunk in dist/assets).
   build: { chunkSizeWarningLimit: 3000 },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

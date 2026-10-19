@@ -72,7 +72,7 @@ pub fn list_archive(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<Ar
     let file = open_shared(path).map_err(|e| AppError::from_io(&e, path))?;
     let r = match format {
         ArchiveFormat::Zip => list_zip(BufReader::new(file), path, limit, cancel),
-        ArchiveFormat::SevenZ => list_7z(BufReader::new(file), path, limit, cancel),
+        ArchiveFormat::SevenZ => list_7z(file, path, limit, cancel),
         ArchiveFormat::Tar => list_tar(file, false, path, limit, cancel),
         ArchiveFormat::TarGz => list_tar(file, true, path, limit, cancel),
     };
@@ -112,8 +112,11 @@ fn dos_to_ms(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) ->
     (days * 86_400 + i64::from(hour) * 3600 + i64::from(minute) * 60 + i64::from(second)) * 1000
 }
 
-fn list_7z(mut reader: BufReader<std::fs::File>, path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
+fn list_7z(file: std::fs::File, path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
     use sevenz_rust2::{Archive, Error, Password};
+    // Con `Cancellable` la lettura delle intestazioni si ferma all'annullamento; il crate però non ha un limite di
+    // memoria (decodifica l'intestazione intera con dizionari fino a 4 GiB): per questo l'inspector non lo chiama da solo.
+    let mut reader = Cancellable(BufReader::new(file), cancel);
     let archive = Archive::read(&mut reader, &Password::empty()).map_err(|e| match e {
         // Intestazioni cifrate: con la feature `aes256` il crate chiede la password, senza non conosce il metodo.
         Error::PasswordRequired => AppError { detail: Some("encrypted".into()), ..AppError::new(ErrorCode::Unsupported, Some(path)) },
@@ -267,6 +270,16 @@ mod tests {
         for p in [zip_file(d.path(), 3), sevenz_file(d.path()), t, g] {
             assert_eq!(list_archive(&p, 10, &AtomicBool::new(true)).unwrap_err().code, ErrorCode::Cancelled, "{}", p.display());
         }
+    }
+
+    #[test]
+    fn cancelled_7z_stops_while_reading_the_headers() {
+        // Senza voci il ciclo sulle voci non controlla mai il flag: solo la lettura annullabile può fermarsi.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("empty.7z");
+        sevenz_rust2::ArchiveWriter::create(&p).unwrap().finish().unwrap();
+        assert!(list_archive(&p, 10, &no()).unwrap().entries.is_empty());
+        assert_eq!(list_archive(&p, 10, &AtomicBool::new(true)).unwrap_err().code, ErrorCode::Cancelled);
     }
 
     #[test]

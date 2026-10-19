@@ -60,8 +60,10 @@ test('phase 2 keys are in the default keymap', () => {
 
 test('no chord is bound twice (case and modifier order do not matter)', () => {
   const norm = (c: string) => {
-    const parts = c.toLowerCase().split('+');
-    return [...parts.slice(0, -1).sort(), parts[parts.length - 1]].join('+');
+    // l'ultimo '+' è il tasto stesso se il chord finisce per '+' ('Ctrl++')
+    const key = c.endsWith('+') ? '+' : c.slice(c.lastIndexOf('+') + 1);
+    const mods = c.slice(0, c.length - key.length).split('+').filter(Boolean);
+    return [...mods.map((m) => m.toLowerCase()).sort(), key.toLowerCase()].join('+');
   };
   const chords = Object.keys(DEFAULT_KEYMAP).map(norm);
   expect(chords.filter((c, i) => chords.indexOf(c) !== i)).toEqual([]);

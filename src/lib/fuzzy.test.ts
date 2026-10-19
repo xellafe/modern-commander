@@ -21,8 +21,8 @@ test('fuzzyMatch is case-insensitive and word starts include separators and came
 });
 
 test('fuzzyMatch falls back when a word start would leave the rest unmatched', () => {
-  // la 'a' a inizio di parola (indice 3) non lascia una 'b' dopo di sé: si ripiega sulla sottosequenza semplice
-  expect(fuzzyMatch('ab', 'ab_a')!.positions).toEqual([0, 1]);
+  // la 'a' a inizio di parola (indice 4) non lascia una 'b' dopo di sé: si ripiega sulla sottosequenza semplice
+  expect(fuzzyMatch('ab', 'xab_a')!.positions).toEqual([1, 2]);
   expect(fuzzyMatch('ba', 'ab')).toBeNull();
 });
 

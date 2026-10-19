@@ -22,6 +22,13 @@ const DISPLAY: Record<string, string> = {
 /** Un chord canonico ('Ctrl+Oem3') come elenco di tasti da mostrare (['Ctrl', '`']). */
 export const chordParts = (chord: string): string[] => chord.split('+').map((k) => DISPLAY[k] ?? k);
 
+// Acceleratori del browser (WebView2) che ricaricano o stampano la pagina: ricaricarla perde editor non salvati,
+// uccide i terminali e azzera il layout. Si inghiottono sempre, anche quando il chord non ha un comando eseguibile.
+const BROWSER_ACCELERATORS = new Set(['F5', 'Ctrl+F5', 'Shift+F5', 'Ctrl+R', 'Ctrl+Shift+R', 'Ctrl+P']);
+
+/** Vero per i chord (nella forma di `chordFromEvent`) che il browser userebbe per ricaricare o stampare. */
+export const isBrowserAccelerator = (chord: string): boolean => BROWSER_ACCELERATORS.has(chord);
+
 export interface KeyLike {
   keyCode: number;
   ctrlKey: boolean;

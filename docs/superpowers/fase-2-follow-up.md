@@ -10,6 +10,7 @@ Non si possono automatizzare: richiedono la GUI, file da GB o l'osservazione del
 - `fetch(convertFileSrc('C:\\Windows\\win.ini'))` risponde 200;
 - lo stesso con header `Range: bytes=0-9` risponde 206 con 10 byte;
 - provare un percorso UNC, un nome con `#`, `%` e spazi, un percorso oltre 260 caratteri.
+
 Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: annotarlo qui e nel README (sezione "Limiti accettati").
 
 **Viewer testo ed esadecimale e file da GB** (Task 4)
@@ -18,6 +19,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - `one-line.json`: lo scorrimento procede a spezzoni da 4096 byte, senza blocchi della UI. Con l'a capo attivo: Fine e ↓ su questo file e su uno di righe lunghe (una riga logica più alta del viewport resta tagliata in basso).
 - `zeros.bin`: si apre in esadecimale; Ctrl+Fine mostra l'ultimo offset.
 - Memoria del processo WebView2 (Gestione attività) sotto 300 MB in tutte le prove.
+- Un file che cambia su disco mentre è aperto nel viewer (log in scrittura) mantiene la dimensione vista all'apertura e non si ricarica da solo: verificare che sia accettabile. Il costo per tasto di `layoutAt` non è stato misurato (solo il tasto tenuto premuto, vedi sopra).
 - Un file UTF-16 con BOM e uno ANSI con lettere accentate si leggono bene; `A`, `7`, `6` cambiano la codifica. Passando da esadecimale a testo la prima riga può comparire a metà.
 - Le lettere nel viewer non aprono la ricerca rapida; Tab passa all'altro gruppo; Ctrl+W ed Esc chiudono e tornano alla lista sul file di partenza.
 - Tasto tenuto premuto (↓/↑) fluido (tasto → cursore < 16 ms), rotella da 3 righe, cambio scheda e ritorno alla stessa posizione, viewer in entrambi i gruppi, tema chiaro e scuro, selettori in barra.
@@ -29,6 +31,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - MP4 da 2 GB: salto a metà immediato, la memoria non cresce della dimensione del file (richieste Range).
 - MKV: avviso con "Apri con il programma predefinito".
 - Tasti `1` e `3` dalle modalità native; tema chiaro e scuro.
+- "Apri con il programma predefinito" nel `MediaPane` ignora gli errori di `openPath` (`.catch(() => {})`): con un file senza associazione o in uso non compare nulla. Provarlo e decidere se mostrare un avviso.
 
 **Editor F4** (Task 6)
 - F4 su un `.ts`: sintassi evidenziata; Ctrl+S salva e la data cambia nella lista (watcher). Verificare che Monaco e i suoi worker si carichino nella WebView (finora controllata solo la separazione dei chunk).
@@ -39,12 +42,19 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - Con `useExternalEditor` attivo F4 apre Notepad.
 - Due editor in due gruppi: Ctrl+S e Ctrl+W agiscono solo sull'istanza col focus; chiuso uno, Ctrl+S nell'altro funziona ancora.
 - Ctrl+Shift+P e Ctrl+ò funzionano con il focus in Monaco.
+- F4, digitare qualcosa, poi F5 e Ctrl+R (anche con il focus in Monaco e dopo un clic sulla barra delle schede): la pagina non si ricarica e l'editor resta modificato. Lo stesso con F5 e Ctrl+R su un viewer. Ricaricando comunque (per esempio da DevTools) con un editor modificato compare la richiesta di conferma.
+- Chiudere l'ultima scheda dell'ultimo gruppo quando è un file (Esc, Ctrl+W, X sulla scheda, anche con "Non salvare"): al suo posto resta una scheda cartella sulla cartella del file.
+- Ctrl+S dopo un clic sulla barra delle schede (focus sul body, non in Monaco) salva comunque; con il focus in un dialogo o in un campo di testo non cambia nulla.
+- Ctrl+Tab e Ctrl+Shift+Tab con il focus in Monaco cambiano scheda.
+- Salvare un file che un altro programma tiene aperto senza condivisione di cancellazione: il messaggio è "file in uso" (`ReplaceFileW` 1175), non un errore generico.
 
 **Command palette e Ctrl+P** (Task 7, Task 8)
 - Ctrl+Shift+P → "cop" → Invio esegue Copia; il focus torna alla lista prima del dialogo. Con un viewer o un editor attivo i comandi della lista non compaiono. Il click sul campo del titolo apre la palette. Resa visiva (posizione, `mark`, `kbd`, scorrimento della riga selezionata, hover contro tastiera).
 - Ctrl+P su `C:\Windows` (decine di migliaia di voci): la palette resta reattiva mentre arrivano i lotti. Misurare `fuzzyFilter` su 20.000 voci (log `[perf] jump` in dev): se supera 16 ms, applicare il debounce di 50 ms all'input (non applicato, vedi "Scelte da confermare").
 - Scegliendo un file la lista va nella sua cartella con il cursore sopra, anche da una scheda viewer o editor. Giunzioni e `node_modules` assenti dai risultati; con "mostra nascosti" compaiono i nascosti. Esc o chiusura annullano la scansione.
-- Con Ctrl+P a palette aperta, e con il focus in un campo di testo o in Monaco, non deve aprirsi la finestra di stampa di WebView2 (vedi Follow-up).
+- Con Ctrl+P a palette aperta, e con il focus in un campo di testo o in Monaco, non deve aprirsi la finestra di stampa di WebView2 (`useKeyboard` inghiotte sempre Ctrl+P: da confermare nella GUI).
+- Il pulsante nella barra del titolo mostra Ctrl+Shift+P; un clic fuori dalla palette la chiude; Esc con la palette aperta da Monaco riporta il focus a Monaco.
+- Aspetto dell'indicatore di stato della scansione ("scansione in corso") nella palette.
 
 **Miniature** (Task 9)
 - Cartella con 2.000 JPEG: Ctrl+Shift+F1 mostra subito i riquadri; le miniature arrivano senza bloccare lo scorrimento; le frecce si muovono sulla griglia senza ritardo (< 16 ms).
@@ -55,7 +65,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - ↓ tenuto premuto su 1.000 file misti con l'ispettore aperto: il cursore non rallenta e alla fine l'anteprima è quella del file sotto il cursore.
 - Una cartella enorme (`C:\Windows`): il calcolo parte e si annulla appena ci si sposta.
 - Un `.md` con HTML dentro lo mostra come testo; clic destro su un link nel Markdown: nessun menu del browser.
-- Un MP4 non parte da solo. Uno ZIP mostra l'elenco; uno ZIP rotto mostra l'errore tradotto.
+- Un MP4 non parte da solo. Uno ZIP mostra l'elenco; uno ZIP rotto mostra l'errore tradotto. Un 7z mostra i metadati e il pulsante "Mostra contenuto": l'elenco compare solo dopo il clic e si annulla spostando il cursore.
 - SHA-256 di un file da 4 GB: si annulla spostando il cursore.
 - Aspetto del pannello (splitter sul bordo sinistro, temi chiaro e scuro, colori di `colorize`), Ctrl+Q e pulsante nella barra del titolo.
 - Tempo di `colorize` su 256 KiB con righe corte (vedi Follow-up).
@@ -65,7 +75,9 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - "+" ne apre un secondo; `exit` chiude la scheda; chiudendo l'ultima il pannello si nasconde.
 - Tab completa i percorsi nella shell e non cambia gruppo; Ctrl+C con selezione copia, senza selezione interrompe; Ctrl+Shift+P apre la palette anche dal terminale.
 - Caratteri accentati ed emoji; `vim` in WSL e adattamento al ridimensionamento del pannello e dello splitter; cambio tema con terminali aperti.
-- Incolla con Ctrl+V (vedi Follow-up: probabile difetto).
+- Ctrl+V e Shift+Insert incollano in cmd, pwsh e WSL (l'handler non cancella più il tasto: l'evento `paste` arriva a xterm).
+- Premendo Ctrl+ò due volte di seguito durante l'avvio del primo terminale non se ne apre un secondo. Un link OSC 8 `https://…` nell'output si apre nel browser; altri schemi non fanno nulla.
+- Chiudendo la finestra mentre un Channel (terminale, scansione, dimensione) è ancora vivo l'app esce senza errori né processi orfani.
 - `pwsh.exe`, `powershell.exe`, `wsl.exe --cd` avviati davvero (finora provato solo `cmd.exe`); il canale binario verso la WebView e l'evento `term-exit`.
 - Chiudendo l'app non restano `pwsh.exe`, `conhost.exe` o `OpenConsole.exe` orfani (`RunEvent::Exit` → `kill_all`; verificare che l'uscita arrivi a `RunEvent::Exit`).
 - Ricaricando la pagina in `tauri dev` le shell aperte si chiudono (`on_page_load(Started)` → `kill_all`).
@@ -79,7 +91,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
   3. cursore veloce con l'ispettore aperto: UI fluida, anteprima vecchia mai al posto della nuova, calcoli annullati;
   4. file in uso (log aperto in scrittura, file in esclusiva): viewer, ispettore e hash leggono senza bloccare chi scrive; il blocco esclusivo dà `FILE_IN_USE` tradotto;
   5. tasti nel posto sbagliato: lettere nel viewer non alla ricerca rapida; Tab, Ctrl+Tab, Ctrl+W su un viewer agiscono su gruppi e schede; Ctrl+ò e Ctrl+Shift+P anche con il focus nel terminale o in Monaco; Ctrl+C, Tab e frecce nel terminale restano alla shell.
-- Chunk principale: 507,25 kB (495 KiB) contro i "500 kB" del commento in `vite.config.ts`.
+- Chunk principale: circa 507 kB (495 KiB); il commento in `vite.config.ts` ora lo dice.
 
 **Scorciatoie nuove**
 - Ctrl+Q (vista rapida) e Ctrl+Shift+F1 (miniature) sono i tasti di TC per le stesse funzioni (confermato sul forum ufficiale ghisler.ch), usati come in TC.
@@ -101,14 +113,9 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - **Immagini nel Markdown** dell'ispettore disabilitate (`csp: null`). Il Markdown si rende con `html: false`.
 - **`cm_SrcQuickview`** è `group`, non `global`: Ctrl+Q non agisce in campi e dialoghi.
 - **`mc_MarkDown`/`mc_MarkUp`/`cm_Reverse`** nella vista miniature si muovono di una riga di riquadri (extra rispetto al piano): confermare l'intento.
-- **Chunk principale oltre 500 kB**: `chunkSizeWarningLimit: 3000` in `vite.config.ts` nasconde l'avviso anche per il chunk principale (507,25 kB). Aggiornare il commento o decidere un budget.
+- **Chunk principale oltre 500 kB**: `chunkSizeWarningLimit: 3000` in `vite.config.ts` nasconde l'avviso anche per il chunk principale (circa 507 kB); il commento è corretto. Decidere se serve un budget per il solo chunk principale.
 
 ## Follow-up noti
-
-**In corso di correzione** (da togliere dal documento a correzione fatta)
-- `src-tauri/src/archive/tar_walk.rs:151-152`: byte NUL letterale invece dell'escape `\0` (git tratta il file come binario nel diff): usare `b"ustar\0"`.
-- Terminale: Ctrl+V invia solo `^V` e l'incolla non funziona in cmd e WSL (l'handler deve restituire `false` senza `preventDefault` per Ctrl+V, se confermato).
-- Terminale: doppio spawn se Ctrl+ò viene ripetuto durante uno spawn in corso (contare anche i `pending` in `create`).
 
 **Fuori perimetro (da proporre)**
 - Ricerca nel viewer (F7 del Lister di TC) e Shift+F4 (nuovo file).
@@ -140,8 +147,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - `chunkSizeWarningLimit` (vedi sopra); `wide`/`from_win` sono `pub(crate)` in `ops/exec.rs` (riuso voluto).
 
 **Palette e Ctrl+P**
-- Ctrl+P (`group`) con il focus in un campo di testo o in Monaco non viene intercettato: WebView2 potrebbe aprire la finestra di stampa. Valutare `preventDefault` per Ctrl+P in ogni contesto, o rendere il comando `global`.
-- `fuzzy.test.ts`: il caso `'ab'`/`'ab_a'` non esercita il secondo passaggio (serve `'ab'`/`'xab_a'` → `[1, 2]`); un `toLowerCase` che cambia la lunghezza (`İ`) rende il confronto case-sensitive per quel testo.
+- `fuzzy`: un `toLowerCase` che cambia la lunghezza (`İ`) rende il confronto case-sensitive per quel testo.
 - z-index della palette uguale al backdrop dei dialoghi: Alt+F4 con la palette aperta apre `ExitConfirm` sotto di essa. Hover contro frecce; ARIA combobox (`aria-expanded` sempre true, IME `isComposing`); nessun test del componente `Palette`.
 - Il segnaposto del campo del titolo resta "Cerca file o comando…" (stringa della fase 1).
 - Salto rapido: `cancel_request` può arrivare prima di `register` (pattern del registro, StrictMode in dev); nessun test su lotti vecchi, cancel a metà scansione, sottocartella illeggibile, drive; la selezione può spostarsi mentre arrivano i lotti; stato "scansione" e "nessun risultato" insieme; duplicati recente/preferito e `key` duplicate sui preferiti (id `kind:label:where`); primo lotto solo a 500 voci (rete lenta); cartelle placeholder OneDrive non entrate; il log perf misura solo `fuzzyFilter`. Nessun test TS è stato visto fallire prima dell'implementazione (Task 8).
@@ -150,7 +156,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - `bgra_to_rgba` non de-premoltiplica: `GetImage` restituisce probabilmente ARGB premoltiplicato, quindi bordi semitrasparenti scuri su PNG con alfa. Il fix va fuori da `bgra_to_rgba`.
 - `ShellPreview` non distingue l'icona generica dalla miniatura vera (niente `THUMBNAILONLY`); copia del buffer per l'header (fino a 4 MB); nessun timeout su `get_thumbnail` (uno slot resta occupato da un thumbnailer bloccato); COM inizializzato a ogni richiesta.
 - `Tile`: effetto senza `catch` e flash del segnaposto a ogni rimontaggio; i fallimenti non sono in cache, quindi un file senza miniatura è richiesto di nuovo a ogni rimontaggio; `--mc-row-inset` non considerato nelle colonne.
-- Test mancanti: `cancelOwner` di A non cancella la stessa chiave di B, refresh LRU. `api.test.ts` ha `"C:\a.jpg"` (escape).
+- Test mancanti: `cancelOwner` di A non cancella la stessa chiave di B, refresh LRU.
 
 **Ispettore**
 - `colorize` è O(righe²) su 256 KiB con righe corte: misurare e valutare un limite (~2000 righe o 64 KiB). Colorato solo se la riga ≤ 2000 caratteri.
@@ -161,7 +167,8 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - `TitleBar` chiama `toggleInspector` direttamente, non `executeCommand`.
 
 **Archivi e hash**
-- Elenco: `total` ZIP sottostimato con nomi duplicati; `total` e `truncated` mescolano conteggi grezzi e filtrati tra i formati; un nome ZIP da 32–64 KiB rende CORRUPT l'intero elenco; `cancel` ignorato con ZIP e 7z vuoti, e su ZIP/7z solo tra una voce e l'altra.
+- Elenco: `total` ZIP sottostimato con nomi duplicati; `total` e `truncated` mescolano conteggi grezzi e filtrati tra i formati; un nome ZIP da 32–64 KiB rende CORRUPT l'intero elenco; `cancel` ignorato con ZIP vuoti e, su ZIP, solo tra una voce e l'altra (il 7z si ferma anche durante la lettura delle intestazioni).
+- **7z nell'ispettore (rischio residuo)**: `sevenz-rust2` decodifica l'intera intestazione codificata in memoria, fino alla `unpack_size` dichiarata, e crea decoder LZMA/LZMA2/PPMd senza limite di memoria (dizionari fino a 4 GiB da un file di poche centinaia di byte); con `panic = "abort"` un'allocazione fallita chiude l'app. Per questo il 7z non si elenca più da solo: serve il clic su "Mostra contenuto", e la lettura è annullabile (`Cancellable`). Il rischio resta per un clic esplicito su un 7z costruito ad arte: il crate non offre un limite di memoria. Mitigazioni possibili: leggere l'intestazione in un processo figlio con limite, o rifiutare i 7z con intestazione codificata oltre una soglia prima di passarli al crate.
 - 7z con metodo non supportato (non AES) dà `CORRUPT_ARCHIVE` invece di `UNSUPPORTED`.
 - TAR non gz troncato dentro i dati di una voce → `Ok` completo; `L` di size 0 o PAX `path=` vuoto → voce successiva senza nome; voci GNU `V` elencate; `GzDecoder` legge solo il primo membro (usare `MultiGzDecoder`); `GNU.sparse.name` PAX non letto.
 - Non provato su archivi creati da 7-Zip o WinRAR né con nomi ZIP in CP437. Crate aggiunti: `zip` 9.0.5, `tar` 0.4.46, `flate2` 1.1.10, `sevenz-rust2` 0.24.1 (licenze permissive).
@@ -179,9 +186,17 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - `cargo test` ha 1 test ignorato, della fase 1 (`delete_to_recycle_bin_removes_from_disk`: manda un file vero nel Cestino, si lancia a mano con `-- --ignored`).
 
 **Test**
-- Task 1: `api.test.ts` ~865 usa `"C:\a"` (l'escape diventa `C:a`); `read_chunk`/`read_whole` su una cartella danno `ACCESS_DENIED` invece di `INVALID_REQUEST` (i chiamanti controllano `isDir`); nessun test per `len == MAX_CHUNK` né per `FILE_IN_USE` su `read_whole`; `read_chunk` non pre-dimensiona il `Vec`.
+- Task 1: `read_chunk`/`read_whole` su una cartella danno `ACCESS_DENIED` invece di `INVALID_REQUEST` (i chiamanti controllano `isDir`); nessun test per `len == MAX_CHUNK` né per `FILE_IN_USE` su `read_whole`; `read_chunk` non pre-dimensiona il `Vec`.
 - Task 2: `FKeyBar`, `useKeyboard` e `isRunnable` duplicano l'espressione `dirTab`; le icone nella scheda non hanno `flex: none`.
 - Nessun test dei componenti: Vitest gira in ambiente node, senza jsdom (Palette, Tile, ThumbList, ShellPreview, Editor, TerminalView sono coperti solo da `tsc` e build).
+
+**Residui della revisione finale** (non corretti)
+- Acceleratori della WebView che l'handler comune non raggiunge: `HotlistMenu`, `PathMenu` (`Group.tsx`) e la rinomina in linea (`FileList.tsx`) fanno `stopPropagation` su ogni tasto, quindi con il focus lì F5, Ctrl+R e Ctrl+P ricaricano o stampano. `beforeunload` protegge gli editor modificati, non terminali e layout. Correzione: `preventDefault` per `isBrowserAccelerator` in quei tre handler, o un listener in cattura su `window` che fa solo `preventDefault`.
+- Non intercettati: Alt+← / BrowserBack e il tasto hardware BrowserRefresh (`VK168`).
+- Doppio avvio del terminale: la corsa resta aperta durante il caricamento di xterm al primo uso (il contatore dei `pending` parte dopo `await`); serve un contatore sincrono all'inizio di `create`.
+- Ctrl+S dell'editor (listener su `window` con il focus sul body): non controlla `.mc-page`, quindi con la pagina Impostazioni aperta salva l'editor dietro; dipende dall'ordine dei listener per il rispetto di `defaultPrevented`.
+- Chunk principale ora a 509 kB (il commento in `vite.config.ts` dice circa 507 kB).
+- Da provare a mano: Alt+F4 → conferma di uscita → Esci con un editor modificato non deve mostrare un secondo avviso di `beforeunload` dopo `destroy()`.
 
 **Dalla fase 1, ancora aperti**
 - Vedi `docs/superpowers/fase-1-follow-up.md`: CSP stretta (oggi `csp: null`, rilevante ora che l'asset protocol serve `**`), unità di rete mappate, hotlist malformata, ecc.

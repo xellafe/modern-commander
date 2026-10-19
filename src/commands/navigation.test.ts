@@ -106,6 +106,25 @@ test("closing a viewer tab frees its viewer state, closing the last tab of the l
   expect(useViewers.getState().states.t1).toBeDefined();
 });
 
+test("closing the only tab of the last group when it is a file tab turns it into a folder tab on its folder", () => {
+  const file = { path: "C:\\x\\f.txt", mode: "viewer" as const };
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["f1"], activeTabId: "f1" }],
+    tabs: { f1: { id: "f1", path: "C:\\x", file } },
+    activeGroupId: "g1",
+    activationOrder: ["g1"],
+  });
+  useViewers.setState({ states: { f1: { mode: "text", encoding: "utf-8", wrap: false, top: 0 } } });
+  closeTab("f1");
+  const l = useLayout.getState();
+  expect(l.tabs.f1).toBeUndefined();
+  expect(l.groups).toHaveLength(1);
+  expect(l.groups[0].tabIds).toHaveLength(1);
+  expect(activeTab(l)).toMatchObject({ path: "C:\\x" });
+  expect(activeTab(l).file).toBeUndefined();
+  expect(useViewers.getState().states.f1).toBeUndefined();
+});
+
 const editorDoc = (dirty: boolean) => ({ path: "C:\\x\\f.txt", encoding: "utf-8", bom: false, modifiedMs: 1, dirty, readOnly: false });
 
 test("closing a modified editor asks first and keeps the tab; closeTabNow closes it and frees the document", () => {

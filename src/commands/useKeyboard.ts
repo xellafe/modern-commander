@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { activeTab, useLayout } from '../state/layout';
-import { chordFromEvent } from './keys';
+import { chordFromEvent, isBrowserAccelerator } from './keys';
 import { executeCommand, getCommand, shouldExecute } from './registry';
 
 // Focus in un campo di testo o dentro una finestra di dialogo (o con una pagina aperta, anche se il focus
@@ -15,12 +15,17 @@ export function focusInTextOrDialog(): boolean {
 export function useKeyboard(keymap: Map<string, string>): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const id = keymap.get(chordFromEvent(e));
+      const chord = chordFromEvent(e);
+      const id = keymap.get(chord);
       const cmd = id === undefined ? undefined : getCommand(id);
       const focusInText = focusInTextOrDialog();
       const dirTab = !activeTab(useLayout.getState()).file;
-      // nessun binding, comando non registrato o focus in un campo: lascia l'evento al browser
-      if (!cmd || !shouldExecute(cmd, { repeat: false, focusInText, dirTab })) return;
+      // nessun binding, comando non registrato o focus in un campo: lascia l'evento al browser, tranne ricarica e stampa
+      // (F5 e Ctrl+R su una scheda di file non eseguono nulla, ma ricaricherebbero la pagina)
+      if (!cmd || !shouldExecute(cmd, { repeat: false, focusInText, dirTab })) {
+        if (isBrowserAccelerator(chord)) e.preventDefault();
+        return;
+      }
       e.preventDefault(); // anche Alt+F4, che deve passare da cm_Exit
       // l'auto-repeat è consumato ma non riesegue il comando, salvo opt-in
       if (shouldExecute(cmd, { repeat: e.repeat, focusInText, dirTab })) executeCommand(cmd.id).catch(console.error);

@@ -137,6 +137,14 @@ function PreviewView({ preview }: { preview: Preview | null }) {
         </>
       );
     }
+    case "archiveOnDemand":
+      return (
+        <div className="mc-inspector-facts">
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => useInspector.getState().requestArchive()}>
+            {t("inspector.showArchiveContents")}
+          </button>
+        </div>
+      );
     case "binary": return <div className="mc-viewer-note">{t("inspector.binary")}</div>;
     case "error": return <div className="mc-viewer-note" role="alert">{t(`errors.${preview.code}`)}</div>;
   }
