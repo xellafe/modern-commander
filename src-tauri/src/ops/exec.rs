@@ -10,13 +10,14 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     COPY_FILE_FAIL_IF_EXISTS, COPYPROGRESSROUTINE_PROGRESS, CopyFileExW, FILE_ATTRIBUTE_NORMAL,
     FILE_ATTRIBUTE_READONLY, FILE_FLAGS_AND_ATTRIBUTES, FlushFileBuffers, GetDriveTypeW, GetVolumePathNameW,
     LPPROGRESS_ROUTINE_CALLBACK_REASON,
     MOVE_FILE_FLAGS, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, PROGRESS_CANCEL, PROGRESS_CONTINUE,
-    SetFileAttributesW,
+    CreateFileW, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FileBasicInfo, OPEN_EXISTING, SetFileInformationByHandle,
 };
 use windows::core::HSTRING;
 
@@ -71,7 +72,29 @@ fn clear_readonly(p: &Path, attrs: u32) -> Result<(), AppError> {
     // OFFLINE, NOT_CONTENT_INDEXED), meno READONLY; nessuno → NORMAL.
     let keep = attrs & 0x3126;
     let new = if keep == 0 { FILE_ATTRIBUTE_NORMAL } else { FILE_FLAGS_AND_ATTRIBUTES(keep) };
-    unsafe { SetFileAttributesW(&wide(p), new) }.map_err(|e| from_win(&e, p))
+    set_attributes_no_follow(p, new.0).map_err(|e| from_win(&e, p))
+}
+
+/// Imposta gli attributi dell'elemento stesso: `SetFileAttributesW` seguirebbe un collegamento.
+/// I tempi a 0 restano invariati.
+fn set_attributes_no_follow(p: &Path, attrs: u32) -> windows::core::Result<()> {
+    let h = unsafe {
+        CreateFileW(
+            &wide(p),
+            FILE_WRITE_ATTRIBUTES.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )
+    }?;
+    let info = FILE_BASIC_INFO { FileAttributes: attrs, ..Default::default() };
+    let r = unsafe {
+        SetFileInformationByHandle(h, FileBasicInfo, &info as *const _ as *const c_void, size_of::<FILE_BASIC_INFO>() as u32)
+    };
+    let _ = unsafe { CloseHandle(h) };
+    r
 }
 
 /// Prima di sostituire `dst`: MoveFileExW rifiuta di sostituire un file di sola lettura. Gli
@@ -528,6 +551,28 @@ mod tests {
         X.copy_file(&src, &dst, false, false, &mut |_| true).unwrap();
         assert_eq!(fs::read(&dst).unwrap(), b"x");
         assert!(!exists(&part));
+    }
+
+    #[test]
+    fn clearing_readonly_does_not_follow_symlinks() {
+        let d = tempfile::tempdir().unwrap();
+        let (target, link) = (d.path().join("target.txt"), d.path().join("link.txt"));
+        fs::write(&target, b"x").unwrap();
+        let mut perm = fs::metadata(&target).unwrap().permissions();
+        perm.set_readonly(true);
+        fs::set_permissions(&target, perm).unwrap();
+        if let Err(e) = std::os::windows::fs::symlink_file(&target, &link) {
+            eprintln!("test saltato: symlink non creabile ({e})");
+            return;
+        }
+        clear_readonly_of(&link).unwrap();
+        // Il collegamento stesso diventa di sola lettura (senza seguirlo), poi si toglie con la chiamata diretta.
+        set_attributes_no_follow(&link, FILE_ATTRIBUTE_READONLY.0).unwrap();
+        let link_attrs = || fs::symlink_metadata(&link).unwrap().file_attributes();
+        assert_ne!(link_attrs() & FILE_ATTRIBUTE_READONLY.0, 0);
+        clear_readonly(&link, link_attrs()).unwrap();
+        assert_eq!(link_attrs() & FILE_ATTRIBUTE_READONLY.0, 0);
+        assert!(fs::metadata(&target).unwrap().permissions().readonly());
     }
 
     #[test]

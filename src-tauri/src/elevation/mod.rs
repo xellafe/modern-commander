@@ -43,6 +43,7 @@
 
 pub mod client;
 pub mod helper;
+pub mod pathlock;
 pub mod protocol;
 
 pub use client::{ElevatedExecutor, set_owner_window, shared, shared_with};

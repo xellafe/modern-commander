@@ -16,6 +16,7 @@
 - Le regole di sicurezza di §6.2 restano tutte: questo piano le aggiunge, non ne toglie nessuna. `validate` (lessicale) resta il primo controllo.
 - L'helper non esegue un'operazione se non tiene aperti, per tutta la sua durata, gli handle di ogni cartella antenata del bersaglio.
 - Gli handle di blocco chiedono un diritto di accesso ai dati: `FILE_LIST_DIRECTORY` (in alternativa `FILE_TRAVERSE` se il primo è negato) per le cartelle e `FILE_READ_DATA` per i file, con condivisione `FILE_SHARE_READ | FILE_SHARE_WRITE`, `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT`. Un handle con i soli attributi (`FILE_READ_ATTRIBUTES`) non partecipa al controllo della condivisione e quindi non blocca niente.
+- Il blocco impedisce di rinominare o eliminare una cartella, non di trasformarla sul posto in giunzione: `FSCTL_SET_REPARSE_POINT` basta un handle con `FILE_WRITE_ATTRIBUTES`, che la condivisione non esclude, ma la cartella deve essere vuota (`ERROR_DIR_NOT_EMPTY`, verificato). Le cartelle antenate più in alto contengono un figlio bloccato e quindi non si svuotano; la più profonda sì. Per questo il blocco crea una **sentinella** nella cartella bloccata più profonda (e, con `lock_with_item` su una cartella, dentro l'elemento): file `.mc-lock-<uuid v4>` aperto con `DELETE | FILE_READ_ATTRIBUTES`, condivisione 0, `CREATE_NEW`, `FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE`. Nessuno può eliminarla finché l'handle è aperto, la cartella resta non vuota e sparisce da sola alla chiusura (anche se l'helper termina). Se la sentinella non si crea, il blocco fallisce con l'errore di `CreateFileW` sul percorso della cartella: niente operazione senza sentinella.
 - Errore per un reparse point dove non è ammesso: `ErrorCode::Unsupported` con `detail` `reparse_point_in_path` (componente intermedio) o `reparse_point` (bersaglio; è il valore che `expand` usa già). Nessun nuovo codice di errore.
 
 ## Review Focus
@@ -54,6 +55,7 @@ pub fn lock_with_item(path: &Path) -> Result<PathLock, AppError>;
   - Ogni componente si apre con le opzioni delle Global Constraints. Si legge `GetFileInformationByHandle`: con `FILE_ATTRIBUTE_REPARSE_POINT` → `Unsupported` / `reparse_point_in_path`, con `path` uguale al componente. Un componente che non è una cartella → `NotFound` (stesso esito che avrebbe la primitiva).
   - `ACCESS_DENIED` su `FILE_LIST_DIRECTORY` → nuovo tentativo con `FILE_TRAVERSE`; se fallisce anche quello, l'errore con il percorso del componente.
   - `lock_with_item` blocca anche l'elemento finale (cartella o file, `FILE_LIST_DIRECTORY` / `FILE_READ_DATA` = stesso valore `0x1`); se è un reparse point → `Unsupported` / `reparse_point`.
+  - Sentinella (Global Constraints): `lock_ancestors` la crea nella cartella padre del percorso; `lock_with_item` la crea anche dentro l'elemento se è una cartella. Gli handle delle sentinelle vivono nel `PathLock`. `PathLock::hides(&self, name: &OsStr) -> bool` dice se `name` è una delle sue sentinelle: serve all'elenco elevato per non mostrarla.
 
 - [ ] **Step 1: Test** (in `pathlock.rs`; le giunzioni si creano con `cmd /c mklink /J`, che non richiede l'amministratore)
 
@@ -94,6 +96,16 @@ fn junction(link: &Path, target: &Path) {
     let lock = lock_with_item(&real).unwrap();
     assert!(std::fs::rename(&real, d.path().join("moved")).is_err());
     drop(lock);
+}
+#[test] fn sentinel_keeps_the_deepest_folder_non_empty() {
+    /* d\a vuota; lock_ancestors(d\a\x): d\a contiene esattamente un elemento, e `lock.hides` lo riconosce;
+       eliminarlo dà ERROR_SHARING_VIOLATION; dopo drop(lock) d\a è di nuovo vuota.
+       lock_with_item(d\a): una sentinella dentro d\a e una in d. */
+}
+#[test] fn traverse_fallback_and_access_denied() {
+    /* d\a\b; icacls d\a /deny <utente corrente>:(RD) (niente elenco, attraversamento ammesso):
+       lock_ancestors(d\a\b\x) → Ok; poi /deny anche (X): → AccessDenied con path d\a.
+       Ripristino delle ACL alla fine anche in caso di fallimento (guardia con Drop). */
 }
 #[test] fn missing_or_file_component() {
     /* d\file.txt è un file: lock_ancestors(d\file.txt\x) → NotFound; lock_ancestors(d\nope\x) → NotFound */
@@ -141,9 +153,9 @@ pub(crate) fn resolve_for_helper(p: &Path) -> PathBuf;
   | `Copy { src, dst }` | `lock_with_item(src)` (la sorgente non può essere un collegamento: la copia elevata leggerebbe il file puntato) + `lock_ancestors(dst)` |
   | `Move { src, dst }`, `Rename { src, dst }` | `lock_ancestors(src)` + `lock_ancestors(dst)`; il bersaglio può essere un collegamento: si sposta il collegamento stesso |
   | `Delete { permanent: true }` | `lock_ancestors(path)`; un collegamento si elimina come collegamento (`remove_dir`/`remove_file` non lo seguono) |
-  | `Delete { permanent: false }` | `lock_with_item(path)`: un collegamento non va nel Cestino come amministratore |
+  | `Delete { permanent: false }` | `lock_with_item(path)`: un collegamento non va nel Cestino come amministratore. Se il Cestino fallisce per violazione di condivisione con l'handle sull'elemento: `lock_ancestors(path)` + rifiuto (`reparse_point`) se l'elemento è un reparse point, e il rischio residuo va nella nota di sicurezza |
   | `Mkdir` | `lock_ancestors(path)` |
-  | `List` | `lock_with_item(path)` |
+  | `List` | `lock_with_item(path)`; le voci per cui `lock.hides(nome)` non si inviano |
 
   `execute` diventa: `validate` → normalizzazione (come oggi) → `locks_for` → primitiva → rilascio dei blocchi (drop) dopo la risposta finale. `resolve_for_helper` si applica a ogni percorso in `copy_file`, `move_path`, `delete`, `mkdir`, `rename` e `list_dir` di `ElevatedExecutor`. Gira nel processo dell'app, senza privilegi: per l'helper è solo un suggerimento, perché i controlli di sicurezza restano tutti nell'helper.
 
@@ -186,7 +198,8 @@ pub(crate) fn resolve_for_helper(p: &Path) -> PathBuf;
 - Modify: `src-tauri/src/elevation/mod.rs` (nota di sicurezza), `docs/superpowers/fase-1-follow-up.md`
 
 - [ ] **Step 1:** Nota di sicurezza in `elevation/mod.rs`:
-  - in "Cosa garantiscono i controlli" aggiungere il blocco dei componenti e il rifiuto dei reparse point;
+  - in "Cosa garantiscono i controlli" aggiungere il blocco dei componenti, la sentinella (perché serve: una cartella vuota si trasforma in giunzione anche se bloccata) e il rifiuto dei reparse point;
+  - nei limiti: i reparse point che non sono collegamenti (OneDrive "File su richiesta", deduplicazione) sono rifiutati anche loro; una cartella in cui l'amministratore non può creare file (supporti in sola lettura) non si blocca;
   - in "Rischi residui" sostituire la voce sulle giunzioni con i limiti che restano: volumi montati in una cartella (anche quelli sono reparse point, quindi rifiutati) e percorsi che l'app non riesce a risolvere (arrivano invariati e l'helper li rifiuta se contengono un collegamento).
 - [ ] **Step 2: Verifica manuale** con il vero prompt UAC, build `npm run tauri dev`:
   - F7 in `C:\Program Files` → "Riprova come amministratore" → la cartella si crea (la funzione non è regredita).
