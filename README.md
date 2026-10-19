@@ -28,6 +28,32 @@ cargo test --manifest-path src-tauri/Cargo.toml                          # unita
 cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + integrazione dell'helper elevato
 ```
 
+## Vedere e modificare i file (fase 2)
+
+| Tasti | Funzione |
+|---|---|
+| F3 | Viewer interno in una scheda: testo (con codifica), esadecimale, immagini, PDF, audio e video; i file di più GB si leggono a blocchi |
+| F4 | Editor Monaco in una scheda, con salvataggio sicuro (file temporaneo e sostituzione, mai sul posto) |
+| Ctrl+Q | Ispettore: anteprima, metadati, MD5/SHA-1/SHA-256 e elenco del contenuto degli archivi |
+| Ctrl+Shift+P | Command palette |
+| Ctrl+P | Salto rapido tra cartelle recenti, preferiti e file |
+| Ctrl+ò / Ctrl+Shift+ò | Terminale a schede nel pannello in basso / nuovo terminale |
+| Ctrl+Shift+F1 | Vista a miniature (anteprime della Shell) |
+
+- **Viewer**: nel testo `A`, `7` e `6` scelgono ANSI, UTF-8 e UTF-16LE; `W` va a capo; `1` testo, `3` esadecimale. Esc chiude la scheda.
+- **Editor esterno**: l'opzione `useExternalEditor` nelle impostazioni fa aprire a F4 `externalEditor` invece di Monaco.
+- Monaco, pdf.js, xterm.js e markdown-it si caricano solo al primo uso: non pesano sull'avvio.
+
+### Limiti accettati
+
+- L'editor (Monaco) normalizza gli a capo misti a quello prevalente al salvataggio.
+- Il viewer non conosce le codifiche DOS (437, 850).
+- L'editor apre file fino a 32 MiB (`EDITOR_MAX_BYTES`): quelli più grandi si leggono con F3. Un file la cui decodifica perde dati (byte non validi) si apre in sola lettura.
+- Un file solo ASCII di un utente con ANSI diverso da UTF-8 è rilevato come UTF-8.
+- Il salvataggio scrive su `<file>.<8 cifre>.mcpart`; dopo un crash del processo può restare un residuo `.mcpart`.
+- Immagini, PDF e media passano dall'asset protocol di Tauri: la verifica di Range 206, percorsi UNC, nomi con `#`, `%` e spazi, percorsi oltre 260 caratteri è **da verificare**; per i file che falliscono restano testo ed esadecimale. Vedi [docs/superpowers/fase-2-follow-up.md](docs/superpowers/fase-2-follow-up.md).
+- Archivi: solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'estrazione arriva con la fase 3. 7z con intestazioni cifrate non supportato; RAR escluso.
+
 ## Build
 
 Prerequisiti: Rust stable (`x86_64-pc-windows-msvc`), Visual Studio Build Tools con il carico di
