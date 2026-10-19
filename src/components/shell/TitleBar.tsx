@@ -1,23 +1,39 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, PanelBottom, PanelLeft, Search, Square, X } from "lucide-react";
+import { Minus, PanelBottom, PanelLeft, PanelRight, Search, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { chordParts } from "../../commands/keys";
+import { chordsOf } from "../../commands/keymap";
+import { PALETTE_COMMAND_ID } from "../../commands/palette";
+import { executeCommand } from "../../commands/registry";
+import { useKeybindings } from "../../state/keybindings";
 import { useUi } from "../../state/ui";
 
 export function TitleBar() {
   const { t } = useTranslation();
   const sidebarVisible = useUi((s) => s.sidebarVisible);
   const bottomPanelVisible = useUi((s) => s.bottomPanelVisible);
+  const inspectorVisible = useUi((s) => s.inspectorVisible);
   const toggleSidebar = useUi((s) => s.toggleSidebar);
   const toggleBottomPanel = useUi((s) => s.toggleBottomPanel);
+  const toggleInspector = useUi((s) => s.toggleInspector);
+  const keymap = useKeybindings((s) => s.keymap);
+  const paletteKeys = chordsOf(keymap, PALETTE_COMMAND_ID)[0];
   const win = getCurrentWindow();
 
   return (
     <header className="mc-title" data-tauri-drag-region>
       <span className="mc-title-name">{t("app.title")}</span>
-      <div className="mc-title-search" data-tauri-drag-region>
+      {/* Con l'aspetto di un campo, ma è un pulsante: il click apre la palette (il focus resta dov'era). */}
+      <button
+        className="mc-title-search"
+        aria-haspopup="dialog"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => void executeCommand(PALETTE_COMMAND_ID)}
+      >
         <Search size={13} />
-        <input disabled placeholder={t("shell.search.placeholder")} aria-label={t("shell.search.placeholder")} />
-      </div>
+        <span>{t("shell.search.placeholder")}</span>
+        {paletteKeys && <kbd>{chordParts(paletteKeys).join("+")}</kbd>}
+      </button>
       <div className="mc-title-toggles">
         <button
           className={sidebarVisible ? "on" : ""}
@@ -36,6 +52,15 @@ export function TitleBar() {
           onClick={toggleBottomPanel}
         >
           <PanelBottom size={15} />
+        </button>
+        <button
+          className={inspectorVisible ? "on" : ""}
+          title={t("shell.toggle.inspector")}
+          aria-label={t("shell.toggle.inspector")}
+          aria-pressed={inspectorVisible}
+          onClick={toggleInspector}
+        >
+          <PanelRight size={15} />
         </button>
       </div>
       <div className="mc-title-window">

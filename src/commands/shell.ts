@@ -147,18 +147,8 @@ export function trackDragOut(tabId: string, i: number, e: MouseEvent) {
   window.addEventListener("mouseup", stop);
 }
 
-/** Apre un file col programma associato (Invio, doppio click, F3 in fase 1). */
+/** Apre un file col programma associato (Invio, doppio click). */
 export const openFile = (tabId: string, path: string) => run(tabId, openPath(path));
-
-const EXECUTABLE = new Set(
-  "exe com bat cmd ps1 vbs vbe js jse wsf wsh msi msp scr pif cpl hta lnk reg".split(" "),
-);
-
-/** Programmi, script e collegamenti: F3 non li esegue, li mostra come testo nell'editor esterno. */
-export const isExecutable = (name: string) => {
-  const i = name.lastIndexOf(".");
-  return i > 0 && EXECUTABLE.has(name.slice(i + 1).toLowerCase());
-};
 
 /** File sotto il cursore (non cartelle, unità o '..'). */
 function cursorFile() {
@@ -186,15 +176,19 @@ function properties() {
 const DEFS: [string, Command["run"]][] = [
   ["cm_ContextMenu", keyboardMenu],
   ["cm_Properties", properties],
-  // Fase 1: programma di default ed editor esterno; in fase 2 viewer ed editor interni.
-  // Invio (cm_Return) invece esegue anche i programmi, come Explorer.
+  // F3: viewer interno in una scheda del gruppo attivo. Invio (cm_Return) invece esegue i programmi, come Explorer.
   ["cm_List", () => {
     const f = cursorFile();
-    if (f) return isExecutable(f.name) ? editFile(f.tabId, f.path) : openFile(f.tabId, f.path);
+    const l = useLayout.getState();
+    if (f) l.openFileTab(l.activeGroupId, { path: f.path, mode: "viewer" });
   }],
+  // F4: editor interno in una scheda, oppure (impostazione) il programma esterno come nella fase 1.
   ["cm_Edit", () => {
     const f = cursorFile();
-    if (f) return editFile(f.tabId, f.path);
+    if (!f) return;
+    if (useSettings.getState().useExternalEditor) return editFile(f.tabId, f.path);
+    const l = useLayout.getState();
+    l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor" });
   }],
 ];
 

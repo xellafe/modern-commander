@@ -1,0 +1,49 @@
+/* Ispettore Ctrl+Q: a destra dell'area dei gruppi. Anteprima in alto (si prende lo spazio che resta), metadati e hash sotto. */
+.mc-inspector {
+  position: relative; flex: none; display: flex; flex-direction: column; min-width: 0; box-sizing: border-box;
+  background: var(--mc-panel); border-left: 1px solid var(--mc-border);
+}
+/* Splitter: la maniglia sta sul bordo sinistro */
+.mc-inspector > .mc-splitter-x { right: auto; left: -3px; }
+.mc-inspector-name {
+  flex: none; padding: 8px 10px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--mc-text); font-weight: 500;
+}
+.mc-inspector-preview {
+  display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto;
+  border-top: 1px solid var(--mc-border); border-bottom: 1px solid var(--mc-border); background: var(--mc-bg);
+}
+.mc-inspector-preview .mc-vimage, .mc-inspector-preview .mc-vmedia { flex: 1; min-height: 0; }
+.mc-inspector-text {
+  margin: 0; padding: 6px 10px; user-select: text;
+  font-family: var(--mc-font-mono); font-size: 12px; font-variant-ligatures: none; tab-size: 4; white-space: pre;
+}
+.mc-inspector-md { padding: 6px 12px; user-select: text; overflow-wrap: anywhere; }
+.mc-inspector-md :is(h1, h2, h3, h4) { margin: 0.8em 0 0.4em; line-height: 1.25; }
+.mc-inspector-md h1 { font-size: 1.4em; }
+.mc-inspector-md h2 { font-size: 1.2em; }
+.mc-inspector-md :is(h3, h4) { font-size: 1.05em; }
+.mc-inspector-md p, .mc-inspector-md ul, .mc-inspector-md ol { margin: 0.5em 0; }
+.mc-inspector-md pre, .mc-inspector-md code { font-family: var(--mc-font-mono); font-size: 12px; }
+.mc-inspector-md pre { padding: 6px 8px; overflow-x: auto; background: var(--mc-panel); border-radius: var(--mc-radius); }
+.mc-inspector-md a { color: var(--mc-accent); cursor: default; }
+.mc-inspector-md blockquote { margin: 0.5em 0; padding-left: 10px; color: var(--mc-muted); border-left: 2px solid var(--mc-border); }
+.mc-inspector-facts { padding: 10px; display: flex; flex-direction: column; gap: 4px; user-select: text; }
+.mc-inspector-facts > button { align-self: flex-start; }
+.mc-inspector-archive { margin: 0; padding: 0 0 4px; list-style: none; }
+.mc-inspector-archive li { display: flex; gap: 8px; justify-content: space-between; padding: 0 10px; height: var(--mc-row-height); line-height: var(--mc-row-height); }
+.mc-inspector-archive li span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-inspector-archive li span:last-child { flex: none; color: var(--mc-muted); }
+.mc-inspector-meta {
+  flex: none; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; padding: 8px 10px; user-select: text;
+}
+.mc-inspector-meta dt { color: var(--mc-muted); }
+.mc-inspector-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.mc-inspector-hashes { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 0 10px 10px; }
+.mc-inspector-hashes > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mc-shell .mc-inspector-hashes button { flex: none; min-width: 24px; height: 20px; padding: 0 6px; border-radius: var(--mc-radius); }
+.mc-shell .mc-inspector-hashes > div > button:first-child { width: 62px; }
+.mc-inspector-hashes code {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; font-family: var(--mc-font-mono); font-size: 11px;
+}
+.mc-inspector-pending { color: var(--mc-muted); }

@@ -4,6 +4,7 @@ vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { Entry } from "../ipc/types";
 import { useLayout } from "./layout";
+import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
 import { useTabViews } from "./tabViews";
 
@@ -156,4 +157,20 @@ test("rebuildAll applies showHidden to every open tab and keeps each cursor on t
   useTabViews.getState().rebuildAll();
   expect(names("t2")).toEqual(["..", "a", "b"]);
   expect(useTabViews.getState().views["t2"].rows[useTabViews.getState().views["t2"].cursor].name).toBe("b");
+});
+
+test("una cartella caricata finisce tra le recenti; unità, riletture e cartelle sparite no", async () => {
+  useRecentDirs.setState({ dirs: [] });
+  listDir.mockResolvedValue([]);
+  await useTabViews.getState().load("t1", "C:\\a");
+  await useTabViews.getState().load("t1", "C:\\b");
+  expect(useRecentDirs.getState().dirs).toEqual(["C:\\b", "C:\\a"]);
+  await useTabViews.getState().load("t1", "C:\\a", { reload: true });
+  await useTabViews.getState().load("t1", "drives:");
+  expect(useRecentDirs.getState().dirs).toEqual(["C:\\b", "C:\\a"]);
+  // cartella sparita: si registra quella dove si è finiti, mai quella richiesta
+  listDir.mockRejectedValueOnce({ code: "NOT_FOUND" }).mockResolvedValueOnce([]);
+  nearestExistingAncestor.mockResolvedValue("C:\\a");
+  await useTabViews.getState().load("t1", "C:\\gone");
+  expect(useRecentDirs.getState().dirs).toEqual(["C:\\a", "C:\\b"]);
 });

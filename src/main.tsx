@@ -4,10 +4,13 @@ import App from "./App";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
 import { initCloseGuard, registerNavigationCommands } from "./commands/navigation";
+import { registerPaletteCommands } from "./commands/palette";
 import { registerSettingsCommands } from "./commands/settings";
 import { registerShellCommands, suppressKeyboardContextMenu } from "./commands/shell";
+import { registerTerminalCommands } from "./commands/terminal";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
+import { blockUnloadIfDirty } from "./state/editors";
 import { useHotlist } from "./state/hotlist";
 import { initJobs } from "./state/jobs";
 import { useKeybindings } from "./state/keybindings";
@@ -26,7 +29,10 @@ registerHotlistCommands();
 registerFileOpCommands();
 registerShellCommands();
 registerSettingsCommands();
+registerPaletteCommands();
+registerTerminalCommands();
 window.addEventListener("contextmenu", suppressKeyboardContextMenu);
+window.addEventListener("beforeunload", blockUnloadIfDirty);
 // Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
 initJobs().catch(console.error);
 // Chiusura con operazioni non finite: conferma invece di ucciderle.

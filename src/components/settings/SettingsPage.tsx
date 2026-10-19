@@ -1,15 +1,16 @@
 import { Keyboard } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { termShells } from "../../ipc/api";
 import { useSettings, type Settings } from "../../state/settings";
 import { useUi } from "../../state/ui";
 
-type Category = "appearance" | "files" | "editor";
-const CATEGORIES: Category[] = ["appearance", "files", "editor"];
+type Category = "appearance" | "files" | "editor" | "terminal";
+const CATEGORIES: Category[] = ["appearance", "files", "editor", "terminal"];
 
 type Item =
-  | { id: "theme" | "language"; category: Category; kind: "select"; options: string[] }
-  | { id: "showHidden" | "showSystem" | "confirmDelete"; category: Category; kind: "check" }
+  | { id: "theme" | "language" | "terminalShell"; category: Category; kind: "select"; options: string[] }
+  | { id: "showHidden" | "showSystem" | "confirmDelete" | "useExternalEditor"; category: Category; kind: "check" }
   | { id: "externalEditor"; category: Category; kind: "text" };
 
 const ITEMS: Item[] = [
@@ -18,7 +19,10 @@ const ITEMS: Item[] = [
   { id: "showHidden", category: "files", kind: "check" },
   { id: "showSystem", category: "files", kind: "check" },
   { id: "confirmDelete", category: "files", kind: "check" },
+  { id: "useExternalEditor", category: "editor", kind: "check" },
   { id: "externalEditor", category: "editor", kind: "text" },
+  // Le opzioni di `terminalShell` si completano con le shell trovate (`termShells`).
+  { id: "terminalShell", category: "terminal", kind: "select", options: ["auto"] },
 ];
 
 // Le modifiche si applicano subito (tema, lingua e liste dei file reagiscono allo store, vedi main.tsx).
@@ -63,10 +67,18 @@ function EditorField({ labelId }: { labelId: string }) {
   );
 }
 
+/** Le opzioni di una lista; per la shell del terminale anche il valore salvato se la shell non c'è più, così la lista lo mostra. */
+const optionsOf = (it: Extract<Item, { kind: "select" }>, shells: string[], current: string): string[] =>
+  it.id === "terminalShell" ? [...new Set([...it.options, ...shells, current])] : it.options;
+
 export function SettingsPage({ query }: { query: string }) {
   const { t } = useTranslation();
   const settings = useSettings();
   const [category, setCategory] = useState<Category | null>(null);
+  const [shells, setShells] = useState<string[]>([]);
+  useEffect(() => {
+    termShells().then(setShells).catch(console.error);
+  }, []);
 
   const q = query.trim().toLowerCase();
   const visible = ITEMS.filter(
@@ -111,7 +123,7 @@ export function SettingsPage({ query }: { query: string }) {
                   value={settings[it.id]}
                   onChange={(e) => void save({ [it.id]: e.target.value })}
                 >
-                  {it.options.map((o) => (
+                  {optionsOf(it, shells, settings[it.id]).map((o) => (
                     <option key={o} value={o}>{t(`settings.options.${it.id}.${o}`)}</option>
                   ))}
                 </select>

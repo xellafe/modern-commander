@@ -17,7 +17,7 @@ const BY_DRIVE: Record<DriveKind, LucideIcon> = {
 };
 
 // Il colore viene da --mc-icon-<tipo>: monocromatico nel tema scuro, tenue nel chiaro.
-export function FileIcon({ row }: { row: Row }) {
+export function FileIcon({ row, size = 14 }: { row: Row; size?: number }) {
   const kind = row.drive || row.isParent ? "folder" : fileKind(row.name, row.isDir);
   const Icon = row.isParent
     ? CornerLeftUp
@@ -26,5 +26,5 @@ export function FileIcon({ row }: { row: Row }) {
       : row.isSymlink
         ? (row.isDir ? FolderSymlink : FileSymlink)
         : BY_KIND[kind];
-  return <Icon className="mc-icon" size={14} strokeWidth={1.6} style={{ color: `var(--mc-icon-${kind})` }} aria-hidden />;
+  return <Icon className="mc-icon" size={size} strokeWidth={1.6} style={{ color: `var(--mc-icon-${kind})` }} aria-hidden />;
 }

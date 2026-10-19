@@ -6,22 +6,49 @@ import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
 import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
 import { cancelAllAndWait, unfinishedJobs, useJobs } from "../state/jobs";
-import { targetGroup, useLayout } from "../state/layout";
+import { activeTab, targetGroup, useLayout } from "../state/layout";
 import {
   finishSizing, hasSize, invertMarks, markRange, parentPath, sizable, startSizing, toggleMark,
   type SortKey, type TabView,
 } from "../state/tabView";
+import { dirtyEditorCount, useEditors } from "../state/editors";
 import { computeDirSize } from "../state/sizeRequests";
 import { activeTabContext, useTabViews, type LoadOpts } from "../state/tabViews";
 import { useUi } from "../state/ui";
+import { useViewers } from "../state/viewers";
 import { registerCommand, type Command } from "./registry";
 import { openFile } from "./shell";
 
-/** Righe visibili nella lista (pagina per PgSu/PgGiù, righe per colonna nella vista breve). */
+/** Righe visibili nella lista (pagina per PgSu/PgGiù, righe per colonna nella vista breve, righe di riquadri nella griglia). */
 let pageSize = 20;
 export const setPageSize = (n: number) => {
   pageSize = Math.max(1, n);
 };
+
+/** Riquadri per riga nella vista miniature. */
+let gridColumns = 1;
+export const setGridColumns = (n: number) => {
+  gridColumns = Math.max(1, n);
+};
+
+type CursorMove = "up" | "down" | "left" | "right" | "pageUp" | "pageDown";
+
+/**
+ * Di quante righe si sposta il cursore: tutti i `mc_Cursor*` (e le marcature Maiusc+↑/↓) passano di qui.
+ * Griglia: ↑/↓ di una riga di riquadri, ←/→ di un riquadro, pagina di `page` righe di riquadri. Breve: ←/→ di una colonna.
+ * Dettagliata: ←/→ non fanno niente, come in TC.
+ */
+export function cursorStep(view: TabView["view"], move: CursorMove, page: number, cols: number): number {
+  const thumbs = view === "thumbs";
+  switch (move) {
+    case "up": return thumbs ? -cols : -1;
+    case "down": return thumbs ? cols : 1;
+    case "left": return thumbs ? -1 : view === "brief" ? -page : 0;
+    case "right": return thumbs ? 1 : view === "brief" ? page : 0;
+    case "pageUp": return thumbs ? -page * cols : -(page - 1);
+    case "pageDown": return thumbs ? page * cols : page - 1;
+  }
+}
 
 /** Stesso tasto = inverte il verso, come in TC; un tasto nuovo parte crescente. */
 export const nextSort = (sort: TabView["sort"], key: SortKey): TabView["sort"] =>
@@ -34,12 +61,13 @@ const clamp = (i: number, n: number) => Math.max(0, Math.min(i, n - 1));
 const open = (path: string, opts?: LoadOpts) => views().load(activeTabContext().tabId, path, opts);
 const updateActive = (fn: (v: TabView) => TabView) => views().update(activeTabContext().tabId, fn);
 const moveCursor = (to: (v: TabView) => number) => updateActive((v) => ({ ...v, cursor: clamp(to(v), v.rows.length) }));
+const step = (move: CursorMove) => (v: TabView) => v.cursor + cursorStep(v.view, move, pageSize, gridColumns);
 
-function markAndMove(delta: number) {
+function markAndMove(move: "up" | "down") {
   updateActive((v) => {
     const row = v.rows[v.cursor];
     const marked = row ? toggleMark(v, row.name) : v;
-    return { ...marked, cursor: clamp(v.cursor + delta, v.rows.length) };
+    return { ...marked, cursor: clamp(step(move)(v), v.rows.length) };
   });
 }
 
@@ -94,10 +122,42 @@ export function sortBy(tabId: string, key: SortKey) {
   if (v) views().rebuild(tabId, { sort: nextSort(v.sort, key) });
 }
 
-/** Chiude la scheda e ne libera lo stato (watcher, listing). L'ultima scheda dell'ultimo gruppo resta. */
-export function closeTab(tabId: string) {
+/**
+ * Id di una scheda cartella nel gruppo attivo, attivata: se la scheda attiva è un file torna a chi l'ha aperta
+ * (se è ancora lì e mostra una cartella), altrimenti apre una scheda cartella su `path` (default: la cartella del file).
+ * Chi sta per caricare `path` lo passa, così il primo caricamento della scheda nuova (Group.tsx) è già quello giusto.
+ */
+export function ensureDirTab(path?: string): string {
+  const tab = activeTab(layout());
+  if (!tab.file) return tab.id;
+  const l = layout();
+  const group = l.groups.find((g) => g.id === l.activeGroupId)!;
+  const back = tab.returnTo && group.tabIds.includes(tab.returnTo) && !l.tabs[tab.returnTo].file ? tab.returnTo : null;
+  if (back) l.activateTab(back);
+  else l.newTab(group.id, path ?? tab.path);
+  return activeTab(layout()).id;
+}
+
+/**
+ * Chiude la scheda e ne libera lo stato (watcher, listing, viewer, editor), senza chiedere. L'ultima scheda dell'ultimo
+ * gruppo resta: se è una scheda di file, si sostituisce con una scheda cartella sulla sua cartella.
+ */
+export function closeTabNow(tabId: string) {
+  const l = layout();
+  const tab = l.tabs[tabId];
+  if (tab?.file && l.groups.length === 1 && l.groups[0].tabIds.length === 1) l.newTab(l.groups[0].id, tab.path);
   layout().closeTab(tabId);
-  if (!layout().tabs[tabId]) views().dispose(tabId);
+  if (!layout().tabs[tabId]) {
+    views().dispose(tabId);
+    useViewers.getState().dispose(tabId);
+    useEditors.getState().dispose(tabId);
+  }
+}
+
+/** Chiude la scheda; un editor con modifiche non salvate chiede prima cosa farne (Salva / Non salvare / Annulla). */
+export function closeTab(tabId: string) {
+  if (useEditors.getState().docs[tabId]?.dirty) useUi.getState().openDialog({ kind: "unsaved", tabId });
+  else closeTabNow(tabId);
 }
 
 function goHistory(delta: 1 | -1) {
@@ -113,6 +173,12 @@ function openInAdjacentGroup(delta: 1 | -1) {
   const i = l.groups.findIndex((g) => g.id === l.activeGroupId);
   // Senza un gruppo da quella parte si apre nel gruppo stesso (come Ctrl+←/→ di TC nel pannello omonimo).
   const g = l.groups[i + delta] ?? l.groups[i];
+  // Una scheda di file non ha elenco: la cartella si apre in una scheda nuova (che Group.tsx carica), senza spostare il gruppo attivo.
+  if (l.tabs[g.activeTabId].file) {
+    l.newTab(g.id, target);
+    l.activateGroup(l.activeGroupId);
+    return;
+  }
   return views().load(g.activeTabId, target);
 }
 
@@ -145,15 +211,16 @@ let exiting = false;
 
 /**
  * Chiusura della finestra: la X, Alt+F4 e cm_Exit passano tutti di qui. Con operazioni non finite
- * (in coda, in corso, in pausa, in attesa di risposta) si chiede conferma invece di ucciderle.
+ * (in coda, in corso, in pausa, in attesa di risposta) o con file non salvati negli editor si chiede conferma.
  */
 export const initCloseGuard = () =>
   getCurrentWindow().onCloseRequested((e) => {
     const count = unfinishedJobs(useJobs.getState().jobs).length;
-    if (!count && !exiting) return;
+    const dirty = dirtyEditorCount();
+    if (!count && !dirty && !exiting) return;
     e.preventDefault();
     // Sostituisce un'eventuale altra finestra aperta: l'utente vuole uscire.
-    if (!exiting) useUi.setState({ dialog: { kind: "exit", count } });
+    if (!exiting) useUi.setState({ dialog: { kind: "exit", count, dirty } });
   });
 
 /** Dalla conferma: annulla tutti i job, ne attende la fine (al massimo `EXIT_WAIT_MS`) e chiude. */
@@ -167,23 +234,24 @@ export async function exitCancellingJobs() {
   }
 }
 
-type Def = [id: string, run: Command["run"], opts?: { repeat?: boolean; global?: boolean }];
+type Def = [id: string, run: Command["run"], opts?: { repeat?: boolean; global?: boolean; group?: boolean }];
 const R = { repeat: true };
+const G = { group: true };
+const RG = { repeat: true, group: true };
 
 const DEFS: Def[] = [
   // Cursore e marcatura
-  ["mc_CursorUp", () => moveCursor((v) => v.cursor - 1), R],
-  ["mc_CursorDown", () => moveCursor((v) => v.cursor + 1), R],
-  ["mc_CursorPageUp", () => moveCursor((v) => v.cursor - (pageSize - 1)), R],
-  ["mc_CursorPageDown", () => moveCursor((v) => v.cursor + (pageSize - 1)), R],
+  ["mc_CursorUp", () => moveCursor(step("up")), R],
+  ["mc_CursorDown", () => moveCursor(step("down")), R],
+  ["mc_CursorPageUp", () => moveCursor(step("pageUp")), R],
+  ["mc_CursorPageDown", () => moveCursor(step("pageDown")), R],
   ["mc_CursorHome", () => moveCursor(() => 0)],
   ["mc_CursorEnd", () => moveCursor((v) => v.rows.length - 1)],
-  // ←/→ cambiano colonna solo nella vista breve; nella dettagliata non fanno niente, come in TC.
-  ["mc_CursorLeft", () => moveCursor((v) => (v.view === "brief" ? v.cursor - pageSize : v.cursor)), R],
-  ["mc_CursorRight", () => moveCursor((v) => (v.view === "brief" ? v.cursor + pageSize : v.cursor)), R],
-  ["mc_MarkUp", () => markAndMove(-1), R],
-  ["mc_MarkDown", () => markAndMove(1), R],
-  ["cm_Reverse", () => markAndMove(1), R],
+  ["mc_CursorLeft", () => moveCursor(step("left")), R],
+  ["mc_CursorRight", () => moveCursor(step("right")), R],
+  ["mc_MarkUp", () => markAndMove("up"), R],
+  ["mc_MarkDown", () => markAndMove("down"), R],
+  ["cm_Reverse", () => markAndMove("down"), R],
   ["cm_SelectAll", () => updateActive((v) => markRange(v, 0, v.rows.length - 1))],
   ["cm_ClearAll", () => updateActive((v) => ({ ...v, marked: new Set() }))],
   ["cm_ExchangeSelection", () => updateActive(invertMarks)],
@@ -216,13 +284,13 @@ const DEFS: Def[] = [
   ["cm_QuickFilter", () => views().setOverlay({ kind: "filter", tabId: activeTabContext().tabId })],
 
   // Schede e gruppi
-  ["cm_OpenNewTab", () => layout().newTab(layout().activeGroupId, activeTabContext().path)],
-  ["cm_CloseCurrentTab", () => closeTab(activeTabContext().tabId)],
-  ["cm_SwitchToNextTab", () => layout().cycleTab(layout().activeGroupId, 1), R],
-  ["cm_SwitchToPreviousTab", () => layout().cycleTab(layout().activeGroupId, -1), R],
-  ["mc_FocusNextGroup", () => layout().focusAdjacentGroup(1)],
-  ["mc_FocusPrevGroup", () => layout().focusAdjacentGroup(-1)],
-  ["mc_SplitGroup", () => layout().splitGroup(layout().activeGroupId)],
+  ["cm_OpenNewTab", () => layout().newTab(layout().activeGroupId, activeTabContext().path), G],
+  ["cm_CloseCurrentTab", () => closeTab(activeTabContext().tabId), G],
+  ["cm_SwitchToNextTab", () => layout().cycleTab(layout().activeGroupId, 1), RG],
+  ["cm_SwitchToPreviousTab", () => layout().cycleTab(layout().activeGroupId, -1), RG],
+  ["mc_FocusNextGroup", () => layout().focusAdjacentGroup(1), G],
+  ["mc_FocusPrevGroup", () => layout().focusAdjacentGroup(-1), G],
+  ["mc_SplitGroup", () => layout().splitGroup(layout().activeGroupId), G],
   ["mc_OpenInPrevGroup", () => openInAdjacentGroup(-1)],
   ["mc_OpenInNextGroup", () => openInAdjacentGroup(1)],
   ["cm_Exchange", async () => {
@@ -231,6 +299,7 @@ const DEFS: Def[] = [
     if (!other) return;
     const a = activeTabContext().tabId;
     const b = l.groups.find((g) => g.id === other)!.activeTabId;
+    if (l.tabs[b].file) return; // niente da scambiare con un viewer/editor
     await Promise.all([views().load(a, l.tabs[b].path), views().load(b, l.tabs[a].path)]);
   }],
 
@@ -242,10 +311,12 @@ const DEFS: Def[] = [
   ["cm_SrcUnsorted", () => sortBy(activeTabContext().tabId, "none")],
   ["cm_SrcShort", () => updateActive((v) => ({ ...v, view: "brief" }))],
   ["cm_SrcLong", () => updateActive((v) => ({ ...v, view: "full" }))],
+  ["cm_SrcThumbs", () => updateActive((v) => ({ ...v, view: "thumbs" }))],
 
   // Finestra
   ["mc_ToggleSidebar", () => useUi.getState().toggleSidebar(), { global: true }],
   ["mc_ToggleBottomPanel", () => useUi.getState().toggleBottomPanel(), { global: true }],
+  ["cm_SrcQuickview", () => useUi.getState().toggleInspector(), G],
   ["cm_Exit", () => getCurrentWindow().close(), { global: true }],
 ];
 
@@ -253,6 +324,6 @@ export const NAVIGATION_COMMAND_IDS = DEFS.map(([id]) => id);
 
 export function registerNavigationCommands() {
   for (const [id, run, o] of DEFS) {
-    registerCommand({ id, titleKey: `commands.${id}`, when: o?.global ? "global" : "fileList", repeat: o?.repeat, run });
+    registerCommand({ id, titleKey: `commands.${id}`, when: o?.global ? "global" : o?.group ? "group" : "fileList", repeat: o?.repeat, run });
   }
 }

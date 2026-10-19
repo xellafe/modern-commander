@@ -3,6 +3,8 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useLayout, type Group as GroupModel } from "../../state/layout";
 import { useTabViews, type MenuItem } from "../../state/tabViews";
+import { Editor } from "../editor/Editor";
+import { Viewer } from "../viewer/Viewer";
 import { Breadcrumb } from "./Breadcrumb";
 import { FileList } from "./FileList";
 import { TabStrip } from "./TabStrip";
@@ -14,15 +16,18 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
   const { t } = useTranslation();
   const tabId = group.activeTabId;
   const path = useLayout((s) => s.tabs[tabId].path);
+  const isFile = useLayout((s) => !!s.tabs[tabId].file);
+  const viewerPath = useLayout((s) => (s.tabs[tabId].file?.mode === "viewer" ? s.tabs[tabId].file!.path : null));
+  const editorPath = useLayout((s) => (s.tabs[tabId].file?.mode === "editor" ? s.tabs[tabId].file!.path : null));
   const hasView = useTabViews((s) => tabId in s.views);
   const overlay = useTabViews((s) => (s.overlay?.tabId === tabId ? s.overlay : null));
   const notice = useTabViews((s) => (s.notice?.tabId === tabId ? s.notice : null));
   const filter = useTabViews((s) => s.views[tabId]?.filter ?? "");
 
-  // Le schede si caricano la prima volta che diventano visibili (avvio, "+", divisione).
+  // Le schede si caricano la prima volta che diventano visibili (avvio, "+", divisione); quelle di file non hanno elenco.
   useEffect(() => {
-    if (!hasView) void views().load(tabId, path);
-  }, [tabId, hasView]); // il percorso conta solo al primo caricamento: dopo lo cambia load()
+    if (!hasView && !isFile) void views().load(tabId, path);
+  }, [tabId, hasView, isFile]); // il percorso conta solo al primo caricamento: dopo lo cambia load()
 
   return (
     <section
@@ -35,8 +40,10 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
       }}
     >
       <TabStrip group={group} />
-      <Breadcrumb key={tabId} tabId={tabId} path={path} />
-      <div className="mc-group-body">
+      {viewerPath && <Viewer key={tabId} tabId={tabId} path={viewerPath} />}
+      {editorPath && <Editor key={tabId} tabId={tabId} path={editorPath} />}
+      {!isFile && <Breadcrumb key={tabId} tabId={tabId} path={path} />}
+      {!isFile && <div className="mc-group-body">
         <FileList tabId={tabId} active={active} />
         {overlay?.kind === "menu" && <PathMenu key={overlay.title} tabId={tabId} title={overlay.title} items={overlay.items} />}
         {overlay?.kind === "quickSearch" && (
@@ -52,7 +59,7 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
             {notice.path && <span>{notice.path}</span>}
           </div>
         )}
-      </div>
+      </div>}
     </section>
   );
 }

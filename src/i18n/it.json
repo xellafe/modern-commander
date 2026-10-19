@@ -8,7 +8,8 @@
     },
     "toggle": {
       "sidebar": "Mostra/nascondi barra laterale",
-      "panel": "Mostra/nascondi pannello in basso"
+      "panel": "Mostra/nascondi pannello in basso",
+      "inspector": "Mostra/nascondi ispettore"
     },
     "window": {
       "close": "Chiudi",
@@ -23,6 +24,7 @@
       "settings": "Impostazioni"
     },
     "panel": {
+      "terminal": "Terminale",
       "operations": "Operazioni",
       "operationsCount": "Operazioni ({{count}})"
     },
@@ -73,6 +75,61 @@
       "attributes": "Attr."
     }
   },
+  "viewer": {
+    "mode": {
+      "text": "Testo",
+      "hex": "Esadecimale",
+      "image": "Immagine",
+      "pdf": "PDF",
+      "video": "Video",
+      "audio": "Audio"
+    },
+    "modeLabel": "Modalità di visualizzazione",
+    "encodingLabel": "Codifica",
+    "wrap": "A capo automatico",
+    "position": "{{percent}}%",
+    "scrollbar": "Posizione nel file",
+    "unsupportedImage": "Questo formato di immagine non si può mostrare. Usa Testo o Esadecimale per vedere il file.",
+    "shellPreview": "Anteprima della shell: questo formato non si può mostrare direttamente.",
+    "unsupportedMedia": "Questo file non si può riprodurre qui.",
+    "unsupportedPdf": "Questo PDF non si può aprire. Usa Testo o Esadecimale per vedere il file.",
+    "openExternal": "Apri con il programma predefinito"
+  },
+  "inspector": {
+    "title": "Ispettore",
+    "empty": "Seleziona un file o una cartella per vederne i dettagli.",
+    "loading": "Caricamento…",
+    "binary": "File binario: nessuna anteprima disponibile.",
+    "truncated": "Mostrati solo i primi {{size}}.",
+    "folderCalculating": "Calcolo della dimensione…",
+    "folderContent": "File: {{files}} · Cartelle: {{dirs}}",
+    "folderSkipped": "Cartelle illeggibili (non conteggiate): {{n}}",
+    "driveFree": "{{free}} liberi su {{total}}",
+    "archiveTotal": "Voci: {{n}}",
+    "archiveFirst": "Prime {{n}} voci; l'archivio ne contiene altre.",
+    "showArchiveContents": "Mostra contenuto",
+    "size": "Dimensione",
+    "sizeExact": "{{bytes}} byte",
+    "created": "Creazione",
+    "modified": "Modifica",
+    "accessed": "Ultimo accesso",
+    "attributes": "Attributi",
+    "hashing": "Calcolo in corso…",
+    "copy": "Copia"
+  },
+  "editor": {
+    "unsavedTitle": "Modifiche non salvate",
+    "unsavedText": "«{{name}}» ha modifiche non salvate. Salvarle prima di chiudere?",
+    "save": "Salva",
+    "discard": "Non salvare",
+    "saveErrorTitle": "Impossibile salvare",
+    "changedOnDisk": "«{{name}}» è stato modificato da un altro programma dopo l'apertura. Sovrascriverlo farebbe perdere quelle modifiche.",
+    "unmappable": "Il testo di «{{name}}» contiene caratteri che {{encoding}} non sa rappresentare. Salvando in quella codifica andrebbero persi.",
+    "overwrite": "Sovrascrivi",
+    "saveUtf8": "Salva in UTF-8",
+    "readOnly": "Aperto in sola lettura: il file sembra binario o non si decodifica senza perdere dati, quindi salvarlo potrebbe danneggiarlo. Premi F3 nella lista dei file per vederlo in esadecimale.",
+    "tooLarge": "Il file è troppo grande per essere modificato (oltre {{size}}). Premi F3 nella lista dei file per visualizzarlo."
+  },
   "hotlist": {
     "title": "Hotlist cartelle",
     "addCurrent": "Aggiungi cartella corrente",
@@ -83,6 +140,22 @@
     "delete": "Elimina",
     "edit": "Modifica preferiti",
     "done": "Fine"
+  },
+  "terminal": {
+    "new": "Nuovo terminale",
+    "close": "Chiudi terminale",
+    "shellMenu": "Scegli la shell del nuovo terminale",
+    "empty": "Nessun terminale aperto."
+  },
+  "palette": {
+    "placeholder": "Scrivi un comando…",
+    "empty": "Nessun comando trovato",
+    "results": "Risultati",
+    "placeholderJump": "Vai a cartella o file…",
+    "emptyJump": "Nessuna cartella o file trovato",
+    "scanning": "Scansione in corso…",
+    "truncated": "Risultati troncati",
+    "folder": "Cartella"
   },
   "commands": {
     "mc_CursorUp": "Cursore su",
@@ -111,6 +184,7 @@
     "cm_RereadSource": "Aggiorna",
     "cm_SrcOpenDrives": "Scegli unità",
     "cm_QuickFilter": "Filtro rapido",
+    "cm_SrcQuickview": "Mostra/nascondi ispettore",
     "cm_OpenNewTab": "Nuova scheda",
     "cm_CloseCurrentTab": "Chiudi scheda",
     "cm_SwitchToNextTab": "Scheda successiva",
@@ -128,7 +202,10 @@
     "cm_SrcUnsorted": "Senza ordinamento",
     "cm_SrcShort": "Vista breve",
     "cm_SrcLong": "Vista dettagliata",
+    "cm_SrcThumbs": "Vista miniature",
     "mc_ToggleSidebar": "Mostra/nascondi barra laterale",
+    "mc_ToggleTerminal": "Mostra/nascondi terminale",
+    "mc_NewTerminal": "Nuovo terminale",
     "mc_ToggleBottomPanel": "Mostra/nascondi pannello in basso",
     "cm_Exit": "Esci",
     "cm_Copy": "Copia",
@@ -145,7 +222,9 @@
     "cm_List": "Visualizza",
     "cm_Edit": "Modifica",
     "cm_Config": "Impostazioni",
-    "mc_Keybindings": "Scorciatoie da tastiera"
+    "mc_Keybindings": "Scorciatoie da tastiera",
+    "mc_CommandPalette": "Palette dei comandi",
+    "mc_QuickJump": "Salto rapido"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",
@@ -162,6 +241,10 @@
     "UNSUPPORTED": "L'operazione non supporta questo elemento.",
     "CANCELLED": "Operazione annullata.",
     "INVALID_REQUEST": "Richiesta non valida.",
+    "TOO_LARGE": "Il file è troppo grande per questa operazione.",
+    "CHANGED_ON_DISK": "Il file è stato modificato su disco da un altro programma.",
+    "UNMAPPABLE_CHARS": "Il testo contiene caratteri che la codifica scelta non sa rappresentare.",
+    "CORRUPT_ARCHIVE": "L'archivio è danneggiato o non si può leggere.",
     "IO": "Errore di input/output."
   },
   "ops": {
@@ -213,9 +296,11 @@
     "deleteText": "Spostare {{what}} nel Cestino?",
     "deletePermanentText": "Eliminare definitivamente {{what}}? L'operazione non si può annullare.",
     "exitTitle": "Esci da Modern Commander",
-    "exitText_one": "{{count}} operazione non è finita. Annullarla e uscire?",
-    "exitText_other": "{{count}} operazioni non sono finite. Annullarle e uscire?",
-    "exitConfirm": "Annulla ed esci",
+    "exitJobs_one": "{{count}} operazione non è finita e verrà annullata.",
+    "exitJobs_other": "{{count}} operazioni non sono finite e verranno annullate.",
+    "exitUnsaved_one": "{{count}} file ha modifiche non salvate che andranno perse.",
+    "exitUnsaved_other": "{{count}} file hanno modifiche non salvate che andranno perse.",
+    "exitConfirm": "Esci comunque",
     "delete": "Elimina",
     "selectTitle": "Seleziona file",
     "unselectTitle": "Deseleziona file",
@@ -258,7 +343,8 @@
       "all": "Tutte",
       "appearance": "Aspetto",
       "files": "File",
-      "editor": "Editor"
+      "editor": "Editor",
+      "terminal": "Terminale"
     },
     "items": {
       "theme": {
@@ -281,9 +367,17 @@
         "label": "Conferma prima di eliminare",
         "desc": "Chiede conferma prima di spostare gli elementi nel Cestino o di eliminarli."
       },
+      "useExternalEditor": {
+        "label": "Modifica con un editor esterno",
+        "desc": "F4 apre il programma qui sotto invece dell'editor integrato."
+      },
       "externalEditor": {
         "label": "Editor esterno",
-        "desc": "Programma che apre i file con F4 (comando o percorso completo)."
+        "desc": "Programma che apre i file con F4 quando l'editor esterno è attivo (comando o percorso completo)."
+      },
+      "terminalShell": {
+        "label": "Shell del terminale",
+        "desc": "Shell dei nuovi terminali. Si elencano solo quelle presenti su questo computer."
       }
     },
     "options": {
@@ -295,6 +389,13 @@
       "language": {
         "en": "English",
         "it": "Italiano"
+      },
+      "terminalShell": {
+        "auto": "Automatica (la migliore disponibile)",
+        "pwsh": "PowerShell 7",
+        "powershell": "Windows PowerShell",
+        "cmd": "cmd",
+        "wsl": "WSL"
       }
     },
     "errors": {

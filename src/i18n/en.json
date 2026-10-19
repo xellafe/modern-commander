@@ -8,7 +8,8 @@
     },
     "toggle": {
       "sidebar": "Show/hide sidebar",
-      "panel": "Show/hide bottom panel"
+      "panel": "Show/hide bottom panel",
+      "inspector": "Show/hide inspector"
     },
     "window": {
       "close": "Close",
@@ -23,6 +24,7 @@
       "settings": "Settings"
     },
     "panel": {
+      "terminal": "Terminal",
       "operations": "Operations",
       "operationsCount": "Operations ({{count}})"
     },
@@ -73,6 +75,61 @@
       "attributes": "Attr"
     }
   },
+  "viewer": {
+    "mode": {
+      "text": "Text",
+      "hex": "Hex",
+      "image": "Image",
+      "pdf": "PDF",
+      "video": "Video",
+      "audio": "Audio"
+    },
+    "modeLabel": "View mode",
+    "encodingLabel": "Encoding",
+    "wrap": "Word wrap",
+    "position": "{{percent}}%",
+    "scrollbar": "Position in the file",
+    "unsupportedImage": "This image format cannot be displayed. Use Text or Hex to see the file.",
+    "shellPreview": "Showing the shell preview instead: the browser cannot display this format.",
+    "unsupportedMedia": "This file cannot be played here.",
+    "unsupportedPdf": "This PDF cannot be opened. Use Text or Hex to see the file.",
+    "openExternal": "Open with default program"
+  },
+  "inspector": {
+    "title": "Inspector",
+    "empty": "Select a file or folder to see its details.",
+    "loading": "Loading…",
+    "binary": "Binary file: no preview available.",
+    "truncated": "Showing only the first {{size}}.",
+    "folderCalculating": "Calculating size…",
+    "folderContent": "Files: {{files}} · Folders: {{dirs}}",
+    "folderSkipped": "Unreadable folders (not counted): {{n}}",
+    "driveFree": "{{free}} free of {{total}}",
+    "archiveTotal": "Entries: {{n}}",
+    "archiveFirst": "First {{n}} entries; the archive contains more.",
+    "showArchiveContents": "Show contents",
+    "size": "Size",
+    "sizeExact": "{{bytes}} bytes",
+    "created": "Created",
+    "modified": "Modified",
+    "accessed": "Accessed",
+    "attributes": "Attributes",
+    "hashing": "Calculating…",
+    "copy": "Copy"
+  },
+  "editor": {
+    "unsavedTitle": "Unsaved changes",
+    "unsavedText": "“{{name}}” has unsaved changes. Save them before closing?",
+    "save": "Save",
+    "discard": "Don't save",
+    "saveErrorTitle": "Cannot save",
+    "changedOnDisk": "“{{name}}” was changed by another program after you opened it. Overwriting it would lose those changes.",
+    "unmappable": "The text of “{{name}}” contains characters that {{encoding}} cannot represent. Saving in that encoding would lose them.",
+    "overwrite": "Overwrite",
+    "saveUtf8": "Save as UTF-8",
+    "readOnly": "Open read-only: this file looks binary or cannot be decoded without losing data, so saving could corrupt it. Press F3 in the file list to see it as hex.",
+    "tooLarge": "This file is too large to edit (over {{size}}). Press F3 in the file list to view it."
+  },
   "hotlist": {
     "title": "Directory hotlist",
     "addCurrent": "Add current folder",
@@ -83,6 +140,22 @@
     "delete": "Delete",
     "edit": "Edit favorites",
     "done": "Done"
+  },
+  "terminal": {
+    "new": "New terminal",
+    "close": "Close terminal",
+    "shellMenu": "Choose the shell of the new terminal",
+    "empty": "No terminal open."
+  },
+  "palette": {
+    "placeholder": "Type a command…",
+    "empty": "No matching commands",
+    "results": "Results",
+    "placeholderJump": "Go to folder or file…",
+    "emptyJump": "No matching folders or files",
+    "scanning": "Scanning…",
+    "truncated": "Results truncated",
+    "folder": "Folder"
   },
   "commands": {
     "mc_CursorUp": "Cursor up",
@@ -111,6 +184,7 @@
     "cm_RereadSource": "Refresh",
     "cm_SrcOpenDrives": "Choose drive",
     "cm_QuickFilter": "Quick filter",
+    "cm_SrcQuickview": "Show/hide inspector",
     "cm_OpenNewTab": "New tab",
     "cm_CloseCurrentTab": "Close tab",
     "cm_SwitchToNextTab": "Next tab",
@@ -128,7 +202,10 @@
     "cm_SrcUnsorted": "Unsorted",
     "cm_SrcShort": "Brief view",
     "cm_SrcLong": "Detailed view",
+    "cm_SrcThumbs": "Thumbnails view",
     "mc_ToggleSidebar": "Show/hide sidebar",
+    "mc_ToggleTerminal": "Show/hide terminal",
+    "mc_NewTerminal": "New terminal",
     "mc_ToggleBottomPanel": "Show/hide bottom panel",
     "cm_Exit": "Exit",
     "cm_Copy": "Copy",
@@ -145,7 +222,9 @@
     "cm_List": "View",
     "cm_Edit": "Edit",
     "cm_Config": "Settings",
-    "mc_Keybindings": "Keyboard shortcuts"
+    "mc_Keybindings": "Keyboard shortcuts",
+    "mc_CommandPalette": "Command palette",
+    "mc_QuickJump": "Quick jump"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",
@@ -162,6 +241,10 @@
     "UNSUPPORTED": "This item is not supported by the operation.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",
+    "TOO_LARGE": "The file is too large for this operation.",
+    "CHANGED_ON_DISK": "The file was changed on disk by another program.",
+    "UNMAPPABLE_CHARS": "The text contains characters the chosen encoding cannot represent.",
+    "CORRUPT_ARCHIVE": "The archive is damaged or cannot be read.",
     "IO": "Input/output error."
   },
   "ops": {
@@ -213,9 +296,11 @@
     "deleteText": "Move {{what}} to the Recycle Bin?",
     "deletePermanentText": "Permanently delete {{what}}? This cannot be undone.",
     "exitTitle": "Exit Modern Commander",
-    "exitText_one": "{{count}} operation is not finished. Cancel it and exit?",
-    "exitText_other": "{{count}} operations are not finished. Cancel them and exit?",
-    "exitConfirm": "Cancel and exit",
+    "exitJobs_one": "{{count}} operation is not finished and will be cancelled.",
+    "exitJobs_other": "{{count}} operations are not finished and will be cancelled.",
+    "exitUnsaved_one": "{{count}} file has unsaved changes that will be lost.",
+    "exitUnsaved_other": "{{count}} files have unsaved changes that will be lost.",
+    "exitConfirm": "Exit anyway",
     "delete": "Delete",
     "selectTitle": "Select files",
     "unselectTitle": "Unselect files",
@@ -258,7 +343,8 @@
       "all": "All",
       "appearance": "Appearance",
       "files": "Files",
-      "editor": "Editor"
+      "editor": "Editor",
+      "terminal": "Terminal"
     },
     "items": {
       "theme": {
@@ -281,9 +367,17 @@
         "label": "Confirm before deleting",
         "desc": "Ask for confirmation before moving items to the Recycle Bin or deleting them."
       },
+      "useExternalEditor": {
+        "label": "Edit with an external editor",
+        "desc": "F4 opens the program below instead of the built-in editor."
+      },
       "externalEditor": {
         "label": "External editor",
-        "desc": "Program that opens files with F4 (command or full path)."
+        "desc": "Program that opens files with F4 when the external editor is enabled (command or full path)."
+      },
+      "terminalShell": {
+        "label": "Terminal shell",
+        "desc": "Shell of new terminals. Only the shells found on this computer are listed."
       }
     },
     "options": {
@@ -295,6 +389,13 @@
       "language": {
         "en": "English",
         "it": "Italiano"
+      },
+      "terminalShell": {
+        "auto": "Automatic (best available)",
+        "pwsh": "PowerShell 7",
+        "powershell": "Windows PowerShell",
+        "cmd": "cmd",
+        "wsl": "WSL"
       }
     },
     "errors": {

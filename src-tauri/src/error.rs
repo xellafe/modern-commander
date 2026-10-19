@@ -24,6 +24,14 @@ pub enum ErrorCode {
     Unsupported,
     Cancelled,
     InvalidRequest,
+    /// File oltre il limite che l'operazione accetta (lettura intera, ...).
+    TooLarge,
+    /// Il file è cambiato su disco dopo l'apertura: va riletto prima di salvare.
+    ChangedOnDisk,
+    /// Il testo contiene caratteri che la codifica scelta non sa rappresentare.
+    UnmappableChars,
+    /// Archivio danneggiato o non leggibile.
+    CorruptArchive,
     Io,
 }
 
@@ -53,7 +61,7 @@ impl AppError {
             Some(112) => ErrorCode::DiskFull,
             Some(21) => ErrorCode::NotReady,
             Some(123) => ErrorCode::InvalidName,
-            Some(32 | 33) => ErrorCode::FileInUse,
+            Some(32 | 33 | 1175) => ErrorCode::FileInUse,
             Some(17) => ErrorCode::NotSameDevice,
             Some(1235) => ErrorCode::Cancelled,
             _ => ErrorCode::Io,
@@ -84,8 +92,18 @@ mod tests {
         assert_eq!(e(1235), ErrorCode::Cancelled);
         assert_eq!(e(32), ErrorCode::FileInUse); // ERROR_SHARING_VIOLATION
         assert_eq!(e(33), ErrorCode::FileInUse); // ERROR_LOCK_VIOLATION
+        assert_eq!(e(1175), ErrorCode::FileInUse); // ERROR_UNABLE_TO_REMOVE_REPLACED (ReplaceFileW)
         assert_eq!(serde_json::to_value(ErrorCode::FileInUse).unwrap(), "FILE_IN_USE");
         assert_eq!(e(9999), ErrorCode::Io);
+    }
+
+    #[test]
+    fn new_codes_serialize_screaming_snake() {
+        let s = |c| serde_json::to_value(c).unwrap();
+        assert_eq!(s(ErrorCode::TooLarge), "TOO_LARGE");
+        assert_eq!(s(ErrorCode::ChangedOnDisk), "CHANGED_ON_DISK");
+        assert_eq!(s(ErrorCode::UnmappableChars), "UNMAPPABLE_CHARS");
+        assert_eq!(s(ErrorCode::CorruptArchive), "CORRUPT_ARCHIVE");
     }
 
     #[test]

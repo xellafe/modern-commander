@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { focusInTextOrDialog } from "../../commands/useKeyboard";
 import { executeCommand, getCommand, getCommands, shouldExecute } from "../../commands/registry";
 import { fkeyLabels, type Mods } from "../../lib/fkeys";
+import { activeTab, useLayout } from "../../state/layout";
 
 const NO_MODS: Mods = { shift: false, ctrl: false, alt: false };
 
@@ -40,7 +41,7 @@ export function FKeyBar() {
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             // Stessa guardia della tastiera: con il fuoco in un campo o in una finestra solo i comandi globali.
-            if (shouldExecute(getCommand(s.commandId), { repeat: false, focusInText: focusInTextOrDialog() })) {
+            if (shouldExecute(getCommand(s.commandId), { repeat: false, focusInText: focusInTextOrDialog(), dirTab: !activeTab(useLayout.getState()).file })) {
               executeCommand(s.commandId).catch(console.error);
             }
           }}

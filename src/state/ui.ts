@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ConflictPolicy } from "../ipc/types";
+import type { SaveOptions } from "./editors";
 
 export type SidebarView = "explorer" | "search" | "git" | "favorites";
 
@@ -10,6 +11,8 @@ export const SIDEBAR_MIN = 160;
 export const SIDEBAR_MAX = 480;
 export const PANEL_MIN = 100;
 export const PANEL_MAX_RATIO = 0.6;
+export const INSPECTOR_MIN = 220;
+export const INSPECTOR_MAX_RATIO = 0.5;
 
 /** Gruppo scelto come destinazione con i tasti 1…9 (`n` = posizione nel layout). */
 export interface CopyTarget { n: number; groupId: string; path: string }
@@ -32,8 +35,15 @@ export type DialogRequest =
   | { kind: "mkdir"; tabId: string; path: string }
   | { kind: "delete"; permanent: boolean; sources: string[] }
   | { kind: "mask"; tabId: string; select: boolean }
-  /** Chiusura della finestra con `count` operazioni non finite. */
-  | { kind: "exit"; count: number };
+  /** Chiusura di una scheda editor con modifiche non salvate. */
+  | { kind: "unsaved"; tabId: string }
+  /**
+   * Salvataggio rifiutato per un file cambiato su disco o per caratteri che la codifica non rappresenta.
+   * `opts`: le opzioni del tentativo fallito, a cui il dialogo aggiunge la correzione scelta.
+   */
+  | { kind: "saveError"; tabId: string; code: "CHANGED_ON_DISK" | "UNMAPPABLE_CHARS"; opts: SaveOptions }
+  /** Chiusura della finestra con `count` operazioni non finite e `dirty` file non salvati. */
+  | { kind: "exit"; count: number; dirty: number };
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 
@@ -44,6 +54,8 @@ interface UiState {
   bottomPanelVisible: boolean;
   bottomPanelTab: "operations" | "terminal";
   bottomPanelHeight: number;
+  inspectorVisible: boolean;
+  inspectorWidth: number;
   dialog: DialogRequest | null;
   page: PageKind | null;
   openPage: (p: PageKind) => void;
@@ -53,10 +65,14 @@ interface UiState {
   closeDialog: () => void;
   toggleSidebar: () => void;
   toggleBottomPanel: () => void;
+  /** Mostra il pannello in basso sulla scheda `tab`. */
+  showBottomPanel: (tab: "operations" | "terminal") => void;
+  toggleInspector: () => void;
   /** Cambia vista e mostra la barra laterale se era nascosta. */
   setSidebarView: (v: SidebarView) => void;
   setSidebarWidth: (w: number) => void;
   setBottomPanelHeight: (h: number) => void;
+  setInspectorWidth: (w: number) => void;
 }
 
 // Dimensioni non persistite in questa fase.
@@ -67,6 +83,8 @@ export const useUi = create<UiState>((set) => ({
   bottomPanelVisible: true,
   bottomPanelTab: "operations",
   bottomPanelHeight: 180,
+  inspectorVisible: false,
+  inspectorWidth: 320,
   dialog: null,
   page: null,
   openPage: (page) => set({ page }),
@@ -75,8 +93,12 @@ export const useUi = create<UiState>((set) => ({
   closeDialog: () => set({ dialog: null }),
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleBottomPanel: () => set((s) => ({ bottomPanelVisible: !s.bottomPanelVisible })),
+  showBottomPanel: (bottomPanelTab) => set({ bottomPanelVisible: true, bottomPanelTab }),
+  toggleInspector: () => set((s) => ({ inspectorVisible: !s.inspectorVisible })),
   setSidebarView: (sidebarView) => set({ sidebarView, sidebarVisible: true }),
   setSidebarWidth: (w) => set({ sidebarWidth: clamp(w, SIDEBAR_MIN, SIDEBAR_MAX) }),
   setBottomPanelHeight: (h) =>
     set({ bottomPanelHeight: clamp(h, PANEL_MIN, Math.max(PANEL_MIN, window.innerHeight * PANEL_MAX_RATIO)) }),
+  setInspectorWidth: (w) =>
+    set({ inspectorWidth: clamp(w, INSPECTOR_MIN, Math.max(INSPECTOR_MIN, window.innerWidth * INSPECTOR_MAX_RATIO)) }),
 }));

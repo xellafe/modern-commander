@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { chordFromEvent, chordParts, quickSearchChar } from './keys';
+import { chordFromEvent, chordParts, isBrowserAccelerator, quickSearchChar } from './keys';
 
 const ev = (keyCode: number, m: { c?: boolean; s?: boolean; a?: boolean } = {}) => ({
   keyCode,
@@ -60,4 +60,9 @@ test('chordParts: readable key names for display', () => {
   expect(chordParts('NumSubtract')).toEqual(['Num -']);
   expect(chordParts('NumMultiply')).toEqual(['Num *']);
   expect(chordParts('Ctrl+VK186')).toEqual(['Ctrl', 'VK186']);
+});
+
+test('isBrowserAccelerator: ricarica e stampa di WebView2 si inghiottono sempre', () => {
+  for (const chord of ['F5', 'Ctrl+R', 'Ctrl+Shift+R', 'Ctrl+F5', 'Shift+F5', 'Ctrl+P']) expect(isBrowserAccelerator(chord), chord).toBe(true);
+  for (const chord of ['F4', 'F6', 'R', 'Ctrl+S', 'Ctrl+Shift+P', 'Alt+F5', 'Ctrl+Oem3']) expect(isBrowserAccelerator(chord), chord).toBe(false);
 });

@@ -1,0 +1,58 @@
+// Stato dei viewer F3 per scheda. Sta nello store e non nel componente: cambiando scheda il corpo del
+// gruppo si smonta, e al ritorno il viewer riappare allo stesso punto.
+import { create } from "zustand";
+import { codeUnit, detectEncoding } from "../lib/encoding";
+import { looksBinary, previewKind } from "../lib/preview";
+
+export type ViewerMode = "text" | "hex" | "image" | "pdf" | "video" | "audio";
+
+export interface ViewerState {
+  mode: ViewerMode;
+  /** Etichetta `TextDecoder`. */
+  encoding: string;
+  wrap: boolean;
+  /** Offset del primo byte visibile. */
+  top: number;
+}
+
+/** Vista nativa del file (immagine, PDF, video, audio), se la WebView la mostra. */
+export function nativeMode(name: string): ViewerMode | null {
+  const kind = previewKind(name);
+  return kind === "image" || kind === "pdf" || kind === "video" || kind === "audio" ? kind : null;
+}
+
+/** Modalità iniziale: la vista nativa se c'è; il resto testo o esadecimale (il Markdown renderizzato è dell'ispettore). */
+export function initialViewerState(name: string, sample: Uint8Array, ansi: string, complete: boolean): ViewerState {
+  const { encoding, bom } = detectEncoding(sample, ansi, complete);
+  const native = nativeMode(name);
+  if (native) return { mode: native, encoding, wrap: false, top: bom };
+  return looksBinary(sample) ? { mode: "hex", encoding, wrap: false, top: 0 } : { mode: "text", encoding, wrap: false, top: bom };
+}
+
+/** `top` riportato su un confine valido per la modalità: 16 byte nell'esadecimale, l'unità di codice nel testo. */
+export function alignTop(top: number, mode: ViewerMode, encoding: string): number {
+  const unit = mode === "hex" ? 16 : codeUnit(encoding);
+  return top - (top % unit);
+}
+
+interface ViewersStore {
+  states: Record<string, ViewerState>;
+  set: (tabId: string, patch: Partial<ViewerState>) => void;
+  dispose: (tabId: string) => void;
+}
+
+export const useViewers = create<ViewersStore>((set) => ({
+  states: {},
+  set: (tabId, patch) =>
+    set((s) => {
+      const cur = s.states[tabId];
+      // Una modifica tardiva per una scheda chiusa (lettura asincrona finita dopo dispose) non la fa rinascere.
+      if (!cur && patch.mode === undefined) return s;
+      return { states: { ...s.states, [tabId]: { ...cur, ...patch } as ViewerState } };
+    }),
+  dispose: (tabId) =>
+    set((s) => {
+      const { [tabId]: _removed, ...states } = s.states;
+      return { states };
+    }),
+}));

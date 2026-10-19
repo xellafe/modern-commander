@@ -17,7 +17,9 @@
   display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 200px; padding: 0 4px 0 10px;
   color: var(--mc-muted); border-right: 1px solid var(--mc-border); white-space: nowrap;
 }
+.mc-tab > svg { flex: none; } /* icona delle schede di file: non si restringe con nomi lunghi */
 .mc-tab-label { overflow: hidden; text-overflow: ellipsis; }
+.mc-tab-dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mc-accent); } /* editor con modifiche non salvate */
 .mc-tab.on { background: var(--mc-bg); color: var(--mc-text); box-shadow: inset 0 2px 0 var(--mc-accent); }
 .mc-group:not(.active) .mc-tab.on { box-shadow: inset 0 2px 0 var(--mc-tab-mark-inactive); }
 .mc-shell .mc-tab-close { width: 16px; height: 16px; border-radius: var(--mc-radius); visibility: hidden; }
@@ -84,6 +86,17 @@
 
 .mc-brief-col { position: absolute; top: 0; left: 0; height: 100%; }
 .mc-brief-col .mc-row { position: static; display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+
+/* Vista miniature: riquadri di 112 px con l'immagine a 96 px e il nome su due righe */
+.mc-thumb-row { position: absolute; top: 0; left: var(--mc-row-inset); display: flex; }
+.mc-thumb-row .mc-row { position: static; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px; white-space: normal; }
+.mc-thumb-img { display: flex; flex: none; align-items: center; justify-content: center; }
+.mc-thumb-img canvas { width: 100%; height: 100%; object-fit: contain; }
+.mc-thumb .c-name {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; width: 100%; height: 28px;
+  overflow: hidden; line-height: 14px; font-size: 11px; text-align: center; overflow-wrap: anywhere;
+}
+.mc-thumb.renaming .c-name { display: block; height: auto; overflow: visible; }
 
 /* Ricerca rapida, filtro rapido, notifiche */
 .mc-quicksearch {

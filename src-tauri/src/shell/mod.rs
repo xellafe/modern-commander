@@ -9,6 +9,7 @@ pub mod context_menu;
 pub mod drag;
 pub mod open;
 pub mod properties;
+pub mod thumbnail;
 
 use crate::error::{AppError, ErrorCode};
 use crate::paths::has_trailing_dot_or_space;

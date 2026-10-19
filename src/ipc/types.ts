@@ -1,4 +1,4 @@
-// Rispecchia i tipi Rust (src-tauri/src/error.rs, fs/listing.rs, fs/drives.rs, ops/model.rs, ops/queue.rs).
+// Rispecchia i tipi Rust (src-tauri/src/error.rs, fs/listing.rs, fs/content.rs, fs/drives.rs, fs/hash.rs, archive/mod.rs, ops/model.rs, ops/queue.rs).
 
 export type ErrorCode =
   | "NOT_FOUND"
@@ -15,6 +15,10 @@ export type ErrorCode =
   | "UNSUPPORTED"
   | "CANCELLED"
   | "INVALID_REQUEST"
+  | "TOO_LARGE"
+  | "CHANGED_ON_DISK"
+  | "UNMAPPABLE_CHARS"
+  | "CORRUPT_ARCHIVE"
   | "IO";
 
 export interface AppError {
@@ -52,6 +56,48 @@ export interface DirSize {
   files: number;
   dirs: number;
   skipped: number;
+}
+
+/** fs/content.rs. Date in millisecondi dall'epoca Unix, attributi Win32 grezzi. */
+export interface FileInfo {
+  size: number;
+  isDir: boolean;
+  createdMs: number;
+  modifiedMs: number;
+  accessedMs: number;
+  attributes: number;
+}
+
+/** fs/scan.rs. `rel`: percorso relativo alla cartella scandita, con `\`. */
+export interface ScanEntry {
+  rel: string;
+  isDir: boolean;
+}
+
+/** terminal/mod.rs: le shell che il pannello terminale sa avviare. */
+export type ShellKind = "pwsh" | "powershell" | "cmd" | "wsl";
+
+/** Evento `term-exit`: sessione finita; `code` è nullo se il codice di uscita non si è potuto leggere. */
+export interface TermExitEvent {
+  id: number;
+  code: number | null;
+}
+
+export type HashAlgo = "md5" | "sha1" | "sha256";
+
+/** archive/mod.rs. `path` con `\`, senza barra finale. */
+export interface ArchiveEntry {
+  path: string;
+  isDir: boolean;
+  size: number;
+  modifiedMs: number | null;
+}
+
+/** `total`: voci totali, noto per ZIP e 7z; per TAR solo se l'elenco non si è fermato al limite. */
+export interface ArchiveListing {
+  entries: ArchiveEntry[];
+  total: number | null;
+  truncated: boolean;
 }
 
 export interface DirSizeEvent {

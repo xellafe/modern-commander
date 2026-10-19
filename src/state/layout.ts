@@ -1,6 +1,12 @@
 import { create } from "zustand";
+import { parentPath } from "./tabView";
 
-export interface Tab { id: string; path: string }
+export interface FileRef { path: string; mode: "viewer" | "editor" }
+/**
+ * `path` è sempre una cartella (per un file: quella che lo contiene); `file` ne fa una scheda di viewer/editor.
+ * `returnTo`: la scheda attiva quando questa è stata aperta, a cui si torna chiudendola.
+ */
+export interface Tab { id: string; path: string; file?: FileRef; returnTo?: string }
 export interface Group { id: string; tabIds: string[]; activeTabId: string }
 export interface LayoutState {
   groups: Group[];
@@ -12,6 +18,7 @@ export interface LayoutState {
 
 const uid = () => crypto.randomUUID();
 const groupOf = (s: LayoutState, tabId: string) => s.groups.find((g) => g.tabIds.includes(tabId));
+const sameFile = (a: FileRef, b: FileRef) => a.mode === b.mode && a.path.toLowerCase() === b.path.toLowerCase();
 const replaceGroup = (s: LayoutState, g: Group): Group[] => s.groups.map((x) => (x.id === g.id ? g : x));
 
 function makeGroup(path: string): { group: Group; tab: Tab } {
@@ -47,14 +54,36 @@ export function newTab(s: LayoutState, groupId: string, path: string): LayoutSta
   );
 }
 
+/** Scheda attiva del gruppo attivo. */
+export function activeTab(s: LayoutState): Tab {
+  return s.tabs[s.groups.find((g) => g.id === s.activeGroupId)!.activeTabId];
+}
+
+/** Apre un file in una scheda dopo quella attiva del gruppo; lo stesso file nello stesso modo riattiva la scheda esistente. */
+export function openFileTab(s: LayoutState, groupId: string, file: FileRef): LayoutState {
+  const g = s.groups.find((x) => x.id === groupId);
+  if (!g) return s;
+  const existing = g.tabIds.find((id) => s.tabs[id].file && sameFile(s.tabs[id].file!, file));
+  if (existing) return activateTab(s, existing);
+  const tab: Tab = { id: uid(), path: parentPath(file.path) ?? file.path, file, returnTo: g.activeTabId };
+  const at = g.tabIds.indexOf(g.activeTabId) + 1;
+  const tabIds = [...g.tabIds.slice(0, at), tab.id, ...g.tabIds.slice(at)];
+  return activateGroup(
+    { ...s, tabs: { ...s.tabs, [tab.id]: tab }, groups: replaceGroup(s, { ...g, tabIds, activeTabId: tab.id }) },
+    groupId,
+  );
+}
+
 /** Toglie la scheda dal suo gruppo (non da `tabs`); un gruppo rimasto vuoto sparisce. */
 function detachTab(s: LayoutState, tabId: string): LayoutState {
   const g = groupOf(s, tabId)!;
   const idx = g.tabIds.indexOf(tabId);
   const tabIds = g.tabIds.filter((id) => id !== tabId);
   if (tabIds.length) {
-    // Vicino a destra, altrimenti a sinistra (come VS Code).
-    const activeTabId = g.activeTabId === tabId ? tabIds[Math.min(idx, tabIds.length - 1)] : g.activeTabId;
+    // Si torna a chi ha aperto la scheda, se è ancora nel gruppo; altrimenti vicino a destra, poi a sinistra (come VS Code).
+    const back = s.tabs[tabId]?.returnTo;
+    const next = back && tabIds.includes(back) ? back : tabIds[Math.min(idx, tabIds.length - 1)];
+    const activeTabId = g.activeTabId === tabId ? next : g.activeTabId;
     return { ...s, groups: replaceGroup(s, { ...g, tabIds, activeTabId }) };
   }
   const activationOrder = s.activationOrder.filter((id) => id !== g.id);
@@ -133,6 +162,7 @@ export function focusAdjacentGroup(s: LayoutState, delta: 1 | -1): LayoutState {
 interface LayoutActions {
   activateGroup: (groupId: string) => void;
   newTab: (groupId: string, path: string) => void;
+  openFileTab: (groupId: string, file: FileRef) => void;
   closeTab: (tabId: string) => void;
   activateTab: (tabId: string) => void;
   cycleTab: (groupId: string, delta: 1 | -1) => void;
@@ -147,6 +177,7 @@ export const useLayout = create<LayoutState & LayoutActions>((set) => ({
   ...initialLayout(["C:\\", "C:\\"]),
   activateGroup: (groupId) => set((s) => activateGroup(s, groupId)),
   newTab: (groupId, path) => set((s) => newTab(s, groupId, path)),
+  openFileTab: (groupId, file) => set((s) => openFileTab(s, groupId, file)),
   closeTab: (tabId) => set((s) => closeTab(s, tabId)),
   activateTab: (tabId) => set((s) => activateTab(s, tabId)),
   cycleTab: (groupId, delta) => set((s) => cycleTab(s, groupId, delta)),

@@ -4,6 +4,10 @@ vi.mock('../ipc/api', () => ({ readConfig: vi.fn() }));
 import { readConfig } from '../ipc/api';
 import { DEFAULT_KEYMAP } from './tcKeymap';
 import { buildKeymap, loadKeymap } from './keymap';
+import { registerNavigationCommands } from './navigation';
+import { registerPaletteCommands } from './palette';
+import { getCommand } from './registry';
+import { registerTerminalCommands } from './terminal';
 const read = vi.mocked(readConfig);
 beforeEach(() => {
   read.mockReset();
@@ -38,4 +42,49 @@ test('loadKeymap falls back to defaults on missing or non-array config', async (
   expect((await loadKeymap()).get('F5')).toBe('cm_Copy');
   read.mockResolvedValue({ F5: 'cm_Exit' });
   expect((await loadKeymap()).get('F5')).toBe('cm_Copy');
+});
+
+// Tasti aggiunti nella fase 2 (verificati nel Task 2, Step 1) con il contesto in cui valgono.
+const PHASE2_KEYS: Array<[chord: string, id: string, when: 'group' | 'fileList' | 'global']> = [
+  ['Ctrl+Q', 'cm_SrcQuickview', 'group'],
+  ['Ctrl+Shift+F1', 'cm_SrcThumbs', 'fileList'],
+  ['Ctrl+Shift+P', 'mc_CommandPalette', 'global'],
+  ['Ctrl+P', 'mc_QuickJump', 'group'],
+  ['Ctrl+Oem3', 'mc_ToggleTerminal', 'global'],
+  ['Ctrl+Shift+Oem3', 'mc_NewTerminal', 'global'],
+];
+
+test('phase 2 keys are in the default keymap', () => {
+  for (const [chord, id] of PHASE2_KEYS) expect(DEFAULT_KEYMAP[chord], chord).toBe(id);
+});
+
+test('no chord is bound twice (case and modifier order do not matter)', () => {
+  const norm = (c: string) => {
+    // l'ultimo '+' è il tasto stesso se il chord finisce per '+' ('Ctrl++')
+    const key = c.endsWith('+') ? '+' : c.slice(c.lastIndexOf('+') + 1);
+    const mods = c.slice(0, c.length - key.length).split('+').filter(Boolean);
+    return [...mods.map((m) => m.toLowerCase()).sort(), key.toLowerCase()].join('+');
+  };
+  const chords = Object.keys(DEFAULT_KEYMAP).map(norm);
+  expect(chords.filter((c, i) => chords.indexOf(c) !== i)).toEqual([]);
+});
+
+test('mc_ToggleBottomPanel has no default key (replaced by mc_ToggleTerminal)', () => {
+  expect(Object.values(DEFAULT_KEYMAP)).not.toContain('mc_ToggleBottomPanel');
+});
+
+test('phase 2 commands are registered with the expected context and have a title in both languages', async () => {
+  registerNavigationCommands();
+  registerPaletteCommands();
+  registerTerminalCommands();
+  const en = (await import('../i18n/en.json')).default as { commands: Record<string, string> };
+  const it = (await import('../i18n/it.json')).default as { commands: Record<string, string> };
+  for (const [, id, when] of PHASE2_KEYS) {
+    const cmd = getCommand(id);
+    expect(cmd, id).toBeDefined();
+    expect(cmd?.when, id).toBe(when);
+    expect(cmd?.titleKey, id).toBe(`commands.${id}`);
+    expect(en.commands[id], id).toBeTruthy();
+    expect(it.commands[id], id).toBeTruthy();
+  }
 });

@@ -1,0 +1,47 @@
+import { beforeEach, expect, test } from "vitest";
+import { alignTop, initialViewerState, useViewers } from "./viewers";
+
+const W = "windows-1252";
+
+test("initial mode and encoding", () => {
+  const txt = new TextEncoder().encode("ciao");
+  expect(initialViewerState("a.png", txt, W, true).mode).toBe("image");
+  expect(initialViewerState("a.dat", new Uint8Array([1, 0, 2]), W, true).mode).toBe("hex");
+  expect(initialViewerState("a.txt", new Uint8Array([0xff, 0xfe, 0x61, 0]), W, true))
+    .toEqual({ mode: "text", encoding: "utf-16le", wrap: false, top: 2 }); // il BOM non si mostra
+  expect(initialViewerState("a.md", txt, W, true).mode).toBe("text"); // il Markdown renderizzato è dell'ispettore
+});
+
+test("initial state: native kinds, archives as text or hex, ANSI fallback and truncated samples", () => {
+  const txt = new TextEncoder().encode("ciao");
+  for (const [name, mode] of [["a.pdf", "pdf"], ["a.mp4", "video"], ["a.flac", "audio"]] as const) {
+    expect(initialViewerState(name, txt, W, true).mode, name).toBe(mode);
+  }
+  expect(initialViewerState("a.zip", new Uint8Array([0x50, 0x4b, 0, 0]), W, true).mode).toBe("hex");
+  expect(initialViewerState("a.txt", new Uint8Array([0xe8]), W, true).encoding).toBe(W); // UTF-8 non valido
+  // Un campione di file più grande che finisce a metà di una sequenza UTF-8 resta UTF-8.
+  expect(initialViewerState("a.txt", new Uint8Array([0x61, 0xc3]), W, false).encoding).toBe("utf-8");
+});
+
+test("alignTop keeps hex rows on 16 bytes and text on the code unit", () => {
+  expect(alignTop(35, "hex", "utf-8")).toBe(32);
+  expect(alignTop(35, "text", "utf-8")).toBe(35);
+  expect(alignTop(35, "text", "utf-16le")).toBe(34);
+  expect(alignTop(0, "hex", "utf-16be")).toBe(0);
+});
+
+beforeEach(() => useViewers.setState({ states: {} }));
+
+test("the store merges patches per tab and dispose forgets the tab", () => {
+  const { set, dispose } = useViewers.getState();
+  set("t1", initialViewerState("a.txt", new TextEncoder().encode("x"), W, true));
+  set("t1", { top: 40, wrap: true });
+  expect(useViewers.getState().states.t1).toEqual({ mode: "text", encoding: "utf-8", wrap: true, top: 40 });
+  dispose("t1");
+  expect(useViewers.getState().states.t1).toBeUndefined();
+});
+
+test("a late patch for a closed tab does not bring its state back", () => {
+  useViewers.getState().set("gone", { top: 10 });
+  expect(useViewers.getState().states.gone).toBeUndefined();
+});

@@ -1,0 +1,11 @@
+/* Editor F4: barra in alto come quella del viewer, Monaco a tutto il resto */
+.mc-editor { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.mc-editor-bar {
+  display: flex; align-items: center; gap: 8px; flex: none; height: 26px; padding: 0 10px; box-sizing: border-box;
+  color: var(--mc-muted); border-bottom: 1px solid var(--mc-border);
+}
+.mc-editor-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mc-text); font-weight: 500; }
+.mc-editor-meta { flex: none; margin-left: auto; white-space: nowrap; }
+.mc-editor-note { flex: none; padding: 6px 10px; color: var(--mc-muted); border-bottom: 1px solid var(--mc-border); }
+.mc-editor-note span { margin-left: 8px; }
+.mc-editor-host { flex: 1; min-height: 0; }

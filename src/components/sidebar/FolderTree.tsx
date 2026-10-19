@@ -1,11 +1,12 @@
 import { ChevronDown, ChevronRight, Folder, HardDrive } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { ensureDirTab } from "../../commands/navigation";
 import { joinPath } from "../../lib/paths";
 import { childDirs, useFolderTree } from "../../state/folderTree";
 import { useLayout } from "../../state/layout";
 import { useSettings } from "../../state/settings";
-import { activeTabContext, useTabViews } from "../../state/tabViews";
+import { useTabViews } from "../../state/tabViews";
 
 export interface TreeRoot {
   path: string;
@@ -16,9 +17,9 @@ export interface TreeRoot {
 
 const samePath = (a: string, b: string) => a.replace(/\\+$/, "").toLowerCase() === b.replace(/\\+$/, "").toLowerCase();
 
-/** Un click apre la cartella nella scheda attiva del gruppo attivo. */
+/** Un click apre la cartella nella scheda cartella attiva del gruppo attivo (se la scheda attiva è un file, torna a chi l'ha aperta). */
 export function openInActiveTab(path: string) {
-  void useTabViews.getState().load(activeTabContext().tabId, path);
+  void useTabViews.getState().load(ensureDirTab(path), path);
 }
 
 // Albero a caricamento pigro: le sottocartelle si leggono alla prima espansione.

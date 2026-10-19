@@ -2,6 +2,8 @@ import { useKeyboard } from "./commands/useKeyboard";
 import { DialogHost } from "./components/dialogs/Dialog";
 import { HotlistMenu } from "./components/dialogs/HotlistMenu";
 import { GroupsArea } from "./components/groups/GroupsArea";
+import { Inspector } from "./components/inspector/Inspector";
+import { Palette } from "./components/palette/Palette";
 import { PageHost } from "./components/settings/PageHost";
 import "./components/shell/shell.css";
 import { ActivityBar } from "./components/shell/ActivityBar";
@@ -16,6 +18,7 @@ import { useUi } from "./state/ui";
 export default function App() {
   const sidebarVisible = useUi((s) => s.sidebarVisible);
   const bottomPanelVisible = useUi((s) => s.bottomPanelVisible);
+  const inspectorVisible = useUi((s) => s.inspectorVisible);
   // La mappa viva (fabbrica + keybindings.json): si aggiorna a ogni modifica dalla pagina delle scorciatoie.
   const keymap = useKeybindings((s) => s.keymap);
   useKeyboard(keymap);
@@ -31,13 +34,15 @@ export default function App() {
             <GroupsArea keymap={keymap} />
             <PageHost />
           </div>
+          {inspectorVisible && <Inspector />}
         </div>
-        {bottomPanelVisible && <BottomPanel />}
+        <BottomPanel hidden={!bottomPanelVisible} />
         <FKeyBar />
         <StatusBar />
         <HotlistMenu />
       </div>
       <DialogHost />
+      <Palette />
     </>
   );
 }

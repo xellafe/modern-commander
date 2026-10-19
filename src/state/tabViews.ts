@@ -4,6 +4,7 @@ import type { AppError, Drive, ErrorCode } from "../ipc/types";
 import { quickFilterMask } from "../lib/mask";
 import { DRIVES } from "../lib/paths";
 import { setTabPath, useLayout } from "./layout";
+import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
 import { cancelTabSizes } from "./sizeRequests";
 import { buildRows, emptyView, jumpTo, navigateTo, type Row, type TabView } from "./tabView";
@@ -163,6 +164,8 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
       listings.set(tabId, res.entries);
       set((s) => ({ views: { ...s.views, [tabId]: { ...v, rows, cursor, marked } } }));
       useLayout.setState((s) => setTabPath(s, tabId, res.path));
+      // Recenti del salto rapido: la cartella dove si è davvero arrivati (non quella chiesta, se è sparita); niente unità né riletture.
+      if (!reload && res.path !== DRIVES) useRecentDirs.getState().push(res.path);
       if (res.error) get().showNotice(tabId, res.error);
       syncWatcher(tabId, res.path);
 

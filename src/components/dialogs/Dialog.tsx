@@ -9,6 +9,8 @@ import { ErrorDialog } from "./ErrorDialog";
 import { ExitConfirm } from "./ExitConfirm";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
+import { SaveErrorDialog } from "./SaveErrorDialog";
+import { UnsavedDialog } from "./UnsavedDialog";
 import { trapTab, useModalFocus } from "./focusTrap";
 import "./dialogs.css";
 
@@ -76,6 +78,8 @@ export function DialogHost() {
     case "delete": return <DeleteConfirm req={dialog} />;
     case "mask": return <MaskDialog req={dialog} />;
     case "exit": return <ExitConfirm req={dialog} />;
+    case "unsaved": return <UnsavedDialog req={dialog} />;
+    case "saveError": return <SaveErrorDialog req={dialog} />;
   }
   if (!prompt) return null;
   return prompt.type === "conflict"

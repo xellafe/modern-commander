@@ -5,7 +5,7 @@ import { chordFromEvent, quickSearchChar } from "../../commands/keys";
 import { focusInTextOrDialog } from "../../commands/useKeyboard";
 import { onFsChanged } from "../../ipc/api";
 import { isUnwatched, useDrives } from "../../state/drives";
-import { useLayout } from "../../state/layout";
+import { activeTab, useLayout } from "../../state/layout";
 import { quickSearch } from "../../state/tabView";
 import { activeTabContext, useTabViews } from "../../state/tabViews";
 import { Group } from "./Group";
@@ -19,6 +19,8 @@ function useQuickSearch(keymap: Map<string, string>) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (focusInTextOrDialog()) return;
+      // Le lettere di una scheda di file (viewer/editor) non sono ricerca rapida: qui le si consuma in cattura.
+      if (activeTab(useLayout.getState()).file) return;
       const s = useTabViews.getState();
       const { tabId, view } = activeTabContext();
       const open = s.overlay?.kind === "quickSearch" && s.overlay.tabId === tabId ? s.overlay : null;

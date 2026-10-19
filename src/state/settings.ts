@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { readConfig, writeConfig } from "../ipc/api";
+import type { ShellKind } from "../ipc/types";
 
 export interface Settings {
   theme: "dark" | "light" | "system";
@@ -7,7 +8,11 @@ export interface Settings {
   showHidden: boolean;
   showSystem: boolean;
   confirmDelete: boolean;
+  /** F4 apre `externalEditor` invece dell'editor interno. */
+  useExternalEditor: boolean;
   externalEditor: string;
+  /** Shell dei nuovi terminali; `auto` = la migliore disponibile (pwsh, powershell, cmd). */
+  terminalShell: "auto" | ShellKind;
 }
 
 export const defaultSettings = (osLocale: string): Settings => ({
@@ -16,7 +21,9 @@ export const defaultSettings = (osLocale: string): Settings => ({
   showHidden: false,
   showSystem: false,
   confirmDelete: true,
+  useExternalEditor: false,
   externalEditor: "notepad.exe",
+  terminalShell: "auto",
 });
 
 export const resolveTheme = (theme: Settings["theme"], prefersDark: boolean): "dark" | "light" =>
@@ -33,7 +40,9 @@ const pickSettings = (s: Settings): Settings => ({
   showHidden: s.showHidden,
   showSystem: s.showSystem,
   confirmDelete: s.confirmDelete,
+  useExternalEditor: s.useExternalEditor,
   externalEditor: s.externalEditor,
+  terminalShell: s.terminalShell,
 });
 
 // Le scritture partono in ordine di chiamata: l'ultimo update() vince sempre.
