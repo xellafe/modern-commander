@@ -229,7 +229,8 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     setFrame((f) => (f.left === l && f.encoding === enc ? f : { left: l, encoding: enc, need: 0, hits: new Map(), chunks: new Map() }));
   }
 
-  // `stop` falso solo smontando o cambiando codifica: lì il frame si ricarica comunque.
+  // Con `stop` falso il frame mostrato resta: smontando, cambiando codifica (lì si ricarica comunque) e trascinando la
+  // barra orizzontale (il `setLeft` che segue lo ricarica).
   function cancel(stop = true): boolean {
     gen.current++;
     nav.current = null;
@@ -525,9 +526,9 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
           {Array.from({ length: Math.max(0, pending) }, (_, i) => <div key={`p${i}`} className="mc-vline pending">…</div>)}
         </div>
         {cols > 0 && extent > cols && (
-          // Senza `cancel()`: il caricamento superato lo annulla l'effetto, e trascinando resta il frame di prima.
+          // Annulla la navigazione in corso ma tiene il frame di prima: trascinando, niente segnaposto a ogni movimento.
           <ScrollRail orientation="horizontal" fraction={left / Math.max(1, maxL)} onSeek={(f) => {
-            stopHop();
+            cancel(false);
             setLeft(Math.round(f * maxL));
           }} />
         )}
