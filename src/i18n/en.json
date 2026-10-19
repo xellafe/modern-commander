@@ -89,6 +89,8 @@
     "wrap": "Word wrap",
     "position": "{{percent}}%",
     "scrollbar": "Position in the file",
+    "lineScrollbar": "Position in line",
+    "scanning": "Scanning {{percent}}% · Esc cancels",
     "unsupportedImage": "This image format cannot be displayed. Use Text or Hex to see the file.",
     "shellPreview": "Showing the shell preview instead: the browser cannot display this format.",
     "unsupportedMedia": "This file cannot be played here.",

@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ArchiveListing, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
+import type { ArchiveListing, ColumnHit, ColumnProgress, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -48,6 +48,61 @@ export const scanTree = (
   const channel = new Channel<ScanEntry[]>();
   channel.onmessage = onBatch;
   return invoke<boolean>("scan_tree", { requestId, root, ...limits, onBatch: channel });
+};
+
+/**
+ * Byte dopo il primo LF a `from` o oltre (LF su confini di unità: `unit` 1 = UTF-8/ANSI, 2 = UTF-16); senza LF, la
+ * dimensione del file. `onProgress` riceve l'offset fino a cui si è già cercato. `cancelRequest(requestId)` annulla.
+ */
+export const nextLineStart = (
+  requestId: number,
+  path: string,
+  from: number,
+  unit: 1 | 2,
+  bigEndian: boolean,
+  onProgress: (offset: number) => void,
+) => {
+  const channel = new Channel<number>();
+  channel.onmessage = onProgress;
+  return invoke<number>("next_line_start", { requestId, path, from, unit, bigEndian, onProgress: channel });
+};
+
+/**
+ * Inizio della riga che contiene `at` (0 senza LF prima). `onProgress` riceve l'offset più basso già esaminato.
+ * `cancelRequest(requestId)` annulla.
+ */
+export const lineStart = (
+  requestId: number,
+  path: string,
+  at: number,
+  unit: 1 | 2,
+  bigEndian: boolean,
+  onProgress: (offset: number) => void,
+) => {
+  const channel = new Channel<number>();
+  channel.onmessage = onProgress;
+  return invoke<number>("line_start", { requestId, path, at, unit, bigEndian, onProgress: channel });
+};
+
+/** `target` di `columnOffsets` che chiede la fine riga. */
+export const LINE_END = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Per ogni punto di `from` (confine di carattere con la sua colonna), il primo carattere che occupa la colonna `target`
+ * o la fine riga (`eol`). `onProgress` riceve i punti di controllo con la posizione in `from`. `cancelRequest(requestId)`
+ * annulla tutta la richiesta.
+ */
+export const columnOffsets = (
+  requestId: number,
+  path: string,
+  encoding: string,
+  from: Mark[],
+  target: number,
+  onProgress: (p: ColumnProgress) => void,
+) => {
+  const channel = new Channel<ColumnProgress>();
+  channel.onmessage = onProgress;
+  return invoke<ColumnHit[]>("column_offsets", { requestId, path, encoding, from, target, onProgress: channel });
 };
 
 /** Hash del file in esadecimale minuscolo; `cancelRequest(requestId)` lo annulla (errore `CANCELLED`). */

@@ -41,7 +41,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 | Ctrl+Shift+F1 | Vista a miniature (anteprime della Shell) |
 
 - **Ctrl+ò**: "ò" è il nome sul layout italiano del tasto `Oem3` (il suo carattere cambia con il layout: sul layout US è il backtick, a sinistra dell'1).
-- **Viewer**: nel testo `A`, `7` e `6` scelgono ANSI, UTF-8 e UTF-16LE; `W` va a capo; `1` testo, `3` esadecimale. Esc chiude la scheda.
+- **Viewer**: nel testo `A`, `7` e `6` scelgono ANSI, UTF-8 e UTF-16LE; `W` va a capo; `1` testo, `3` esadecimale. Con l'a capo spento ← → scorrono di una colonna, Ctrl+← e Ctrl+→ di una pagina, Home e Fine vanno a inizio riga e alla fine della riga più lunga visibile (Ctrl+Home e Ctrl+Fine a inizio e fine file). Esc annulla una scansione in corso, altrimenti chiude la scheda.
 - **Editor esterno**: l'opzione `useExternalEditor` nelle impostazioni fa aprire a F4 `externalEditor` invece di Monaco.
 - Monaco, pdf.js, xterm.js e markdown-it si caricano solo al primo uso, in chunk separati dal principale; l'effetto sul tempo di avvio è **da verificare** sulla build release (vedi il follow-up).
 

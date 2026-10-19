@@ -1,8 +1,10 @@
 //! Comandi Tauri per elenco cartelle e unità. Il lavoro bloccante gira su un thread dedicato.
 
+pub mod columns;
 pub mod content;
 pub mod drives;
 pub mod hash;
+pub mod lines;
 pub mod listing;
 pub mod scan;
 pub mod size;
@@ -97,6 +99,75 @@ pub async fn scan_tree(
         scan::scan_tree(Path::new(&root), &limits, guard.flag(), &mut |b| {
             let _ = on_batch.send(b);
         })
+    })
+    .await?
+}
+
+/// Byte dopo il primo LF a `from` o oltre (vedi `lines::next_line_start`); `on_progress` riceve l'offset già cercato.
+/// Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+#[tauri::command]
+pub async fn next_line_start(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    from: u64,
+    unit: u8,
+    big_endian: bool,
+    on_progress: Channel<u64>,
+) -> Result<u64, AppError> {
+    let guard = requests.register(request_id);
+    blocking(move || {
+        lines::next_line_start(Path::new(&path), from, unit, big_endian, guard.flag(), &mut |p| {
+            let _ = on_progress.send(p);
+        })
+    })
+    .await?
+}
+
+/// Inizio della riga che contiene `at` (vedi `lines::line_start`); `on_progress` riceve l'offset più basso già esaminato.
+/// Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+#[tauri::command]
+pub async fn line_start(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    at: u64,
+    unit: u8,
+    big_endian: bool,
+    on_progress: Channel<u64>,
+) -> Result<u64, AppError> {
+    let guard = requests.register(request_id);
+    blocking(move || {
+        lines::line_start(Path::new(&path), at, unit, big_endian, guard.flag(), &mut |p| {
+            let _ = on_progress.send(p);
+        })
+    })
+    .await?
+}
+
+/// Per ogni punto di `from`, in sequenza, il carattere che occupa la colonna `target` o la fine riga (vedi
+/// `columns::column_offset`); `on_progress` riceve i punti di controllo con la posizione in `from`.
+/// Si annulla con `cancel_request(request_id)` (errore `CANCELLED`), per tutta la richiesta.
+#[tauri::command]
+pub async fn column_offsets(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    encoding: String,
+    from: Vec<columns::Mark>,
+    target: u64,
+    on_progress: Channel<columns::ColumnProgress>,
+) -> Result<Vec<columns::ColumnHit>, AppError> {
+    let guard = requests.register(request_id);
+    blocking(move || {
+        (0u32..)
+            .zip(from)
+            .map(|(index, m)| {
+                columns::column_offset(Path::new(&path), &encoding, m, target, guard.flag(), &mut |mark| {
+                    let _ = on_progress.send(columns::ColumnProgress { index, mark });
+                })
+            })
+            .collect()
     })
     .await?
 }

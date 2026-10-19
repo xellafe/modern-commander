@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { codeUnit, detectEncoding } from "../lib/encoding";
 import { looksBinary, previewKind } from "../lib/preview";
+import { disposeLineCache } from "./lineCache";
 
 export type ViewerMode = "text" | "hex" | "image" | "pdf" | "video" | "audio";
 
@@ -13,6 +14,8 @@ export interface ViewerState {
   wrap: boolean;
   /** Offset del primo byte visibile. */
   top: number;
+  /** Colonna del primo carattere visibile, con l'a capo spento; uguale per tutte le righe. */
+  left: number;
 }
 
 /** Vista nativa del file (immagine, PDF, video, audio), se la WebView la mostra. */
@@ -25,8 +28,8 @@ export function nativeMode(name: string): ViewerMode | null {
 export function initialViewerState(name: string, sample: Uint8Array, ansi: string, complete: boolean): ViewerState {
   const { encoding, bom } = detectEncoding(sample, ansi, complete);
   const native = nativeMode(name);
-  if (native) return { mode: native, encoding, wrap: false, top: bom };
-  return looksBinary(sample) ? { mode: "hex", encoding, wrap: false, top: 0 } : { mode: "text", encoding, wrap: false, top: bom };
+  if (native) return { mode: native, encoding, wrap: false, top: bom, left: 0 };
+  return looksBinary(sample) ? { mode: "hex", encoding, wrap: false, top: 0, left: 0 } : { mode: "text", encoding, wrap: false, top: bom, left: 0 };
 }
 
 /** `top` riportato su un confine valido per la modalità: 16 byte nell'esadecimale, l'unità di codice nel testo. */
@@ -50,9 +53,11 @@ export const useViewers = create<ViewersStore>((set) => ({
       if (!cur && patch.mode === undefined) return s;
       return { states: { ...s.states, [tabId]: { ...cur, ...patch } as ViewerState } };
     }),
-  dispose: (tabId) =>
+  dispose: (tabId) => {
+    disposeLineCache(tabId);
     set((s) => {
       const { [tabId]: _removed, ...states } = s.states;
       return { states };
-    }),
+    });
+  },
 }));
