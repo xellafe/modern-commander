@@ -70,9 +70,14 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
   const winRef = useRef<Win | null>(null);
   const [frame, setFrame] = useState<Frame>({ left: 0, encoding: "", need: 0, hits: new Map(), chunks: new Map() });
   // Il caricamento del frame in corso: chiave (per non rilanciarlo uguale), numero di sequenza e richiesta delle colonne.
-  const framing = useRef<{ key: string | null; seq: number; req: number | null }>({ key: null, seq: 0, req: null });
+  // `stopped`: il `tick` dell'ultimo annullamento; finché non cambia (una navigazione) il frame non si ricarica.
+  const framing = useRef<{ key: string | null; seq: number; req: number | null; stopped: number }>({ key: null, seq: 0, req: null, stopped: -1 });
+  // ← → che aspettano il conteggio delle larghezze: i passi nella stessa direzione si sommano.
+  const hop = useRef<{ delta: number; id: number | null } | null>(null);
   // La cache delle righe non è reattiva: `tick` ridisegna.
   const [tick, setTick] = useState(0);
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
   const loading = useRef<{ base: number; p: Promise<Win> } | null>(null);
   const bom = useRef<{ key: string; p: Promise<number>; n: number } | null>(null);
   // `top` già riportato a un inizio riga vero, con la codifica per cui lo è.
@@ -215,10 +220,25 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     return loading.current.p;
   }
 
-  function cancel(): boolean {
+  // Dopo un annullamento o un errore il frame di un'altra `left` non resta: al suo posto i segnaposto, che una nuova
+  // navigazione richiede di nuovo.
+  function drop() {
+    const l = getLeft();
+    const enc = latest.current.encoding;
+    framing.current.stopped = tickRef.current;
+    setFrame((f) => (f.left === l && f.encoding === enc ? f : { left: l, encoding: enc, need: 0, hits: new Map(), chunks: new Map() }));
+  }
+
+  // `stop` falso solo smontando o cambiando codifica: lì il frame si ricarica comunque.
+  function cancel(stop = true): boolean {
     gen.current++;
     nav.current = null;
+    hop.current = null;
     inflight.current.clear();
+    const fr = framing.current;
+    fr.seq++;
+    fr.key = null;
+    if (stop) drop();
     const ids = [...active.current.keys()];
     for (const id of ids) run(cancelRequest(id));
     return ids.length > 0;
@@ -307,24 +327,44 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     return lineExtent(allRef.current, lineCache(tabId, l.encoding), l.size, l.unit);
   };
 
+  // Un → in attesa del conteggio non vale più: ← o un salto lo sostituiscono.
+  function stopHop() {
+    const id = hop.current?.id;
+    hop.current = null;
+    if (id != null && active.current.has(id)) run(cancelRequest(id));
+  }
+
   // ← →: `left` subito, limitato all'estensione. La stima in byte non conta i tab: oltre il limite stimato si contano
-  // prima le righe senza larghezza nota (corte, se il limite è vicino), poi si limita col conteggio esatto.
+  // prima le righe senza larghezza nota (corte, se il limite è vicino), poi si limita col conteggio esatto. I → premuti
+  // nel frattempo si sommano e si applicano alla `left` di quel momento.
   function hscroll(n: number) {
     if (!n || !ready) return;
-    const to = Math.max(0, getLeft() + n);
+    if (hop.current && n > 0) return void (hop.current.delta += n);
+    stopHop();
     const max = () => maxLeft(extentNow(), latest.current.cols);
+    const to = Math.max(0, getLeft() + n);
     const cache = lineCache(tabId, latest.current.encoding);
     const unknown = allRef.current.filter((l) => !cache.widths.has(l.start));
     if (n < 0 || to <= max() || !unknown.length) return setLeft(Math.min(to, max()));
-    const g = gen.current;
-    run(columnHits(cache, unknown, LINE_END, columns(cache.encoding)).then(() => g === gen.current && setLeft(Math.min(to, max()))));
+    const op: { delta: number; id: number | null } = { delta: n, id: null };
+    hop.current = op;
+    run(
+      columnHits(cache, unknown, LINE_END, columns(cache.encoding, (id) => (op.id = id)))
+        .then(() => {
+          if (hop.current === op) setLeft(Math.min(Math.max(0, getLeft() + op.delta), max()));
+        })
+        .finally(() => {
+          if (hop.current === op) hop.current = null;
+        }),
+    );
   }
 
-  // Home / Fine: inizio riga, oppure la fine della riga visibile più lunga (contando quelle senza larghezza nota).
+  // Home / Fine: inizio riga, oppure la fine della riga più lunga (contando quelle senza larghezza nota), sulle stesse
+  // righe dell'estensione.
   function hedge(end: boolean) {
     cancel();
     if (!end) return setLeft(0);
-    const ls = linesRef.current;
+    const ls = allRef.current;
     if (!ls.length) return;
     const g = gen.current;
     const enc = latest.current.encoding;
@@ -389,7 +429,7 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
   }));
 
   // Cambiando codifica o smontando (cambio scheda, chiusura) si annulla tutto.
-  useEffect(() => () => void cancel(), [path, encoding]);
+  useEffect(() => () => void cancel(false), [path, encoding]);
 
   useEffect(() => {
     if (!ready) run(normalize());
@@ -422,20 +462,28 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
     });
     const key = `${left}|${encoding}|${need}|${lines.map((l) => l.start).join(",")}`;
     const fr = framing.current;
-    if (complete || fr.key === key) return;
+    if (complete || fr.key === key || fr.stopped === tick) return;
     if (fr.req !== null && active.current.has(fr.req)) run(cancelRequest(fr.req));
     const mine = ++fr.seq;
     fr.key = key;
     run(
       load(lines, left, encoding, need, f)
-        .then((nf) => mine === fr.seq && setFrame(nf))
+        .then(
+          (nf) => {
+            if (mine === fr.seq) setFrame(nf);
+          },
+          (e) => {
+            if (mine === fr.seq) drop();
+            throw e;
+          },
+        )
         .finally(() => {
           if (fr.key === key) fr.key = null;
         }),
     );
-  }, [lines, left, cols, encoding, frame, win]);
+  }, [lines, left, cols, encoding, frame, win, tick]);
 
-  // Si mostra il frame più recente: finché quello per la `left` attuale non è pronto resta il precedente.
+  // Si mostra il frame più recente: mentre quello per la `left` attuale si carica resta il precedente.
   const texts = useMemo(() => {
     const f = frame.encoding === encoding ? frame : { ...frame, left, hits: new Map<number, ColumnHit>(), chunks: new Map<number, Uint8Array>() };
     const need = (cols + 1) * 4;
@@ -477,8 +525,9 @@ export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onEr
           {Array.from({ length: Math.max(0, pending) }, (_, i) => <div key={`p${i}`} className="mc-vline pending">…</div>)}
         </div>
         {cols > 0 && extent > cols && (
+          // Senza `cancel()`: il caricamento superato lo annulla l'effetto, e trascinando resta il frame di prima.
           <ScrollRail orientation="horizontal" fraction={left / Math.max(1, maxL)} onSeek={(f) => {
-            cancel();
+            stopHop();
             setLeft(Math.round(f * maxL));
           }} />
         )}

@@ -237,14 +237,14 @@ const MARK_GAP = 64 * 1024;
 
 /**
  * Il carattere della colonna `target` su ogni riga, in una sola richiesta, ciascuna dal punto di controllo più vicino.
- * Le righe di larghezza nota che non arrivano a `target` non vanno al backend. Restano in cache i punti dell'avanzamento,
+ * Le righe di larghezza e fine note che non arrivano a `target` non vanno al backend. Restano in cache i punti dell'avanzamento,
  * i risultati come punti di controllo e la larghezza delle righe più corte di `target`.
  */
 export async function columnHits(cache: LineCache, lines: Line[], target: number, columns: Columns): Promise<ColumnHit[]> {
   const encoding = cache.encoding;
   const known = lines.map((l): ColumnHit | null => {
     const w = cache.widths.get(l.start);
-    return w !== undefined && w <= target ? { offset: l.end ?? l.start, column: w, eol: true } : null;
+    return w !== undefined && w <= target && l.end !== null ? { offset: l.end, column: w, eol: true } : null;
   });
   const ask = lines.filter((_, i) => !known[i]);
   if (!ask.length) return known as ColumnHit[];
@@ -265,9 +265,12 @@ export async function columnHits(cache: LineCache, lines: Line[], target: number
   return known.map((h) => h ?? got[i++]);
 }
 
-/** Colonne della riga più lunga: il conteggio esatto se noto, altrimenti i byte fino alla fine (diviso 2 in UTF-16). */
+/**
+ * Colonne della riga più lunga: il conteggio esatto se noto, altrimenti i byte fino alla fine, alla riga dopo o a fine
+ * file (diviso 2 in UTF-16).
+ */
 export function lineExtent(lines: Line[], cache: LineCache, size: number, unit: 1 | 2): number {
-  return Math.max(0, ...lines.map((l) => cache.widths.get(l.start) ?? Math.ceil(((l.end ?? size) - l.start) / unit)));
+  return Math.max(0, ...lines.map((l) => cache.widths.get(l.start) ?? Math.ceil(((l.end ?? l.next ?? size) - l.start) / unit)));
 }
 
 /** `left` massimo: l'ultima colonna della riga più lunga resta visibile, con una colonna libera dopo. */

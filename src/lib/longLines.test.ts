@@ -345,6 +345,11 @@ test("columnHits: a row of known width shorter than the target does not go to th
   cache.widths.set(46, 254);
   expect((await columnHits(cache, lines, LINE_END, columns)).map((h) => h.column)).toEqual([40, 254]);
   expect(calls.length).toBe(1);
+  // Senza fine nota l'offset della fine riga non si conosce: la riga va al backend anche con la larghezza nota.
+  const far = [{ start: 400, end: null, next: null }];
+  cache.widths.set(400, 10);
+  const r = await columnHits(cache, far, 100, async () => [{ offset: 411, column: 10, eol: true }]);
+  expect(r).toEqual([{ offset: 411, column: 10, eol: true }]);
 });
 
 test("columnHits: a hit close to a known point is not stored, so ← → do not pile up marks", async () => {
@@ -381,6 +386,7 @@ test("lineExtent: exact widths when known, otherwise bytes (halved in UTF-16); m
   cache.widths.set(31, 70); // tab: più colonne che byte
   expect(lineExtent(lines, cache, 1000, 1)).toBe(70);
   expect(lineExtent([{ start: 2, end: null, next: null }], cache, 1002, 2)).toBe(500); // fino a fine file
+  expect(lineExtent([{ start: 0, end: null, next: 101 }], cache, 1000, 1)).toBe(101); // fino alla riga dopo, non a fine file
   expect(lineExtent([], cache, 1000, 1)).toBe(0);
   expect(maxLeft(70, 50)).toBe(21);
   expect(maxLeft(30, 50)).toBe(0);
