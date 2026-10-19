@@ -48,3 +48,13 @@ test("scanTree passa i limiti e un canale che inoltra i lotti", async () => {
     requestId: 3, root: "C:\\r", maxDepth: 8, maxEntries: 20000, includeHidden: false,
   }));
 });
+
+test("thumbnail legge larghezza e altezza little-endian e lascia i pixel RGBA", async () => {
+  const { thumbnail } = await import("./api");
+  const buf = new Uint8Array([2, 0, 0, 0, 1, 0, 0, 0, 10, 20, 30, 255, 40, 50, 60, 255]).buffer;
+  vi.mocked(invoke).mockResolvedValue(buf);
+  const t = await thumbnail("C:\a.jpg", 96);
+  expect(invoke).toHaveBeenCalledWith("get_thumbnail", { path: "C:\a.jpg", size: 96 });
+  expect([t.width, t.height]).toEqual([2, 1]);
+  expect([...t.data]).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
+});

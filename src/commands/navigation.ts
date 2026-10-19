@@ -19,11 +19,36 @@ import { useViewers } from "../state/viewers";
 import { registerCommand, type Command } from "./registry";
 import { openFile } from "./shell";
 
-/** Righe visibili nella lista (pagina per PgSu/PgGiù, righe per colonna nella vista breve). */
+/** Righe visibili nella lista (pagina per PgSu/PgGiù, righe per colonna nella vista breve, righe di riquadri nella griglia). */
 let pageSize = 20;
 export const setPageSize = (n: number) => {
   pageSize = Math.max(1, n);
 };
+
+/** Riquadri per riga nella vista miniature. */
+let gridColumns = 1;
+export const setGridColumns = (n: number) => {
+  gridColumns = Math.max(1, n);
+};
+
+type CursorMove = "up" | "down" | "left" | "right" | "pageUp" | "pageDown";
+
+/**
+ * Di quante righe si sposta il cursore: tutti i `mc_Cursor*` (e le marcature Maiusc+↑/↓) passano di qui.
+ * Griglia: ↑/↓ di una riga di riquadri, ←/→ di un riquadro, pagina di `page` righe di riquadri. Breve: ←/→ di una colonna.
+ * Dettagliata: ←/→ non fanno niente, come in TC.
+ */
+export function cursorStep(view: TabView["view"], move: CursorMove, page: number, cols: number): number {
+  const thumbs = view === "thumbs";
+  switch (move) {
+    case "up": return thumbs ? -cols : -1;
+    case "down": return thumbs ? cols : 1;
+    case "left": return thumbs ? -1 : view === "brief" ? -page : 0;
+    case "right": return thumbs ? 1 : view === "brief" ? page : 0;
+    case "pageUp": return thumbs ? -page * cols : -(page - 1);
+    case "pageDown": return thumbs ? page * cols : page - 1;
+  }
+}
 
 /** Stesso tasto = inverte il verso, come in TC; un tasto nuovo parte crescente. */
 export const nextSort = (sort: TabView["sort"], key: SortKey): TabView["sort"] =>
@@ -36,12 +61,13 @@ const clamp = (i: number, n: number) => Math.max(0, Math.min(i, n - 1));
 const open = (path: string, opts?: LoadOpts) => views().load(activeTabContext().tabId, path, opts);
 const updateActive = (fn: (v: TabView) => TabView) => views().update(activeTabContext().tabId, fn);
 const moveCursor = (to: (v: TabView) => number) => updateActive((v) => ({ ...v, cursor: clamp(to(v), v.rows.length) }));
+const step = (move: CursorMove) => (v: TabView) => v.cursor + cursorStep(v.view, move, pageSize, gridColumns);
 
-function markAndMove(delta: number) {
+function markAndMove(move: "up" | "down") {
   updateActive((v) => {
     const row = v.rows[v.cursor];
     const marked = row ? toggleMark(v, row.name) : v;
-    return { ...marked, cursor: clamp(v.cursor + delta, v.rows.length) };
+    return { ...marked, cursor: clamp(step(move)(v), v.rows.length) };
   });
 }
 
@@ -209,18 +235,17 @@ const RG = { repeat: true, group: true };
 
 const DEFS: Def[] = [
   // Cursore e marcatura
-  ["mc_CursorUp", () => moveCursor((v) => v.cursor - 1), R],
-  ["mc_CursorDown", () => moveCursor((v) => v.cursor + 1), R],
-  ["mc_CursorPageUp", () => moveCursor((v) => v.cursor - (pageSize - 1)), R],
-  ["mc_CursorPageDown", () => moveCursor((v) => v.cursor + (pageSize - 1)), R],
+  ["mc_CursorUp", () => moveCursor(step("up")), R],
+  ["mc_CursorDown", () => moveCursor(step("down")), R],
+  ["mc_CursorPageUp", () => moveCursor(step("pageUp")), R],
+  ["mc_CursorPageDown", () => moveCursor(step("pageDown")), R],
   ["mc_CursorHome", () => moveCursor(() => 0)],
   ["mc_CursorEnd", () => moveCursor((v) => v.rows.length - 1)],
-  // ←/→ cambiano colonna solo nella vista breve; nella dettagliata non fanno niente, come in TC.
-  ["mc_CursorLeft", () => moveCursor((v) => (v.view === "brief" ? v.cursor - pageSize : v.cursor)), R],
-  ["mc_CursorRight", () => moveCursor((v) => (v.view === "brief" ? v.cursor + pageSize : v.cursor)), R],
-  ["mc_MarkUp", () => markAndMove(-1), R],
-  ["mc_MarkDown", () => markAndMove(1), R],
-  ["cm_Reverse", () => markAndMove(1), R],
+  ["mc_CursorLeft", () => moveCursor(step("left")), R],
+  ["mc_CursorRight", () => moveCursor(step("right")), R],
+  ["mc_MarkUp", () => markAndMove("up"), R],
+  ["mc_MarkDown", () => markAndMove("down"), R],
+  ["cm_Reverse", () => markAndMove("down"), R],
   ["cm_SelectAll", () => updateActive((v) => markRange(v, 0, v.rows.length - 1))],
   ["cm_ClearAll", () => updateActive((v) => ({ ...v, marked: new Set() }))],
   ["cm_ExchangeSelection", () => updateActive(invertMarks)],
@@ -280,6 +305,7 @@ const DEFS: Def[] = [
   ["cm_SrcUnsorted", () => sortBy(activeTabContext().tabId, "none")],
   ["cm_SrcShort", () => updateActive((v) => ({ ...v, view: "brief" }))],
   ["cm_SrcLong", () => updateActive((v) => ({ ...v, view: "full" }))],
+  ["cm_SrcThumbs", () => updateActive((v) => ({ ...v, view: "thumbs" }))],
 
   // Finestra
   ["mc_ToggleSidebar", () => useUi.getState().toggleSidebar(), { global: true }],

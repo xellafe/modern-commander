@@ -40,6 +40,7 @@
 .mc-vimage img { margin: auto; cursor: zoom-in; }
 .mc-vimage.fit img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .mc-vimage:not(.fit) img { cursor: zoom-out; }
+.mc-vimage canvas { margin: auto; max-width: 100%; max-height: 100%; object-fit: contain; } /* anteprima della shell */
 .mc-vpdf {
   display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 0;
   padding: 8px; overflow-x: hidden; overflow-y: scroll; /* sempre presente: la larghezza utile non cambia */

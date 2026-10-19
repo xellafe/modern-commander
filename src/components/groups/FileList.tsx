@@ -4,16 +4,20 @@ import { ArrowDown, ArrowUp, TriangleAlert } from "lucide-react";
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { nameError, renameInPlace } from "../../commands/fileOps";
-import { setPageSize, sortBy } from "../../commands/navigation";
+import { setGridColumns, setPageSize, sortBy } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
 import { rowContextMenu, trackDragOut } from "../../commands/shell";
 import { formatAttrs, formatDate, formatSize, splitName } from "../../lib/format";
+import { joinPath } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
 import { hasSize, markRange, toggleMark, type Row, type SortKey, type TabView } from "../../state/tabView";
 import { useTabViews } from "../../state/tabViews";
+import { THUMB_SIZE, thumbKey, thumbs } from "../../state/thumbnails";
 import { FileIcon } from "./FileIcon";
 
 const BRIEF_COL_WIDTH = 220;
+const THUMB_TILE_W = 112;
+const THUMB_TILE_H = 136; // 4 + immagine (96) + 4 + due righe di nome (28) + 4
 
 // Altezza della riga dal token --mc-row-height: cambia col tema, si rilegge quando cambia data-theme.
 let rowHeightCache: number | null = null;
@@ -28,15 +32,19 @@ const subscribeTheme = (cb: () => void) => {
 const readRowHeight = () =>
   (rowHeightCache ??= parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--mc-row-height")) || 22);
 
-function useHeight(ref: RefObject<HTMLElement | null>) {
-  const [h, setH] = useState(0);
+function useSize(ref: RefObject<HTMLElement | null>) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
-    const ro = new ResizeObserver(([e]) => setH(e.contentRect.height));
+    const ro = new ResizeObserver(([e]) => {
+      const { width, height } = e.contentRect;
+      setSize((s) => (s.width === width && s.height === height ? s : { width, height }));
+    });
     if (ref.current) ro.observe(ref.current);
     return () => ro.disconnect();
   }, [ref]);
-  return h;
+  return size;
 }
+const useHeight = (ref: RefObject<HTMLElement | null>) => useSize(ref).height;
 
 // Mouse come in TC: click = cursore, Ctrl+click = marca, Shift+click = intervallo.
 function clickRow(tabId: string, i: number, e: MouseEvent) {
@@ -119,7 +127,7 @@ export function FileList({ tabId, active }: { tabId: string; active: boolean }) 
   const rowHeight = useSyncExternalStore(subscribeTheme, readRowHeight);
   if (!view) return <div className="mc-list" />;
   const props = { tabId, view, active, rowHeight };
-  return view.view === "brief" ? <BriefList {...props} /> : <FullList {...props} />;
+  return view.view === "thumbs" ? <ThumbList {...props} /> : view.view === "brief" ? <BriefList {...props} /> : <FullList {...props} />;
 }
 
 function sizeText(row: Row, dirSize: number | undefined, sizing: boolean, lng: string, t: TFunction): string {
@@ -296,3 +304,100 @@ function BriefList({ tabId, view, active, rowHeight }: ListProps) {
     </div>
   );
 }
+
+// Vista miniature (Ctrl+Maiusc+F1): griglia di riquadri virtualizzata per righe di riquadri. Il cursore si muove
+// sempre sui dati (`cursorStep`), le miniature arrivano dopo, dalla coda: nessun tasto aspetta un'anteprima.
+function ThumbList({ tabId, view, active }: ListProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { width, height } = useSize(ref);
+  const renaming = useRenaming(tabId);
+  const dir = view.history[view.historyIndex];
+  const cols = Math.max(1, Math.floor(width / THUMB_TILE_W));
+  const perPage = Math.max(1, Math.floor(height / THUMB_TILE_H));
+  const virt = useVirtualizer({
+    count: Math.ceil(view.rows.length / cols),
+    getScrollElement: () => ref.current,
+    estimateSize: () => THUMB_TILE_H,
+    overscan: 2,
+  });
+  useEffect(() => {
+    if (active) {
+      setPageSize(perPage);
+      setGridColumns(cols);
+    }
+  }, [active, perPage, cols]);
+  useEffect(() => {
+    if (view.rows.length) virt.scrollToIndex(Math.floor(view.cursor / cols), { align: "auto" });
+  }, [virt, view.cursor, view.rows, cols]);
+  // Cambio di cartella o di vista (smontaggio): le richieste ancora in coda non servono più.
+  useEffect(() => () => thumbs.cancelOwner(tabId), [tabId, dir]);
+
+  return (
+    <div className="mc-list mc-list-thumbs">
+      <div className="mc-list-scroll" ref={ref} onContextMenu={(e) => rowContextMenu(tabId, null, e)}>
+        <div className="mc-list-canvas" style={{ height: virt.getTotalSize() }}>
+          {virt.getVirtualItems().map(({ index: r, start }) => (
+            <div key={r} className="mc-thumb-row" style={{ transform: `translateY(${start}px)`, height: THUMB_TILE_H }}>
+              {view.rows.slice(r * cols, (r + 1) * cols).map((row, k) => {
+                const i = r * cols + k;
+                return <Tile key={i} tabId={tabId} row={row} i={i} dir={dir} cls={rowClass(view, i, row)} renaming={renaming === row.name} />;
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface TileProps {
+  tabId: string;
+  row: Row;
+  i: number;
+  dir: string;
+  cls: string;
+  renaming: boolean;
+}
+
+// memo: spostando il cursore si ridisegnano solo i due riquadri che cambiano classe.
+const Tile = memo(function Tile({ tabId, row, i, dir, cls, renaming }: TileProps) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [ready, setReady] = useState(false);
+  const hasThumb = !row.isDir && !row.isParent && !row.drive;
+  const path = hasThumb ? joinPath(dir, row.name) : "";
+  useEffect(() => {
+    setReady(false);
+    if (!hasThumb) return;
+    let live = true;
+    // Alla risoluzione fisica: con la scala di Windows al 125% o 150% i 96 px logici sono più pixel.
+    const size = Math.min(1024, Math.ceil(THUMB_SIZE * (window.devicePixelRatio || 1)));
+    const key = thumbKey(path, row.modifiedMs, size);
+    void thumbs.request(tabId, key, path, size).then((bmp) => {
+      const c = canvas.current;
+      if (!live || !bmp || !c) return;
+      c.width = bmp.width;
+      c.height = bmp.height;
+      c.getContext("2d")!.drawImage(bmp, 0, 0);
+      setReady(true);
+    });
+    // Il riquadro esce dalla vista: se la richiesta non è partita lascia il posto a quelle dei riquadri visibili.
+    return () => {
+      live = false;
+      thumbs.release(tabId, key);
+    };
+  }, [tabId, hasThumb, path, row.modifiedMs]);
+
+  return (
+    <div
+      className={`${cls} mc-thumb${renaming ? " renaming" : ""}`}
+      style={{ width: THUMB_TILE_W, height: THUMB_TILE_H }}
+      {...rowHandlers(tabId, i)}
+    >
+      <span className="mc-thumb-img" style={{ width: THUMB_SIZE, height: THUMB_SIZE }}>
+        {!ready && <FileIcon row={row} size={hasThumb ? 32 : 48} />}
+        <canvas ref={canvas} style={ready ? undefined : { display: "none" }} />
+      </span>
+      <span className="c-name" title={row.name}>{renaming ? <RenameInput tabId={tabId} row={row} /> : row.name}</span>
+    </div>
+  );
+});

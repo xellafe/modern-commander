@@ -15,7 +15,7 @@ export interface TabView {
   history: string[];
   historyIndex: number;
   filter: string;
-  view: "full" | "brief";
+  view: "full" | "brief" | "thumbs";
   /** Byte delle cartelle già misurate, per nome. Leggere con `hasSize`: un nome come "constructor" non è una chiave assente. */
   dirSizes: Record<string, number>;
   /** Cartelle con il calcolo della dimensione in corso. */

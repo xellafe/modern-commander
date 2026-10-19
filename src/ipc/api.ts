@@ -92,6 +92,16 @@ export const openPath = (path: string) => invoke<void>("open_path", { path });
 /** Apre `path` con l'eseguibile `exe`, senza attendere che termini. */
 export const openWith = (exe: string, path: string) => invoke<void>("open_with", { exe, path });
 
+/**
+ * Miniatura della shell (o icona del tipo) con il lato maggiore ≤ `size` (16–1024), come RGBA: il backend manda
+ * `[larghezza u32 LE][altezza u32 LE][pixel]`.
+ */
+export const thumbnail = async (path: string, size: number) => {
+  const buf = await invoke<ArrayBuffer>("get_thumbnail", { path, size });
+  const head = new DataView(buf);
+  return { width: head.getUint32(0, true), height: head.getUint32(4, true), data: new Uint8ClampedArray(buf, 8) };
+};
+
 export const readConfig = (name: string) => invoke<unknown | null>("read_config", { name });
 
 export const writeConfig = (name: string, value: unknown) =>

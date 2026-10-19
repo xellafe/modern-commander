@@ -88,6 +88,7 @@
     "position": "{{percent}}%",
     "scrollbar": "Position in the file",
     "unsupportedImage": "This image format cannot be displayed. Use Text or Hex to see the file.",
+    "shellPreview": "Showing the shell preview instead: the browser cannot display this format.",
     "unsupportedMedia": "This file cannot be played here.",
     "unsupportedPdf": "This PDF cannot be opened. Use Text or Hex to see the file.",
     "openExternal": "Open with default program"
@@ -170,6 +171,7 @@
     "cm_SrcUnsorted": "Unsorted",
     "cm_SrcShort": "Brief view",
     "cm_SrcLong": "Detailed view",
+    "cm_SrcThumbs": "Thumbnails view",
     "mc_ToggleSidebar": "Show/hide sidebar",
     "mc_ToggleBottomPanel": "Show/hide bottom panel",
     "cm_Exit": "Exit",

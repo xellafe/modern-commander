@@ -88,6 +88,7 @@
     "position": "{{percent}}%",
     "scrollbar": "Posizione nel file",
     "unsupportedImage": "Questo formato di immagine non si può mostrare. Usa Testo o Esadecimale per vedere il file.",
+    "shellPreview": "Anteprima della shell: questo formato non si può mostrare direttamente.",
     "unsupportedMedia": "Questo file non si può riprodurre qui.",
     "unsupportedPdf": "Questo PDF non si può aprire. Usa Testo o Esadecimale per vedere il file.",
     "openExternal": "Apri con il programma predefinito"
@@ -170,6 +171,7 @@
     "cm_SrcUnsorted": "Senza ordinamento",
     "cm_SrcShort": "Vista breve",
     "cm_SrcLong": "Vista dettagliata",
+    "cm_SrcThumbs": "Vista miniature",
     "mc_ToggleSidebar": "Mostra/nascondi barra laterale",
     "mc_ToggleBottomPanel": "Mostra/nascondi pannello in basso",
     "cm_Exit": "Esci",

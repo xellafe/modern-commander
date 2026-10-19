@@ -87,6 +87,17 @@
 .mc-brief-col { position: absolute; top: 0; left: 0; height: 100%; }
 .mc-brief-col .mc-row { position: static; display: flex; align-items: center; gap: 6px; padding: 0 8px; }
 
+/* Vista miniature: riquadri di 112 px con l'immagine a 96 px e il nome su due righe */
+.mc-thumb-row { position: absolute; top: 0; left: var(--mc-row-inset); display: flex; }
+.mc-thumb-row .mc-row { position: static; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px; white-space: normal; }
+.mc-thumb-img { display: flex; flex: none; align-items: center; justify-content: center; }
+.mc-thumb-img canvas { width: 100%; height: 100%; object-fit: contain; }
+.mc-thumb .c-name {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; width: 100%; height: 28px;
+  overflow: hidden; line-height: 14px; font-size: 11px; text-align: center; overflow-wrap: anywhere;
+}
+.mc-thumb.renaming .c-name { display: block; height: auto; overflow: visible; }
+
 /* Ricerca rapida, filtro rapido, notifiche */
 .mc-quicksearch {
   position: absolute; left: 10px; bottom: 8px; z-index: 6; display: flex; align-items: center; gap: 6px;

@@ -13,7 +13,7 @@ import { useEditors } from "../state/editors";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { useUi } from "../state/ui";
 import { useViewers } from "../state/viewers";
-import { closeTab, closeTabNow, ensureDirTab, initCloseGuard, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
+import { closeTab, closeTabNow, cursorStep, ensureDirTab, initCloseGuard, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands, setGridColumns, setPageSize } from "./navigation";
 import { executeCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
@@ -194,4 +194,45 @@ test("mc_OpenInNextGroup opens a new folder tab when the target group shows a fi
   expect(l.tabs.t2.file).toBeDefined();
   expect(useTabViews.getState().views.t2).toBeUndefined();
   expect(l.activeGroupId).toBe("g1"); // come con un load: il gruppo attivo non cambia
+});
+
+test("cursorStep", () => {
+  expect(cursorStep("thumbs", "down", 5, 4)).toBe(4);
+  expect(cursorStep("thumbs", "up", 5, 4)).toBe(-4);
+  expect(cursorStep("thumbs", "left", 5, 4)).toBe(-1);
+  expect(cursorStep("thumbs", "right", 5, 4)).toBe(1);
+  expect(cursorStep("thumbs", "pageDown", 5, 4)).toBe(20);
+  expect(cursorStep("thumbs", "pageUp", 5, 4)).toBe(-20);
+  expect(cursorStep("brief", "right", 5, 4)).toBe(5);
+  expect(cursorStep("brief", "left", 5, 4)).toBe(-5);
+  expect(cursorStep("brief", "down", 5, 4)).toBe(1);
+  expect(cursorStep("brief", "pageDown", 5, 4)).toBe(4);
+  expect(cursorStep("full", "right", 5, 4)).toBe(0);
+  expect(cursorStep("full", "up", 5, 4)).toBe(-1);
+  expect(cursorStep("full", "pageUp", 5, 4)).toBe(-4);
+});
+
+test("cm_SrcThumbs shows the grid; the arrows then move by tile and by row of tiles; Ctrl+F1/F2 views come back", async () => {
+  useTabViews.setState({ views: { t1: { ...ctx().view, rows: Array.from({ length: 30 }, (_, i) => ({ ...ctx().view.rows[1], name: `f${i}` })) } } });
+  setGridColumns(4);
+  setPageSize(3);
+  await executeCommand("cm_SrcThumbs");
+  expect(ctx().view.view).toBe("thumbs");
+  await executeCommand("mc_CursorDown");
+  expect(ctx().view.cursor).toBe(4);
+  await executeCommand("mc_CursorRight");
+  expect(ctx().view.cursor).toBe(5);
+  await executeCommand("mc_CursorPageDown");
+  expect(ctx().view.cursor).toBe(17);
+  await executeCommand("mc_CursorLeft");
+  await executeCommand("mc_CursorUp");
+  expect(ctx().view.cursor).toBe(12);
+  await executeCommand("mc_MarkDown"); // marca e scende di una riga di riquadri
+  expect([...ctx().view.marked]).toEqual(["f12"]);
+  expect(ctx().view.cursor).toBe(16);
+  await executeCommand("cm_SrcShort");
+  expect(ctx().view.view).toBe("brief");
+  await executeCommand("cm_SrcThumbs");
+  await executeCommand("cm_SrcLong");
+  expect(ctx().view.view).toBe("full");
 });
