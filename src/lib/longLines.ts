@@ -1,7 +1,7 @@
 // Righe intere nel viewer: a differenza di textPaging, qui una riga non si spezza a MAX_LINE. Le funzioni
 // lavorano sulla finestra di byte già letta; ciò che non sta nella finestra resta ignoto (null) e lo
 // risolve il backend (ricerca degli inizi riga e conteggio delle colonne a blocchi).
-import type { Mark } from "../ipc/types";
+import type { ColumnHit, ColumnProgress, Mark } from "../ipc/types";
 import type { LineCache } from "../state/lineCache";
 import { isLf, type Win } from "./textPaging";
 
@@ -227,3 +227,48 @@ export async function lastPageTop(ctx: NavCtx, rows: number): Promise<number> {
   }
   return Math.max(t, ctx.bom);
 }
+
+/** Conteggio delle colonne del backend (`columnOffsets`) sulle righe `lines`, iniettato come `Scans`. */
+export type Columns = (lines: Line[], from: Mark[], target: number, onProgress: (p: ColumnProgress) => void) => Promise<ColumnHit[]>;
+
+// Un risultato più vicino di così a un punto noto (o all'inizio riga) non diventa un punto di controllo: ← e → ripartono
+// al massimo da 64 KiB prima, e i punti non crescono a ogni tasto.
+const MARK_GAP = 64 * 1024;
+
+/**
+ * Il carattere della colonna `target` su ogni riga, in una sola richiesta, ciascuna dal punto di controllo più vicino.
+ * Le righe di larghezza nota che non arrivano a `target` non vanno al backend. Restano in cache i punti dell'avanzamento,
+ * i risultati come punti di controllo e la larghezza delle righe più corte di `target`.
+ */
+export async function columnHits(cache: LineCache, lines: Line[], target: number, columns: Columns): Promise<ColumnHit[]> {
+  const encoding = cache.encoding;
+  const known = lines.map((l): ColumnHit | null => {
+    const w = cache.widths.get(l.start);
+    return w !== undefined && w <= target ? { offset: l.end ?? l.start, column: w, eol: true } : null;
+  });
+  const ask = lines.filter((_, i) => !known[i]);
+  if (!ask.length) return known as ColumnHit[];
+  const mark = (s: number, m: Mark) => {
+    if (sameEncoding(cache, encoding)) cache.marks.set(s, mergeMarks(cache.marks.get(s), [m]));
+  };
+  const from = ask.map((l) => nearestMark(cache.marks.get(l.start), l.start, target));
+  const got = await columns(ask, from, target, (p) => mark(ask[p.index].start, p.mark));
+  ask.forEach((l, i) => {
+    const h = got[i];
+    if (h.eol) {
+      if (sameEncoding(cache, encoding)) cache.widths.set(l.start, h.column);
+    } else if (Math.abs(h.offset - l.start) >= MARK_GAP && !cache.marks.get(l.start)?.some((m) => Math.abs(m.offset - h.offset) < MARK_GAP)) {
+      mark(l.start, { offset: h.offset, column: h.column });
+    }
+  });
+  let i = 0;
+  return known.map((h) => h ?? got[i++]);
+}
+
+/** Colonne della riga più lunga: il conteggio esatto se noto, altrimenti i byte fino alla fine (diviso 2 in UTF-16). */
+export function lineExtent(lines: Line[], cache: LineCache, size: number, unit: 1 | 2): number {
+  return Math.max(0, ...lines.map((l) => cache.widths.get(l.start) ?? Math.ceil(((l.end ?? size) - l.start) / unit)));
+}
+
+/** `left` massimo: l'ultima colonna della riga più lunga resta visibile, con una colonna libera dopo. */
+export const maxLeft = (extent: number, cols: number) => Math.max(0, extent - cols + 1);

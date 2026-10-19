@@ -1,30 +1,28 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { cancelRequest, lineStart, nextLineStart, nextRequestId, readChunk } from "../../ipc/api";
-import type { AppError } from "../../ipc/types";
+import { cancelRequest, columnOffsets, LINE_END, lineStart, nextLineStart, nextRequestId, readChunk } from "../../ipc/api";
+import type { AppError, ColumnHit, ColumnProgress } from "../../ipc/types";
 import { codeUnit, detectEncoding } from "../../lib/encoding";
 import {
-  lastPageTop, lineAt, nextStart, queueNav, renderSlice, stepDown, stepUp, visibleLines,
-  type Line, type Nav, type NavCtx, type Scans,
+  columnHits, lastPageTop, lineAt, lineExtent, maxLeft, nextStart, queueNav, renderSlice, stepDown, stepUp, visibleLines,
+  type Columns, type Line, type Nav, type NavCtx, type Scans,
 } from "../../lib/longLines";
 import type { Win } from "../../lib/textPaging";
 import { lineCache } from "../../state/lineCache";
 import { useViewers } from "../../state/viewers";
-import { usePaneRows, WHEEL_LINES, type PaneHandle } from "./pane";
+import { usePaneCols, usePaneRows, WHEEL_COLS, WHEEL_LINES, type PaneHandle } from "./pane";
 import { ScrollRail } from "./ScrollRail";
 import { decoderFor } from "./TextPane";
 
 // Finestra come in TextPane: 256 KiB, di cui 64 KiB prima di `top`. Le righe che ne escono le risolve il backend.
 const WINDOW = 256 * 1024;
 const HEAD = 64 * 1024;
-/** Byte letti per riga: bastano al viewport senza scorrimento orizzontale. */
-const BYTES = 4096;
 
 interface Props {
   tabId: string;
   path: string;
   size: number;
   top: number;
-  /** Colonna del primo carattere visibile (Task 5). */
+  /** Colonna del primo carattere visibile. */
   left: number;
   encoding: string;
   /** Avanzamento delle scansioni (0…1), null quando non ce ne sono. */
@@ -33,23 +31,47 @@ interface Props {
   ref?: Ref<PaneHandle>;
 }
 
-// Byte del testo della riga `l` se la finestra li contiene: fino alla fine nota, al massimo BYTES.
-function fromWindow(w: Win | null, l: Line): Uint8Array | null {
-  if (!w || l.start < w.base) return null;
-  const stop = Math.min(l.end ?? Infinity, l.start + BYTES);
-  return stop <= w.base + w.buf.length || w.eof ? w.buf.subarray(l.start - w.base, stop - w.base) : null;
+// I byte da `from` a `stop` se la finestra li contiene (a fine file fin dove arriva).
+function fromWindow(w: Win | null, from: number, stop: number): Uint8Array | null {
+  if (!w || from < w.base || from > w.base + w.buf.length) return null;
+  return stop <= w.base + w.buf.length || w.eof ? w.buf.subarray(from - w.base, stop - w.base) : null;
 }
 
+/**
+ * Ciò che si mostra delle righe con la colonna `left`: il carattere da cui parte ogni riga e i byte letti fuori dalla
+ * finestra (per offset). Si sostituisce intero quando è pronto: fino ad allora resta quello di prima, senza righe in
+ * sospeso che lampeggiano a ogni → e senza righe a colonne diverse.
+ */
+interface Frame {
+  left: number;
+  encoding: string;
+  /** Byte letti per riga: le colonne visibili più una, 4 byte ciascuna. */
+  need: number;
+  hits: Map<number, ColumnHit>;
+  chunks: Map<number, Uint8Array>;
+}
+
+// Con `left = 0` il carattere è l'inizio riga, senza backend.
+const zero = (l: Line): ColumnHit => ({ offset: l.start, column: 0, eol: false });
+// Fin dove leggere la riga dal carattere `h`: `need` byte, mai oltre la fine nota.
+const stopOf = (l: Line, h: ColumnHit, need: number) => Math.min(l.end ?? Infinity, h.offset + need);
+
 /** Vista testo con l'a capo spento: una riga logica è una riga a schermo, qualunque sia la sua lunghezza. */
-export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, ref }: Props) {
+export function LinesPane({ tabId, path, size, top, left, encoding, onBusy, onError, ref }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
+  const column = useRef<HTMLDivElement>(null);
   const rows = usePaneRows(viewport);
+  // Righe sull'altezza piena, barra orizzontale compresa: le barre si decidono su queste e non oscillano.
+  const allRows = usePaneRows(column);
+  const cols = usePaneCols(viewport);
   const unit = codeUnit(encoding);
   const bigEndian = encoding === "utf-16be";
   const [win, setWin] = useState<Win | null>(null);
   const winRef = useRef<Win | null>(null);
-  // Righe lette fuori dalla finestra, per inizio riga. La cache delle righe non è reattiva: `tick` ridisegna.
-  const [chunks, setChunks] = useState(new Map<number, Uint8Array>());
+  const [frame, setFrame] = useState<Frame>({ left: 0, encoding: "", need: 0, hits: new Map(), chunks: new Map() });
+  // Il caricamento del frame in corso: chiave (per non rilanciarlo uguale), numero di sequenza e richiesta delle colonne.
+  const framing = useRef<{ key: string | null; seq: number; req: number | null }>({ key: null, seq: 0, req: null });
+  // La cache delle righe non è reattiva: `tick` ridisegna.
   const [tick, setTick] = useState(0);
   const loading = useRef<{ base: number; p: Promise<Win> } | null>(null);
   const bom = useRef<{ key: string; p: Promise<number>; n: number } | null>(null);
@@ -62,15 +84,21 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
   const fixing = useRef<{ key: string; p: Promise<void> } | null>(null);
   // Cresce a ogni annullamento: un passo o un salto superato non sposta più `top`.
   const gen = useRef(0);
-  const latest = useRef({ rows, unit, bigEndian, size, encoding, onBusy, onError });
-  latest.current = { rows, unit, bigEndian, size, encoding, onBusy, onError };
+  const latest = useRef({ rows, cols, unit, bigEndian, size, encoding, onBusy, onError });
+  latest.current = { rows, cols, unit, bigEndian, size, encoding, onBusy, onError };
   const linesRef = useRef<Line[]>([]);
+  const allRef = useRef<Line[]>([]);
 
   const getTop = () => useViewers.getState().states[tabId]?.top ?? 0;
   const setTop = (to: number) => {
     valid.current = { top: to, encoding: latest.current.encoding };
     useViewers.getState().set(tabId, { top: to });
     setTick((n) => n + 1); // anche senza spostamento: le righe in sospeso si richiedono di nuovo
+  };
+  const getLeft = () => useViewers.getState().states[tabId]?.left ?? 0;
+  const setLeft = (to: number) => {
+    useViewers.getState().set(tabId, { left: to });
+    setTick((n) => n + 1);
   };
   const fail = (e: unknown) => {
     if ((e as Partial<AppError> | null)?.code !== "CANCELLED") latest.current.onError(e);
@@ -87,7 +115,7 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
     }
     latest.current.onBusy(active.current.size ? (total ? done / total : 0) : null);
   };
-  function track(total: number, done: (o: number) => number, onProgress: (o: number) => void, call: (id: number, progress: (o: number) => void) => Promise<number>) {
+  function track<P, T>(total: number, done: (p: P) => number, onProgress: (p: P) => void, call: (id: number, progress: (p: P) => void) => Promise<T>) {
     const id = nextRequestId();
     const r = { total, done: 0 };
     active.current.set(id, r);
@@ -110,6 +138,26 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
       const { unit: u, bigEndian: be } = latest.current;
       return track(at, (o) => at - o, onProgress, (id, p) => lineStart(id, path, at, u, be, p));
     },
+  };
+
+  // Colonne dal backend per la codifica `enc`; `onId` riceve il numero della richiesta, per annullarla se superata.
+  // Avanzamento: byte contati su byte fino alla fine (nota, o del file) di ogni riga.
+  const columns = (enc: string, onId?: (id: number) => void): Columns => (ls, from, target, onProgress) => {
+    const s = latest.current.size;
+    const done = from.map(() => 0);
+    const total = ls.reduce((t, l, i) => t + (l.end ?? s) - from[i].offset, 0);
+    return track(
+      total,
+      (p: ColumnProgress) => {
+        done[p.index] = p.mark.offset - from[p.index].offset;
+        return done.reduce((a, b) => a + b, 0);
+      },
+      onProgress,
+      (id, p) => {
+        onId?.(id);
+        return columnOffsets(id, path, enc, from, target, p);
+      },
+    );
   };
 
   // Il BOM non si mostra mai: la prima riga inizia dopo, se è quello della codifica scelta.
@@ -253,6 +301,67 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
     setTop(t);
   }
 
+  // Estensione orizzontale sulle righe dell'altezza piena: il conteggio esatto se noto, altrimenti la stima in byte.
+  const extentNow = () => {
+    const l = latest.current;
+    return lineExtent(allRef.current, lineCache(tabId, l.encoding), l.size, l.unit);
+  };
+
+  // ← →: `left` subito, limitato all'estensione. La stima in byte non conta i tab: oltre il limite stimato si contano
+  // prima le righe senza larghezza nota (corte, se il limite è vicino), poi si limita col conteggio esatto.
+  function hscroll(n: number) {
+    if (!n || !ready) return;
+    const to = Math.max(0, getLeft() + n);
+    const max = () => maxLeft(extentNow(), latest.current.cols);
+    const cache = lineCache(tabId, latest.current.encoding);
+    const unknown = allRef.current.filter((l) => !cache.widths.has(l.start));
+    if (n < 0 || to <= max() || !unknown.length) return setLeft(Math.min(to, max()));
+    const g = gen.current;
+    run(columnHits(cache, unknown, LINE_END, columns(cache.encoding)).then(() => g === gen.current && setLeft(Math.min(to, max()))));
+  }
+
+  // Home / Fine: inizio riga, oppure la fine della riga visibile più lunga (contando quelle senza larghezza nota).
+  function hedge(end: boolean) {
+    cancel();
+    if (!end) return setLeft(0);
+    const ls = linesRef.current;
+    if (!ls.length) return;
+    const g = gen.current;
+    const enc = latest.current.encoding;
+    run(columnHits(lineCache(tabId, enc), ls, LINE_END, columns(enc)).then((hits) => {
+      if (g === gen.current) setLeft(maxLeft(Math.max(...hits.map((h) => h.column)), latest.current.cols));
+    }));
+  }
+
+  // Il frame per `to` sulle righe `ls`: le colonne che mancano in una richiesta sola, poi i byte fuori dalla finestra
+  // tutti insieme. Si riusa ciò che il frame di prima ha già.
+  async function load(ls: Line[], to: number, enc: string, need: number, base: Frame): Promise<Frame> {
+    const same = base.encoding === enc;
+    const hits = new Map<number, ColumnHit>();
+    for (const l of ls) {
+      const h = !to ? zero(l) : same && base.left === to ? base.hits.get(l.start) : undefined;
+      if (h) hits.set(l.start, h);
+    }
+    const ask = ls.filter((l) => !hits.has(l.start));
+    if (ask.length) {
+      const got = await columnHits(lineCache(tabId, enc), ask, to, columns(enc, (id) => (framing.current.req = id)));
+      ask.forEach((l, i) => hits.set(l.start, got[i]));
+    }
+    const chunks = new Map<number, Uint8Array>();
+    const reads: [number, number][] = [];
+    for (const l of ls) {
+      const h = hits.get(l.start)!;
+      const stop = stopOf(l, h, need);
+      if (h.eol || fromWindow(winRef.current, h.offset, stop)) continue;
+      const c = same && base.need >= need ? base.chunks.get(h.offset) : undefined;
+      if (c) chunks.set(h.offset, c);
+      else reads.push([h.offset, stop - h.offset]);
+    }
+    const bufs = await Promise.all(reads.map(([o, n]) => readChunk(path, o, n)));
+    reads.forEach(([o], i) => chunks.set(o, bufs[i]));
+    return { left: to, encoding: enc, need, hits, chunks };
+  }
+
   const ready = valid.current?.top === top && valid.current.encoding === encoding;
 
   const scroll = (lines: number) => {
@@ -273,6 +382,9 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
       const g = gen.current;
       run(end ? toEnd(g) : getBom().then((b) => g === gen.current && setTop(b)));
     },
+    hscroll,
+    hpage: (dir) => hscroll(dir * Math.max(1, cols - 1)),
+    hedge,
     cancel,
   }));
 
@@ -283,7 +395,12 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
     if (!ready) run(normalize());
   }, [ready, top, encoding]);
 
-  const lines = useMemo(() => (ready && rows ? visibleLines(ctx(win), top, rows) : []), [ready, win, top, rows, tick]);
+  const all = useMemo(
+    () => (ready && rows ? visibleLines(ctx(win), top, Math.max(rows, allRows)) : []),
+    [ready, win, top, rows, allRows, tick],
+  );
+  const lines = useMemo(() => all.slice(0, rows), [all, rows]);
+  allRef.current = all;
   linesRef.current = lines;
 
   // Finestra da rileggere, oppure la riga in fondo senza fine nota: la cerca il backend da solo.
@@ -294,45 +411,77 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
     if (last.next === null) run(nextStart(ctx(), last.start).then(() => setTick((n) => n + 1)));
   }, [lines]);
 
-  // Le righe fuori dalla finestra si leggono insieme; si tengono solo quelle ancora visibili.
+  // Il frame per la `left` attuale, se quello mostrato non basta. Uno superato si scarta e la sua richiesta si annulla.
   useEffect(() => {
-    const missing = lines.filter((l) => !fromWindow(win, l) && !chunks.has(l.start));
-    if (!missing.length) return;
+    if (!lines.length || !cols) return;
+    const need = (cols + 1) * 4;
+    const f = frame;
+    const complete = f.encoding === encoding && f.left === left && f.need >= need && lines.every((l) => {
+      const h = left ? f.hits.get(l.start) : zero(l);
+      return h && (h.eol || fromWindow(winRef.current, h.offset, stopOf(l, h, need)) || f.chunks.has(h.offset));
+    });
+    const key = `${left}|${encoding}|${need}|${lines.map((l) => l.start).join(",")}`;
+    const fr = framing.current;
+    if (complete || fr.key === key) return;
+    if (fr.req !== null && active.current.has(fr.req)) run(cancelRequest(fr.req));
+    const mine = ++fr.seq;
+    fr.key = key;
     run(
-      Promise.all(missing.map((l) => readChunk(path, l.start, BYTES))).then((bufs) =>
-        setChunks((prev) => {
-          const keep = new Set(linesRef.current.map((l) => l.start));
-          const next = new Map([...prev].filter(([s]) => keep.has(s)));
-          missing.forEach((l, i) => keep.has(l.start) && next.set(l.start, bufs[i]));
-          return next;
+      load(lines, left, encoding, need, f)
+        .then((nf) => mine === fr.seq && setFrame(nf))
+        .finally(() => {
+          if (fr.key === key) fr.key = null;
         }),
-      ),
     );
-  }, [lines]);
+  }, [lines, left, cols, encoding, frame, win]);
 
+  // Si mostra il frame più recente: finché quello per la `left` attuale non è pronto resta il precedente.
   const texts = useMemo(() => {
+    const f = frame.encoding === encoding ? frame : { ...frame, left, hits: new Map<number, ColumnHit>(), chunks: new Map<number, Uint8Array>() };
+    const need = (cols + 1) * 4;
     const decoder = decoderFor(encoding);
     return lines.map((l) => {
-      const bytes = fromWindow(win, l) ?? chunks.get(l.start);
+      const h = f.left ? f.hits.get(l.start) : zero(l);
+      if (!h) return null;
+      if (h.eol) return ""; // più corta di `left`
+      const bytes = fromWindow(win, h.offset, stopOf(l, h, need)) ?? f.chunks.get(h.offset);
       if (!bytes) return null;
       // Letta oltre la fine nota: si taglia al primo LF (e al CR prima).
       const t = decoder.decode(bytes);
       const i = t.indexOf("\n");
-      return renderSlice(i < 0 ? t : t.slice(0, i).replace(/\r$/, ""), 0, 0, BYTES);
+      return renderSlice(i < 0 ? t : t.slice(0, i).replace(/\r$/, ""), h.column, f.left, cols);
     });
-  }, [lines, chunks, win, encoding]);
+  }, [lines, frame, win, encoding, left, cols]);
 
   const last = lines[lines.length - 1];
   // Dopo una riga senza fine nota le righe sono in sospeso.
   const pending = last && last.next === null ? rows - lines.length : 0;
   // Niente da scorrere in verticale: si è in cima e la riga che finisce a fine file è visibile.
   const fits = ready && top <= (bom.current?.n ?? 0) && last?.next != null && last.next >= size;
+  const extent = lineExtent(all, lineCache(tabId, encoding), size, unit);
+  const maxL = maxLeft(extent, cols);
 
   return (
     <div className="mc-vpane">
-      <div ref={viewport} className="mc-vtext" onWheel={(e) => e.deltaY && scroll(Math.sign(e.deltaY) * WHEEL_LINES)}>
-        {texts.map((t, i) => (t === null ? <div key={i} className="mc-vline pending">…</div> : <div key={i} className="mc-vline">{t}</div>))}
-        {Array.from({ length: Math.max(0, pending) }, (_, i) => <div key={`p${i}`} className="mc-vline pending">…</div>)}
+      <div ref={column} className="mc-vcol">
+        <div
+          ref={viewport}
+          className="mc-vtext lines"
+          onWheel={(e) => {
+            const dx = e.deltaX || (e.shiftKey ? e.deltaY : 0);
+            if (dx) hscroll(Math.sign(dx) * WHEEL_COLS);
+            else if (e.deltaY) scroll(Math.sign(e.deltaY) * WHEEL_LINES);
+          }}
+        >
+          {texts.map((t, i) => (t === null ? <div key={i} className="mc-vline pending">…</div> : <div key={i} className="mc-vline">{t}</div>))}
+          {Array.from({ length: Math.max(0, pending) }, (_, i) => <div key={`p${i}`} className="mc-vline pending">…</div>)}
+        </div>
+        {cols > 0 && extent > cols && (
+          <ScrollRail orientation="horizontal" fraction={left / Math.max(1, maxL)} onSeek={(f) => {
+            cancel();
+            setLeft(Math.round(f * maxL));
+          }} />
+        )}
       </div>
       {!fits && <ScrollRail fraction={size ? top / size : 0} onSeek={(f) => {
         cancel();

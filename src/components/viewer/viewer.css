@@ -26,6 +26,9 @@
 .mc-vline { height: var(--mc-row-height); line-height: var(--mc-row-height); }
 .mc-vtext.wrap .mc-vline { height: auto; min-height: var(--mc-row-height); }
 .mc-vline.pending { color: var(--mc-muted); } /* riga non ancora risolta dal backend */
+/* A capo spento: testo e barra orizzontale in colonna; si scorre solo con `left`, mai col browser */
+.mc-vcol { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.mc-vtext.lines { min-height: 0; overflow-x: hidden; }
 .mc-vhex .off { color: var(--mc-muted); }
 .mc-vhex .hex { margin: 0 16px; }
 .mc-vhex .asc { color: var(--mc-muted); }
@@ -35,6 +38,8 @@
   position: absolute; left: 2px; right: 2px; height: var(--mc-rail-handle);
   background: var(--mc-border); border-radius: var(--mc-radius);
 }
+.mc-rail.h { width: auto; height: 12px; border-left: 0; border-top: 1px solid var(--mc-border); }
+.mc-rail.h .mc-rail-handle { top: 2px; bottom: 2px; right: auto; width: var(--mc-rail-handle); height: auto; }
 .mc-rail:hover .mc-rail-handle, .mc-rail:active .mc-rail-handle { background: var(--mc-muted); }
 
 .mc-vimage { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: auto; }

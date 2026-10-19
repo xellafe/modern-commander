@@ -1,8 +1,10 @@
 import { expect, test } from "vitest";
 import { lineCache } from "../state/lineCache";
+import { LINE_END } from "../ipc/api";
+import type { Mark } from "../ipc/types";
 import {
-  isLineStart, lastPageTop, lineAt, mergeMarks, nearestMark, nextStart, prevLineStart, queueNav, renderSlice, stepDown,
-  stepUp, visibleLines, wholeLines, type NavCtx, type Scans,
+  columnHits, isLineStart, lastPageTop, lineAt, lineExtent, maxLeft, mergeMarks, nearestMark, nextStart, prevLineStart,
+  queueNav, renderSlice, stepDown, stepUp, visibleLines, wholeLines, type Columns, type NavCtx, type Scans,
 } from "./longLines";
 import type { Win } from "./textPaging";
 
@@ -303,4 +305,84 @@ test("visibleLines: window first, then the cached next, without the empty line a
     { start: 103, end: 104, next: 105 },
     { start: 105, end: 106, next: 107 },
   ]);
+});
+
+test("columnHits: one request for all rows, each from its nearest mark; progress and hits become marks, eol widths", async () => {
+  const cache = lineCache(`col${++tabs}`, "utf-8");
+  cache.marks.set(0, [{ offset: 1 << 20, column: 900_000 }, { offset: 2 << 20, column: 1_900_000 }]);
+  const lines = [{ start: 0, end: null, next: null }, { start: 500, end: 550, next: 551 }];
+  const calls: [Mark[], number][] = [];
+  const columns: Columns = async (ls, from, target, onProgress) => {
+    calls.push([from, target]);
+    expect(ls).toEqual(lines);
+    onProgress({ index: 0, mark: { offset: 3 << 20, column: 2_900_000 } });
+    return [{ offset: 5_000_000, column: 3_000_000, eol: false }, { offset: 550, column: 50, eol: true }];
+  };
+  expect(await columnHits(cache, lines, 3_000_000, columns)).toEqual([
+    { offset: 5_000_000, column: 3_000_000, eol: false },
+    { offset: 550, column: 50, eol: true },
+  ]);
+  expect(calls).toEqual([[[{ offset: 2 << 20, column: 1_900_000 }, { offset: 500, column: 0 }], 3_000_000]]);
+  expect(cache.marks.get(0)!.map((m) => m.column)).toEqual([900_000, 1_900_000, 2_900_000, 3_000_000]);
+  expect(cache.widths.get(500)).toBe(50);
+  expect(cache.marks.has(500)).toBe(false);
+});
+
+test("columnHits: a row of known width shorter than the target does not go to the backend", async () => {
+  const cache = lineCache(`col${++tabs}`, "utf-8");
+  cache.widths.set(0, 40);
+  const lines = [{ start: 0, end: 45, next: 46 }, { start: 46, end: 300, next: 301 }];
+  const calls: Mark[][] = [];
+  const columns: Columns = async (ls, from) => {
+    calls.push(from);
+    expect(ls).toEqual([lines[1]]);
+    return [{ offset: 146, column: 100, eol: false }];
+  };
+  const hits = await columnHits(cache, lines, 100, columns);
+  expect(hits).toEqual([{ offset: 45, column: 40, eol: true }, { offset: 146, column: 100, eol: false }]);
+  expect(calls).toEqual([[{ offset: 46, column: 0 }]]);
+  // Fine riga: tutte le larghezze note, nessuna richiesta.
+  cache.widths.set(46, 254);
+  expect((await columnHits(cache, lines, LINE_END, columns)).map((h) => h.column)).toEqual([40, 254]);
+  expect(calls.length).toBe(1);
+});
+
+test("columnHits: a hit close to a known point is not stored, so ← → do not pile up marks", async () => {
+  const cache = lineCache(`col${++tabs}`, "utf-8");
+  const lines = [{ start: 0, end: null, next: null }];
+  let at = 0;
+  const columns: Columns = async (_ls, _from, target) => [{ offset: target + at, column: target, eol: false }];
+  await columnHits(cache, lines, 10, columns); // vicino all'inizio riga
+  expect(cache.marks.get(0)).toBeUndefined();
+  at = 1 << 20;
+  await columnHits(cache, lines, 10, columns);
+  await columnHits(cache, lines, 11, columns); // a un carattere dal punto appena salvato
+  expect(cache.marks.get(0)).toEqual([{ offset: (1 << 20) + 10, column: 10 }]);
+});
+
+test("columnHits: results arriving after an encoding change are not cached", async () => {
+  const id = `col${++tabs}`;
+  const cache = lineCache(id, "utf-8");
+  const lines = [{ start: 0, end: null, next: null }, { start: 10, end: 20, next: 21 }];
+  const columns: Columns = async (_ls, _from, _target, onProgress) => {
+    lineCache(id, "windows-1252"); // la stessa cache, reimpostata sul posto
+    onProgress({ index: 0, mark: { offset: 3 << 20, column: 3 << 20 } });
+    return [{ offset: 5 << 20, column: 5 << 20, eol: false }, { offset: 20, column: 10, eol: true }];
+  };
+  await columnHits(cache, lines, 5 << 20, columns);
+  expect(cache.marks.size).toBe(0);
+  expect(cache.widths.size).toBe(0);
+});
+
+test("lineExtent: exact widths when known, otherwise bytes (halved in UTF-16); maxLeft keeps the rail within 0…1", () => {
+  const cache = lineCache(`col${++tabs}`, "utf-8");
+  const lines = [{ start: 0, end: 30, next: 31 }, { start: 31, end: 50, next: 51 }];
+  expect(lineExtent(lines, cache, 1000, 1)).toBe(30);
+  cache.widths.set(31, 70); // tab: più colonne che byte
+  expect(lineExtent(lines, cache, 1000, 1)).toBe(70);
+  expect(lineExtent([{ start: 2, end: null, next: null }], cache, 1002, 2)).toBe(500); // fino a fine file
+  expect(lineExtent([], cache, 1000, 1)).toBe(0);
+  expect(maxLeft(70, 50)).toBe(21);
+  expect(maxLeft(30, 50)).toBe(0);
+  expect(21 / Math.max(1, maxLeft(70, 50))).toBe(1);
 });

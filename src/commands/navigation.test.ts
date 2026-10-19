@@ -99,7 +99,7 @@ test("ensureDirTab returns the directory tab itself, the opener from a file tab,
 test("closing a viewer tab frees its viewer state, closing the last tab of the last group does not", () => {
   useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\f.txt", mode: "viewer" }));
   const id = activeTab(useLayout.getState()).id;
-  useViewers.setState({ states: { [id]: { mode: "text", encoding: "utf-8", wrap: false, top: 0 }, t1: { mode: "hex", encoding: "utf-8", wrap: false, top: 0 } } });
+  useViewers.setState({ states: { [id]: { mode: "text", encoding: "utf-8", wrap: false, top: 0, left: 0 }, t1: { mode: "hex", encoding: "utf-8", wrap: false, top: 0, left: 0 } } });
   closeTab(id);
   expect(Object.keys(useViewers.getState().states)).toEqual(["t1"]);
   closeTab("t1"); // l'ultima scheda dell'ultimo gruppo resta
@@ -114,7 +114,7 @@ test("closing the only tab of the last group when it is a file tab turns it into
     activeGroupId: "g1",
     activationOrder: ["g1"],
   });
-  useViewers.setState({ states: { f1: { mode: "text", encoding: "utf-8", wrap: false, top: 0 } } });
+  useViewers.setState({ states: { f1: { mode: "text", encoding: "utf-8", wrap: false, top: 0, left: 0 } } });
   closeTab("f1");
   const l = useLayout.getState();
   expect(l.tabs.f1).toBeUndefined();

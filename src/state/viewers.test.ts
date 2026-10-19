@@ -8,7 +8,7 @@ test("initial mode and encoding", () => {
   expect(initialViewerState("a.png", txt, W, true).mode).toBe("image");
   expect(initialViewerState("a.dat", new Uint8Array([1, 0, 2]), W, true).mode).toBe("hex");
   expect(initialViewerState("a.txt", new Uint8Array([0xff, 0xfe, 0x61, 0]), W, true))
-    .toEqual({ mode: "text", encoding: "utf-16le", wrap: false, top: 2 }); // il BOM non si mostra
+    .toEqual({ mode: "text", encoding: "utf-16le", wrap: false, top: 2, left: 0 }); // il BOM non si mostra
   expect(initialViewerState("a.md", txt, W, true).mode).toBe("text"); // il Markdown renderizzato è dell'ispettore
 });
 
@@ -36,7 +36,7 @@ test("the store merges patches per tab and dispose forgets the tab", () => {
   const { set, dispose } = useViewers.getState();
   set("t1", initialViewerState("a.txt", new TextEncoder().encode("x"), W, true));
   set("t1", { top: 40, wrap: true });
-  expect(useViewers.getState().states.t1).toEqual({ mode: "text", encoding: "utf-8", wrap: true, top: 40 });
+  expect(useViewers.getState().states.t1).toEqual({ mode: "text", encoding: "utf-8", wrap: true, top: 40, left: 0 });
   dispose("t1");
   expect(useViewers.getState().states.t1).toBeUndefined();
 });

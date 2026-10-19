@@ -152,7 +152,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
         </div>
       ) : state && size !== null ? (
         state.mode === "text" && !state.wrap ? (
-          <LinesPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} left={0} encoding={state.encoding} onBusy={() => {}} onError={(e) => setError(toAppError(e))} />
+          <LinesPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} left={state.left} encoding={state.encoding} onBusy={() => {}} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "text" ? (
           <TextPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} encoding={state.encoding} wrap={state.wrap} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "hex" ? (
