@@ -79,6 +79,18 @@ test("nextLineStart e lineStart passano i parametri al backend", async () => {
   });
 });
 
+test("columnOffsets passa encoding, punti di partenza e target", async () => {
+  const { columnOffsets, LINE_END } = await import("./api");
+  vi.mocked(invoke).mockResolvedValue([{ offset: 3, column: 3, eol: true }]);
+  expect(await columnOffsets(1, "C:\a", "utf-8", [{ offset: 0, column: 0 }], LINE_END, () => {})).toEqual([
+    { offset: 3, column: 3, eol: true },
+  ]);
+  expect(invoke).toHaveBeenCalledWith("column_offsets", {
+    requestId: 1, path: "C:\a", encoding: "utf-8", from: [{ offset: 0, column: 0 }], target: LINE_END,
+    onProgress: expect.anything(),
+  });
+});
+
 test("thumbnail legge larghezza e altezza little-endian e lascia i pixel RGBA", async () => {
   const { thumbnail } = await import("./api");
   const buf = new Uint8Array([2, 0, 0, 0, 1, 0, 0, 0, 10, 20, 30, 255, 40, 50, 60, 255]).buffer;

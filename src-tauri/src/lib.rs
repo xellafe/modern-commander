@@ -53,6 +53,7 @@ pub fn run() {
             fs::scan_tree,
             fs::next_line_start,
             fs::line_start,
+            fs::column_offsets,
             fs::calc_hash,
             archive::list_archive,
             requests::cancel_request,

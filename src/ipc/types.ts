@@ -68,6 +68,25 @@ export interface FileInfo {
   attributes: number;
 }
 
+/** fs/columns.rs: confine di carattere sulla riga, con la colonna dove inizia quel carattere. */
+export interface Mark {
+  offset: number;
+  column: number;
+}
+
+/** `eol`: la riga finisce prima della colonna chiesta; `offset` è il CR, l'LF o la dimensione del file. */
+export interface ColumnHit {
+  offset: number;
+  column: number;
+  eol: boolean;
+}
+
+/** Punto di controllo del conteggio `index`-esimo di `columnOffsets`. */
+export interface ColumnProgress {
+  index: number;
+  mark: Mark;
+}
+
 /** fs/scan.rs. `rel`: percorso relativo alla cartella scandita, con `\`. */
 export interface ScanEntry {
   rel: string;

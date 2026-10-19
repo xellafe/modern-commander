@@ -21,7 +21,7 @@ fn is_lf(unit: &[u8], big_endian: bool) -> bool {
 }
 
 /// Legge fino a `len` byte da `offset` in `buf` (svuotato prima); più corto solo a fine file.
-fn read_block(f: &mut File, offset: u64, len: usize, buf: &mut Vec<u8>, path: &Path) -> Result<(), AppError> {
+pub(super) fn read_block(f: &mut File, offset: u64, len: usize, buf: &mut Vec<u8>, path: &Path) -> Result<(), AppError> {
     let err = |e: std::io::Error| AppError::from_io(&e, path);
     buf.clear();
     f.seek(SeekFrom::Start(offset)).map_err(err)?;

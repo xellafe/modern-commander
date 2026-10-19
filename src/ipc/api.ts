@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ArchiveListing, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
+import type { ArchiveListing, ColumnHit, ColumnProgress, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -82,6 +82,27 @@ export const lineStart = (
   const channel = new Channel<number>();
   channel.onmessage = onProgress;
   return invoke<number>("line_start", { requestId, path, at, unit, bigEndian, onProgress: channel });
+};
+
+/** `target` di `columnOffsets` che chiede la fine riga. */
+export const LINE_END = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Per ogni punto di `from` (confine di carattere con la sua colonna), il primo carattere che occupa la colonna `target`
+ * o la fine riga (`eol`). `onProgress` riceve i punti di controllo con la posizione in `from`. `cancelRequest(requestId)`
+ * annulla tutta la richiesta.
+ */
+export const columnOffsets = (
+  requestId: number,
+  path: string,
+  encoding: string,
+  from: Mark[],
+  target: number,
+  onProgress: (p: ColumnProgress) => void,
+) => {
+  const channel = new Channel<ColumnProgress>();
+  channel.onmessage = onProgress;
+  return invoke<ColumnHit[]>("column_offsets", { requestId, path, encoding, from, target, onProgress: channel });
 };
 
 /** Hash del file in esadecimale minuscolo; `cancelRequest(requestId)` lo annulla (errore `CANCELLED`). */
