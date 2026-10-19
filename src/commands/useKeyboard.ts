@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { activeTab, useLayout } from '../state/layout';
 import { chordFromEvent } from './keys';
 import { executeCommand, getCommand, shouldExecute } from './registry';
 
@@ -17,11 +18,12 @@ export function useKeyboard(keymap: Map<string, string>): void {
       const id = keymap.get(chordFromEvent(e));
       const cmd = id === undefined ? undefined : getCommand(id);
       const focusInText = focusInTextOrDialog();
+      const dirTab = !activeTab(useLayout.getState()).file;
       // nessun binding, comando non registrato o focus in un campo: lascia l'evento al browser
-      if (!cmd || !shouldExecute(cmd, { repeat: false, focusInText })) return;
+      if (!cmd || !shouldExecute(cmd, { repeat: false, focusInText, dirTab })) return;
       e.preventDefault(); // anche Alt+F4, che deve passare da cm_Exit
       // l'auto-repeat è consumato ma non riesegue il comando, salvo opt-in
-      if (shouldExecute(cmd, { repeat: e.repeat, focusInText })) executeCommand(cmd.id).catch(console.error);
+      if (shouldExecute(cmd, { repeat: e.repeat, focusInText, dirTab })) executeCommand(cmd.id).catch(console.error);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

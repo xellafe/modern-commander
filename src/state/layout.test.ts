@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import {
-  activateGroup, activateTab, closeTab, cycleTab, focusAdjacentGroup, initialLayout,
-  moveTab, newTab, setTabPath, splitGroup, targetGroup, useLayout,
+  activateGroup, activateTab, activeTab, closeTab, cycleTab, focusAdjacentGroup, initialLayout,
+  moveTab, newTab, openFileTab, setTabPath, splitGroup, targetGroup, useLayout,
 } from './layout';
 
 test('the default layout opens two groups on C:\\, never on a drive that may be missing', () => {
@@ -143,4 +143,50 @@ test('useLayout starts with C:\\ and D:\\ and wraps the functions', () => {
   expect(st.groups).toHaveLength(2);
   st.focusAdjacentGroup(1);
   expect(useLayout.getState().activeGroupId).toBe(st.groups[1].id);
+});
+
+test('openFileTab opens after the active tab and remembers the opener', () => {
+  let s = initialLayout(['C:\\a']); const g = s.groups[0].id; const opener = s.groups[0].activeTabId;
+  s = openFileTab(s, g, { path: 'C:\\a\\f.txt', mode: 'viewer' });
+  const t = activeTab(s);
+  expect(t).toMatchObject({ path: 'C:\\a', file: { path: 'C:\\a\\f.txt', mode: 'viewer' }, returnTo: opener });
+  expect(s.groups[0].tabIds).toEqual([opener, t.id]);
+});
+
+test('closing a file tab goes back to its opener', () => {
+  let s = initialLayout(['C:\\a']); const g = s.groups[0].id; const a = s.groups[0].activeTabId;
+  s = newTab(s, g, 'C:\\b');                                              // [a, b*]
+  s = activateTab(s, a);                                                  // [a*, b]
+  s = openFileTab(s, g, { path: 'C:\\a\\f', mode: 'viewer' });            // [a, f*, b]
+  s = closeTab(s, activeTab(s).id);
+  expect(activeTab(s).id).toBe(a);                                        // senza returnTo sarebbe b
+});
+
+test('closing a file tab whose opener is gone falls back to the right neighbour', () => {
+  let s = initialLayout(['C:\\a']); const g = s.groups[0].id; const a = s.groups[0].activeTabId;
+  s = newTab(s, g, 'C:\\b'); const b = activeTab(s).id;                   // [a, b*]
+  s = activateTab(s, a);
+  s = openFileTab(s, g, { path: 'C:\\a\\f', mode: 'viewer' });            // [a, f*, b]
+  const f = activeTab(s).id;
+  s = closeTab(s, a);
+  s = closeTab(s, f);
+  expect(activeTab(s).id).toBe(b);
+});
+
+test('same file and mode reuses the tab, another mode opens a new one', () => {
+  let s = initialLayout(['C:\\a']); const g = s.groups[0].id;
+  s = openFileTab(s, g, { path: 'C:\\a\\F.txt', mode: 'viewer' }); const v = activeTab(s).id;
+  s = activateTab(s, s.groups[0].tabIds[0]);
+  s = openFileTab(s, g, { path: 'c:\\a\\f.txt', mode: 'viewer' });
+  expect(activeTab(s).id).toBe(v);
+  s = openFileTab(s, g, { path: 'C:\\a\\F.txt', mode: 'editor' });
+  expect(s.groups[0].tabIds).toHaveLength(3);
+});
+
+test('splitting from a file tab opens the containing folder', () => {
+  let s = initialLayout(['C:\\a']);
+  s = openFileTab(s, s.groups[0].id, { path: 'C:\\a\\f.txt', mode: 'viewer' });
+  s = splitGroup(s, s.groups[0].id);
+  expect(activeTab(s)).toMatchObject({ path: 'C:\\a' });
+  expect(activeTab(s).file).toBeUndefined();
 });

@@ -14,15 +14,16 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
   const { t } = useTranslation();
   const tabId = group.activeTabId;
   const path = useLayout((s) => s.tabs[tabId].path);
+  const isFile = useLayout((s) => !!s.tabs[tabId].file);
   const hasView = useTabViews((s) => tabId in s.views);
   const overlay = useTabViews((s) => (s.overlay?.tabId === tabId ? s.overlay : null));
   const notice = useTabViews((s) => (s.notice?.tabId === tabId ? s.notice : null));
   const filter = useTabViews((s) => s.views[tabId]?.filter ?? "");
 
-  // Le schede si caricano la prima volta che diventano visibili (avvio, "+", divisione).
+  // Le schede si caricano la prima volta che diventano visibili (avvio, "+", divisione); quelle di file non hanno elenco.
   useEffect(() => {
-    if (!hasView) void views().load(tabId, path);
-  }, [tabId, hasView]); // il percorso conta solo al primo caricamento: dopo lo cambia load()
+    if (!hasView && !isFile) void views().load(tabId, path);
+  }, [tabId, hasView, isFile]); // il percorso conta solo al primo caricamento: dopo lo cambia load()
 
   return (
     <section
@@ -35,8 +36,9 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
       }}
     >
       <TabStrip group={group} />
-      <Breadcrumb key={tabId} tabId={tabId} path={path} />
-      <div className="mc-group-body">
+      {/* Il corpo di viewer ed editor arriva con i loro task: per ora una scheda di file mostra solo la barra. */}
+      {!isFile && <Breadcrumb key={tabId} tabId={tabId} path={path} />}
+      {!isFile && <div className="mc-group-body">
         <FileList tabId={tabId} active={active} />
         {overlay?.kind === "menu" && <PathMenu key={overlay.title} tabId={tabId} title={overlay.title} items={overlay.items} />}
         {overlay?.kind === "quickSearch" && (
@@ -52,7 +54,7 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
             {notice.path && <span>{notice.path}</span>}
           </div>
         )}
-      </div>
+      </div>}
     </section>
   );
 }

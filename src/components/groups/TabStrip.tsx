@@ -1,9 +1,9 @@
-import { Plus, X } from "lucide-react";
+import { Eye, Pencil, Plus, X } from "lucide-react";
 import type { PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { closeTab } from "../../commands/navigation";
 import { DRIVES, folderName } from "../../lib/paths";
-import { useLayout, type Group } from "../../state/layout";
+import { useLayout, type Group, type Tab } from "../../state/layout";
 
 // Trascinamento delle schede con pointer events e non con HTML5 DnD: su Windows il DnD HTML5
 // funziona solo disattivando il gestore drag&drop di Tauri, che serve per il drop da Explorer.
@@ -61,7 +61,8 @@ export function TabStrip({ group }: { group: Group }) {
   const { t } = useTranslation();
   const tabs = useLayout((s) => s.tabs);
   const newTab = useLayout((s) => s.newTab);
-  const label = (path: string) => (path === DRIVES ? t("groups.drives") : folderName(path));
+  const label = (tab: Tab) =>
+    tab.file ? folderName(tab.file.path) : tab.path === DRIVES ? t("groups.drives") : folderName(tab.path);
 
   return (
     <div className="mc-tabs">
@@ -70,12 +71,13 @@ export function TabStrip({ group }: { group: Group }) {
           key={id}
           data-index={i}
           className={`mc-tab${id === group.activeTabId ? " on" : ""}`}
-          title={tabs[id].path}
+          title={tabs[id].file?.path ?? tabs[id].path}
           onPointerDown={(e) => startTabDrag(e, id, group.id, i)}
           onMouseDown={(e) => e.button === 1 && e.preventDefault()} // niente autoscroll col tasto centrale
           onAuxClick={(e) => e.button === 1 && closeTab(id)}
         >
-          <span className="mc-tab-label">{label(tabs[id].path)}</span>
+          {tabs[id].file && (tabs[id].file!.mode === "editor" ? <Pencil size={12} aria-hidden /> : <Eye size={12} aria-hidden />)}
+          <span className="mc-tab-label">{label(tabs[id])}</span>
           <button
             className="mc-tab-close"
             aria-label={t("groups.closeTab")}

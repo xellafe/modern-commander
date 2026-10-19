@@ -6,7 +6,7 @@ import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
 import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
 import { cancelAllAndWait, unfinishedJobs, useJobs } from "../state/jobs";
-import { targetGroup, useLayout } from "../state/layout";
+import { activeTab, targetGroup, useLayout } from "../state/layout";
 import {
   finishSizing, hasSize, invertMarks, markRange, parentPath, sizable, startSizing, toggleMark,
   type SortKey, type TabView,
@@ -94,6 +94,22 @@ export function sortBy(tabId: string, key: SortKey) {
   if (v) views().rebuild(tabId, { sort: nextSort(v.sort, key) });
 }
 
+/**
+ * Id di una scheda cartella nel gruppo attivo, attivata: se la scheda attiva è un file torna a chi l'ha aperta
+ * (se è ancora lì e mostra una cartella), altrimenti apre una scheda cartella su `path` (default: la cartella del file).
+ * Chi sta per caricare `path` lo passa, così il primo caricamento della scheda nuova (Group.tsx) è già quello giusto.
+ */
+export function ensureDirTab(path?: string): string {
+  const tab = activeTab(layout());
+  if (!tab.file) return tab.id;
+  const l = layout();
+  const group = l.groups.find((g) => g.id === l.activeGroupId)!;
+  const back = tab.returnTo && group.tabIds.includes(tab.returnTo) && !l.tabs[tab.returnTo].file ? tab.returnTo : null;
+  if (back) l.activateTab(back);
+  else l.newTab(group.id, path ?? tab.path);
+  return activeTab(layout()).id;
+}
+
 /** Chiude la scheda e ne libera lo stato (watcher, listing). L'ultima scheda dell'ultimo gruppo resta. */
 export function closeTab(tabId: string) {
   layout().closeTab(tabId);
@@ -113,6 +129,12 @@ function openInAdjacentGroup(delta: 1 | -1) {
   const i = l.groups.findIndex((g) => g.id === l.activeGroupId);
   // Senza un gruppo da quella parte si apre nel gruppo stesso (come Ctrl+←/→ di TC nel pannello omonimo).
   const g = l.groups[i + delta] ?? l.groups[i];
+  // Una scheda di file non ha elenco: la cartella si apre in una scheda nuova (che Group.tsx carica), senza spostare il gruppo attivo.
+  if (l.tabs[g.activeTabId].file) {
+    l.newTab(g.id, target);
+    l.activateGroup(l.activeGroupId);
+    return;
+  }
   return views().load(g.activeTabId, target);
 }
 
@@ -167,8 +189,10 @@ export async function exitCancellingJobs() {
   }
 }
 
-type Def = [id: string, run: Command["run"], opts?: { repeat?: boolean; global?: boolean }];
+type Def = [id: string, run: Command["run"], opts?: { repeat?: boolean; global?: boolean; group?: boolean }];
 const R = { repeat: true };
+const G = { group: true };
+const RG = { repeat: true, group: true };
 
 const DEFS: Def[] = [
   // Cursore e marcatura
@@ -216,13 +240,13 @@ const DEFS: Def[] = [
   ["cm_QuickFilter", () => views().setOverlay({ kind: "filter", tabId: activeTabContext().tabId })],
 
   // Schede e gruppi
-  ["cm_OpenNewTab", () => layout().newTab(layout().activeGroupId, activeTabContext().path)],
-  ["cm_CloseCurrentTab", () => closeTab(activeTabContext().tabId)],
-  ["cm_SwitchToNextTab", () => layout().cycleTab(layout().activeGroupId, 1), R],
-  ["cm_SwitchToPreviousTab", () => layout().cycleTab(layout().activeGroupId, -1), R],
-  ["mc_FocusNextGroup", () => layout().focusAdjacentGroup(1)],
-  ["mc_FocusPrevGroup", () => layout().focusAdjacentGroup(-1)],
-  ["mc_SplitGroup", () => layout().splitGroup(layout().activeGroupId)],
+  ["cm_OpenNewTab", () => layout().newTab(layout().activeGroupId, activeTabContext().path), G],
+  ["cm_CloseCurrentTab", () => closeTab(activeTabContext().tabId), G],
+  ["cm_SwitchToNextTab", () => layout().cycleTab(layout().activeGroupId, 1), RG],
+  ["cm_SwitchToPreviousTab", () => layout().cycleTab(layout().activeGroupId, -1), RG],
+  ["mc_FocusNextGroup", () => layout().focusAdjacentGroup(1), G],
+  ["mc_FocusPrevGroup", () => layout().focusAdjacentGroup(-1), G],
+  ["mc_SplitGroup", () => layout().splitGroup(layout().activeGroupId), G],
   ["mc_OpenInPrevGroup", () => openInAdjacentGroup(-1)],
   ["mc_OpenInNextGroup", () => openInAdjacentGroup(1)],
   ["cm_Exchange", async () => {
@@ -231,6 +255,7 @@ const DEFS: Def[] = [
     if (!other) return;
     const a = activeTabContext().tabId;
     const b = l.groups.find((g) => g.id === other)!.activeTabId;
+    if (l.tabs[b].file) return; // niente da scambiare con un viewer/editor
     await Promise.all([views().load(a, l.tabs[b].path), views().load(b, l.tabs[a].path)]);
   }],
 
@@ -253,6 +278,6 @@ export const NAVIGATION_COMMAND_IDS = DEFS.map(([id]) => id);
 
 export function registerNavigationCommands() {
   for (const [id, run, o] of DEFS) {
-    registerCommand({ id, titleKey: `commands.${id}`, when: o?.global ? "global" : "fileList", repeat: o?.repeat, run });
+    registerCommand({ id, titleKey: `commands.${id}`, when: o?.global ? "global" : o?.group ? "group" : "fileList", repeat: o?.repeat, run });
   }
 }

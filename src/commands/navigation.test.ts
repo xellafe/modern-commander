@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { Entry } from "../ipc/types";
-import { useLayout } from "../state/layout";
+import { activeTab, openFileTab, useLayout } from "../state/layout";
 import { activeTabContext, useTabViews } from "../state/tabViews";
-import { NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
+import { ensureDirTab, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
@@ -64,4 +64,76 @@ test("every navigation command has a title in both languages", async () => {
     expect(en.commands[id], id).toBeTruthy();
     expect(it.commands[id], id).toBeTruthy();
   }
+});
+
+test("ensureDirTab returns the directory tab itself, the opener from a file tab, or opens a new directory tab", () => {
+  expect(ensureDirTab()).toBe("t1");
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\f.txt", mode: "viewer" }));
+  expect(ensureDirTab()).toBe("t1");
+  expect(activeTab(useLayout.getState()).id).toBe("t1");
+  // L'aprente è stato chiuso: nasce una scheda cartella sulla cartella del file.
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\g.txt", mode: "viewer" }));
+  useLayout.setState({ tabs: { ...useLayout.getState().tabs, [activeTab(useLayout.getState()).id]: { ...activeTab(useLayout.getState()), returnTo: "gone" } } });
+  const id = ensureDirTab();
+  expect(activeTab(useLayout.getState())).toMatchObject({ id, path: "C:\\x" });
+  expect(activeTab(useLayout.getState()).file).toBeUndefined();
+});
+
+test("tab and group commands are 'group', so they stay available on file tabs", async () => {
+  const { getCommand } = await import("./registry");
+  for (const id of ["cm_OpenNewTab", "cm_CloseCurrentTab", "cm_SwitchToNextTab", "cm_SwitchToPreviousTab", "mc_FocusNextGroup", "mc_FocusPrevGroup", "mc_SplitGroup"]) {
+    expect(getCommand(id)?.when).toBe("group");
+  }
+});
+
+test("ensureDirTab(path) opens the fallback tab directly on the target, so Group's initial load and the caller agree", () => {
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\f.txt", mode: "viewer" }));
+  useLayout.setState({ tabs: { ...useLayout.getState().tabs, [activeTab(useLayout.getState()).id]: { ...activeTab(useLayout.getState()), returnTo: "gone" } } });
+  const id = ensureDirTab("C:\\target");
+  expect(activeTab(useLayout.getState())).toMatchObject({ id, path: "C:\\target" });
+  expect(activeTab(useLayout.getState()).file).toBeUndefined();
+});
+
+test("ensureDirTab does not go back to an opener that is itself a file tab", () => {
+  const l = useLayout.getState();
+  useLayout.setState(openFileTab(l, "g1", { path: "C:\\x\\a.txt", mode: "viewer" }));
+  const a = activeTab(useLayout.getState()).id;
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\b.txt", mode: "viewer" })); // returnTo = a (file)
+  const id = ensureDirTab("C:\\target");
+  expect(id).not.toBe(a);
+  expect(activeTab(useLayout.getState())).toMatchObject({ id, path: "C:\\target" });
+  expect(activeTab(useLayout.getState()).file).toBeUndefined();
+});
+
+const twoGroupsWithFileOnTheRight = () => {
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["t1"], activeTabId: "t1" }, { id: "g2", tabIds: ["t2"], activeTabId: "t2" }],
+    tabs: { t1: { id: "t1", path: "C:\\x" }, t2: { id: "t2", path: "C:\\z", file: { path: "C:\\z\\f.txt", mode: "viewer" } } },
+    activeGroupId: "g1",
+    activationOrder: ["g1", "g2"],
+  });
+};
+
+test("cm_Exchange does nothing when the other group shows a file tab", async () => {
+  twoGroupsWithFileOnTheRight();
+  const before = useLayout.getState().tabs;
+  listDir.mockClear();
+  await executeCommand("cm_Exchange");
+  expect(listDir).not.toHaveBeenCalled();
+  expect(useLayout.getState().tabs).toBe(before);
+  expect(useTabViews.getState().views.t2).toBeUndefined();
+});
+
+test("mc_OpenInNextGroup opens a new folder tab when the target group shows a file tab, without loading into it", async () => {
+  twoGroupsWithFileOnTheRight();
+  await executeCommand("mc_CursorDown"); // da '..' a 'sub'
+  listDir.mockClear();
+  await executeCommand("mc_OpenInNextGroup");
+  const l = useLayout.getState();
+  expect(l.groups[1].tabIds).toHaveLength(2);
+  expect(l.tabs[l.groups[1].activeTabId]).toMatchObject({ path: "C:\\x\\sub" });
+  expect(l.tabs[l.groups[1].activeTabId].file).toBeUndefined();
+  expect(l.tabs.t2.file).toBeDefined();
+  expect(useTabViews.getState().views.t2).toBeUndefined();
+  expect(l.activeGroupId).toBe("g1"); // come con un load: il gruppo attivo non cambia
 });
