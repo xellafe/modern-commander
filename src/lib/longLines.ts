@@ -153,16 +153,19 @@ export function nextStart(ctx: NavCtx, s: number): Promise<number> {
   if (running) return running;
   const { win, cache } = ctx;
   const encoding = cache.encoding;
-  // Nella finestra non c'è LF da `s` alla sua fine: si cerca da lì, o dal punto più avanzato già noto.
+  // Nella finestra non c'è LF da `s` alla sua fine: si riparte dal punto più avanzato fra questo e `fwd`.
   const winEnd = win && s >= win.base ? win.base + win.buf.length : s;
-  const from = cache.fwd.get(s) ?? Math.max(s, winEnd);
-  const p = ctx.scans
+  const from = Math.max(cache.fwd.get(s) ?? s, winEnd);
+  const p: Promise<number> = ctx.scans
     .next(from, (o) => sameEncoding(cache, encoding) && cache.fwd.set(s, o))
     .then((r) => {
       if (sameEncoding(cache, encoding)) cache.next.set(s, r);
       return r;
     })
-    .finally(() => ctx.inflight.delete(s));
+    .finally(() => {
+      // Dopo un annullamento la riga può avere già una scansione più recente: quella resta.
+      if (ctx.inflight.get(s) === p) ctx.inflight.delete(s);
+    });
   ctx.inflight.set(s, p);
   return p;
 }
@@ -189,18 +192,28 @@ export async function stepUp(ctx: NavCtx, top: number): Promise<number | null> {
   if (p === null) {
     const encoding = cache.encoding;
     p = await ctx.scans.start(cache.back.get(top) ?? top - ctx.unit, (o) => sameEncoding(cache, encoding) && cache.back.set(top, o));
+    p = Math.max(p, ctx.bom);
     if (sameEncoding(cache, encoding)) cache.next.set(p, top);
   }
   return Math.max(p, ctx.bom);
 }
 
-/** Inizio della riga che contiene `at`, mai prima del BOM: dalla finestra se basta, altrimenti dal backend. */
+/**
+ * Inizio della riga che contiene `at`, mai prima del BOM: dalla finestra se basta, altrimenti dal backend. In `back`
+ * sotto `at` restano l'avanzamento e poi il risultato: una ricerca ripetuta riparte da lì.
+ */
 export async function lineAt(ctx: NavCtx, at: number): Promise<number> {
   if (at <= ctx.bom) return ctx.bom;
   const here = ctx.win ? isLineStart(ctx.win, at, ctx.unit, ctx.bigEndian) : null;
   if (here) return at;
   // A metà riga l'unità prima di `at` non è un LF: `prevLineStart` trova l'inizio della riga stessa.
-  const s = (here === false ? prevLineStart(ctx.win!, at, ctx.unit, ctx.bigEndian) : null) ?? (await ctx.scans.start(at, () => {}));
+  const near = here === false ? prevLineStart(ctx.win!, at, ctx.unit, ctx.bigEndian) : null;
+  if (near !== null) return Math.max(near, ctx.bom);
+  const { cache } = ctx;
+  const encoding = cache.encoding;
+  const s = await ctx.scans.start(cache.back.get(at) ?? at, (o) => sameEncoding(cache, encoding) && cache.back.set(at, o));
+  // Solo a metà riga: per un inizio riga `back` riguarda la riga sopra (vedi `stepUp`).
+  if (s < at && sameEncoding(cache, encoding)) cache.back.set(at, s);
   return Math.max(s, ctx.bom);
 }
 

@@ -17,6 +17,12 @@ test("lineCache resets marks and widths on encoding change", () => {
   expect(u.encoding).toBe("utf-8");
   const w = lineCache("t1", "utf-16le");
   expect(w.next.size + w.fwd.size + w.back.size).toBe(0);
+  // stessa unità, altro ordine dei byte: gli LF trovati non valgono più
+  w.next.set(0, 10);
+  w.fwd.set(0, 10);
+  w.back.set(10, 0);
+  const be = lineCache("t1", "utf-16be");
+  expect(be.next.size + be.fwd.size + be.back.size).toBe(0);
   disposeLineCache("t1");
 });
 

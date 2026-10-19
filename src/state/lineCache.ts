@@ -28,7 +28,8 @@ export function lineCache(tabId: string, encoding: string): LineCache {
     return c;
   }
   if (c.encoding !== encoding) {
-    if (codeUnit(c.encoding) !== codeUnit(encoding)) {
+    // Gli LF dipendono dall'unità e, in UTF-16, dall'ordine dei byte.
+    if (codeUnit(c.encoding) !== codeUnit(encoding) || (c.encoding === "utf-16be") !== (encoding === "utf-16be")) {
       c.next.clear();
       c.fwd.clear();
       c.back.clear();

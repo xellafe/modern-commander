@@ -58,6 +58,8 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
   const active = useRef(new Map<number, { total: number; done: number }>());
   const inflight = useRef(new Map<number, Promise<number>>());
   const nav = useRef<Nav | null>(null);
+  // La normalizzazione in corso di `top`: i tasti premuti nel frattempo non ne lanciano altre.
+  const fixing = useRef<{ key: string; p: Promise<void> } | null>(null);
   // Cresce a ogni annullamento: un passo o un salto superato non sposta più `top`.
   const gen = useRef(0);
   const latest = useRef({ rows, unit, bigEndian, size, encoding, onBusy, onError });
@@ -68,6 +70,7 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
   const setTop = (to: number) => {
     valid.current = { top: to, encoding: latest.current.encoding };
     useViewers.getState().set(tabId, { top: to });
+    setTick((n) => n + 1); // anche senza spostamento: le righe in sospeso si richiedono di nuovo
   };
   const fail = (e: unknown) => {
     if ((e as Partial<AppError> | null)?.code !== "CANCELLED") latest.current.onError(e);
@@ -174,13 +177,23 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
   }
 
   // Arrivando dall'a capo attivo (o da un'altra codifica) `top` può cadere a metà riga: si riporta all'inizio.
-  async function normalize() {
+  // Una sola per `top` e codifica; dopo un annullamento (`gen` cambia) se ne lancia una nuova.
+  function normalize(): Promise<void> {
     const g = gen.current;
     const enc = latest.current.encoding;
-    await getBom();
     const t = getTop();
-    const s = await lineAt(ctx(await ensureWindow(t)), t);
-    if (g === gen.current && latest.current.encoding === enc && getTop() === t) setTop(s);
+    const key = `${t}|${enc}|${g}`;
+    if (fixing.current?.key !== key) {
+      const p: Promise<void> = (async () => {
+        await getBom();
+        const s = await lineAt(ctx(await ensureWindow(t)), t);
+        if (g === gen.current && latest.current.encoding === enc && getTop() === t) setTop(s);
+      })().finally(() => {
+        if (fixing.current?.p === p) fixing.current = null;
+      });
+      fixing.current = { key, p };
+    }
+    return fixing.current.p;
   }
 
   // Passi accodati: si avanza riga per riga, aspettando il backend quando una riga esce dalla finestra.
@@ -213,7 +226,11 @@ export function LinesPane({ tabId, path, size, top, encoding, onBusy, onError, r
         if ((nav.current.n === 0 || performance.now() - shown > 16) && !(await show())) return;
       }
     } finally {
-      if (g === gen.current) nav.current = null;
+      if (g === gen.current) {
+        nav.current = null;
+        // Anche se `top` non è cambiato: una navigazione richiede di nuovo le righe in sospeso.
+        setTick((n) => n + 1);
+      }
     }
   }
 

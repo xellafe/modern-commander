@@ -235,6 +235,52 @@ test("BOM: the first line starts after it and top never goes below it", async ()
   expect(await lastPageTop(c, 5)).toBe(3);
 });
 
+test("nextStart restarts from the furthest known point, fwd or the window end", async () => {
+  const { calls, scans } = backend(long);
+  const c = ctx(long, slice(long, 0, 60), scans);
+  c.cache.fwd.set(2, 20); // meno avanti della fine della finestra
+  expect(await nextStart(c, 2)).toBe(103);
+  expect(calls).toEqual([["next", 60]]);
+});
+
+test("a cancelled scan does not drop the newer scan of the same line", async () => {
+  const pending: { reject: (e: unknown) => void; resolve: (n: number) => void }[] = [];
+  const scans: Scans = {
+    next: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    start: async () => 0,
+  };
+  const c = ctx(long, slice(long, 0, 10), scans);
+  const first = nextStart(c, 2);
+  c.inflight.clear(); // come `cancel()` nel pannello
+  const second = nextStart(c, 2);
+  pending[0].reject(CANCELLED);
+  await expect(first).rejects.toBe(CANCELLED);
+  expect(c.inflight.get(2)).toBe(second);
+  pending[1].resolve(103);
+  expect(await second).toBe(103);
+  expect(c.inflight.size).toBe(0);
+});
+
+test("BOM: the line above found by the backend is cached under the real first line start", async () => {
+  const data = new Uint8Array([0xef, 0xbb, 0xbf, ...enc("x".repeat(100) + "\nb\n")]);
+  const { scans } = backend(data);
+  const c = ctx(data, slice(data, 50, 60), scans, 3);
+  expect(await stepUp(c, 104)).toBe(3);
+  expect(c.cache.next.get(3)).toBe(104);
+  expect(c.cache.next.has(0)).toBe(false);
+});
+
+test("lineAt keeps the backward progress and restarts from it", async () => {
+  const cancelled: Scans = { next: async () => 0, start: async (_at, onProgress) => { onProgress(30); throw CANCELLED; } };
+  const c = ctx(long, slice(long, 40, 20), cancelled);
+  await expect(lineAt(c, 80)).rejects.toBe(CANCELLED);
+  expect(c.cache.back.get(80)).toBe(30);
+  const { calls, scans } = backend(long);
+  c.scans = scans;
+  expect(await lineAt(c, 80)).toBe(2);
+  expect(calls).toEqual([["start", 30]]);
+});
+
 test("lineAt: inside the window no backend, outside the line start from the backend", async () => {
   const { calls, scans } = backend(long);
   expect(await lineAt(ctx(long, slice(long, 0, long.length), scans), 50)).toBe(2);
