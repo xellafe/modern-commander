@@ -58,3 +58,12 @@ test("thumbnail legge larghezza e altezza little-endian e lascia i pixel RGBA", 
   expect([t.width, t.height]).toEqual([2, 1]);
   expect([...t.data]).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
 });
+
+test("calcHash e listArchive passano id, percorso e parametri ai comandi", async () => {
+  const { calcHash, listArchive } = await import("./api");
+  vi.mocked(invoke).mockResolvedValueOnce("abc").mockResolvedValueOnce({ entries: [], total: 0, truncated: false });
+  expect(await calcHash(5, "C:\a", "sha256")).toBe("abc");
+  expect(invoke).toHaveBeenCalledWith("calc_hash", { requestId: 5, path: "C:\a", algo: "sha256" });
+  expect((await listArchive(6, "C:\a.zip", 500)).total).toBe(0);
+  expect(invoke).toHaveBeenCalledWith("list_archive", { requestId: 6, path: "C:\a.zip", limit: 500 });
+});

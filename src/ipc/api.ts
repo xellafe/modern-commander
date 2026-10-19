@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DirSizeEvent, Drive, Entry, FileInfo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry } from "./types";
+import type { ArchiveListing, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Prompt, PromptReply, ScanEntry } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -47,6 +47,17 @@ export const scanTree = (
   channel.onmessage = onBatch;
   return invoke<boolean>("scan_tree", { requestId, root, ...limits, onBatch: channel });
 };
+
+/** Hash del file in esadecimale minuscolo; `cancelRequest(requestId)` lo annulla (errore `CANCELLED`). */
+export const calcHash = (requestId: number, path: string, algo: HashAlgo) =>
+  invoke<string>("calc_hash", { requestId, path, algo });
+
+/**
+ * Prime `limit` voci dell'archivio (ZIP, 7z, TAR, TAR.GZ). `UNSUPPORTED` per estensione non riconosciuta o 7z con
+ * intestazioni cifrate (detail `encrypted`), `CORRUPT_ARCHIVE` se illeggibile; `cancelRequest(requestId)` lo annulla.
+ */
+export const listArchive = (requestId: number, path: string, limit: number) =>
+  invoke<ArchiveListing>("list_archive", { requestId, path, limit });
 
 export const onDirSize = (cb: (e: DirSizeEvent) => void): Promise<UnlistenFn> =>
   listen<DirSizeEvent>("dir-size", (e) => cb(e.payload));

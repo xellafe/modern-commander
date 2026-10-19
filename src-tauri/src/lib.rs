@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod config;
 pub mod elevation;
 pub mod error;
@@ -40,6 +41,8 @@ pub fn run() {
             fs::watch::unwatch_dir,
             fs::size::calc_dir_size,
             fs::scan_tree,
+            fs::calc_hash,
+            archive::list_archive,
             requests::cancel_request,
             fs::file_info,
             fs::read_chunk,

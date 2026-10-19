@@ -1,4 +1,4 @@
-// Rispecchia i tipi Rust (src-tauri/src/error.rs, fs/listing.rs, fs/content.rs, fs/drives.rs, ops/model.rs, ops/queue.rs).
+// Rispecchia i tipi Rust (src-tauri/src/error.rs, fs/listing.rs, fs/content.rs, fs/drives.rs, fs/hash.rs, archive/mod.rs, ops/model.rs, ops/queue.rs).
 
 export type ErrorCode =
   | "NOT_FOUND"
@@ -72,6 +72,23 @@ export interface FileInfo {
 export interface ScanEntry {
   rel: string;
   isDir: boolean;
+}
+
+export type HashAlgo = "md5" | "sha1" | "sha256";
+
+/** archive/mod.rs. `path` con `\`, senza barra finale. */
+export interface ArchiveEntry {
+  path: string;
+  isDir: boolean;
+  size: number;
+  modifiedMs: number | null;
+}
+
+/** `total`: voci totali, noto per ZIP e 7z; per TAR solo se l'elenco non si è fermato al limite. */
+export interface ArchiveListing {
+  entries: ArchiveEntry[];
+  total: number | null;
+  truncated: boolean;
 }
 
 export interface DirSizeEvent {

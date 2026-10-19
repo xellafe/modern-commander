@@ -2,6 +2,7 @@
 
 pub mod content;
 pub mod drives;
+pub mod hash;
 pub mod listing;
 pub mod scan;
 pub mod size;
@@ -98,4 +99,16 @@ pub async fn scan_tree(
         })
     })
     .await?
+}
+
+/// Hash del file (esadecimale minuscolo). Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+#[tauri::command]
+pub async fn calc_hash(
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    algo: hash::HashAlgo,
+) -> Result<String, AppError> {
+    let guard = requests.register(request_id);
+    blocking(move || hash::hash_file(Path::new(&path), algo, guard.flag())).await?
 }
