@@ -315,6 +315,15 @@ impl Executor for ElevatedExecutor {
     }
 }
 
+impl ElevatedExecutor {
+    /// Solo con `test-hooks`: manda una richiesta scritta a mano (per esempio senza le radici di `RootedExecutor`).
+    #[doc(hidden)]
+    #[cfg(feature = "test-hooks")]
+    pub fn send_raw(&self, req: Request) -> Result<(), AppError> {
+        self.call(req, None)
+    }
+}
+
 /// Solo con `test-hooks`: modalità `--test-pipe-server <cartella>` dell'eseguibile. Fa da server
 /// della pipe, lancia sé stesso come helper (senza elevazione e senza `MC_TEST_SERVER_EXE`, quindi
 /// con il confronto delle immagini di produzione) e gli fa creare `<cartella>`.

@@ -8,6 +8,7 @@ use super::exec::Executor;
 use super::model::{ConflictPolicy, Decision, FileItem, JobKind, JobSpec, Meta};
 use super::plan::{expand, expand_children, file_target, filter_of};
 use super::queue::{ErrorAction, Handle, JobState, Prompt, PromptReply};
+use super::rooted::{RootedExecutor, job_roots};
 use crate::error::{AppError, ErrorCode};
 use crate::fs::listing::FILETIME_UNIX_DIFF_MS;
 use crate::paths::{normalize_lexical, to_extended};
@@ -47,6 +48,7 @@ pub(crate) fn run(h: &Handle, exec: Arc<dyn Executor>, spec: &JobSpec) -> JobSta
         exec: exec.clone(),
         local: exec,
         elevate_all: false,
+        rooted: None,
         spec,
         items: Vec::new(),
         bytes: 0,
@@ -103,6 +105,8 @@ struct Runner<'a> {
     local: Arc<dyn Executor>,
     /// "Riprova come amministratore" per tutti: il resto del job passa per l'helper elevato.
     elevate_all: bool,
+    /// Radici del job risolte alla prima elevazione e riusate fino alla fine (vedi `rooted`).
+    rooted: Option<RootedExecutor>,
     spec: &'a JobSpec,
     /// Le `dst` restano quelle originali: le rinomine si applicano con `rewrite`.
     items: Vec<FileItem>,
@@ -228,10 +232,17 @@ impl Runner<'_> {
         if !(a.elevated || self.elevate_all) {
             return Ok(self.local.clone());
         }
-        self.h.elevated().inspect_err(|_| {
+        let inner = self.h.elevated().inspect_err(|_| {
             a.elevated = false;
             self.elevate_all = false;
-        })
+        })?;
+        // L'esecutore elevato cambia se l'helper è uscito ed è stato riavviato: le radici restano.
+        let x = match self.rooted.take() {
+            Some(r) => r.with_inner(inner),
+            None => RootedExecutor::new(inner, job_roots(self.spec)),
+        };
+        self.rooted = Some(x.clone());
+        Ok(Arc::new(x))
     }
 
     fn ask_error(&mut self, e: &AppError, deletable: bool) -> Result<ErrorAction, Stop> {

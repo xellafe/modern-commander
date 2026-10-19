@@ -3,13 +3,15 @@
 //! dopo un messaggio non valido o dopo 60 s senza richieste.
 
 use super::protocol::{Request, Response, read_msg, validate, write_msg};
+use super::pathlock::{PathLock, lock_ancestors, lock_with_item};
 use super::{PIPE_PREFIX, Pipe, owned, raw};
 use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::{Executor, LocalExecutor};
-use crate::paths::{normalize_lexical, same_path};
+use crate::paths::{normalize_lexical, same_path, to_extended};
 use std::ffi::OsString;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +19,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING,
+    SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
 use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows::Win32::System::Threading::{
@@ -142,9 +145,34 @@ pub fn run(pipe_name: &str, token: &str) -> i32 {
     0
 }
 
-/// Valida, normalizza i percorsi ed esegue con `LocalExecutor`.
-fn execute(req: &Request, out: &mut Pipe, cancel: &AtomicBool) -> Result<(), AppError> {
+/// Blocchi da tenere durante l'esecuzione di `req` (percorsi già validati; `lock_*` li normalizza).
+fn locks_for(req: &Request) -> Result<Vec<PathLock>, AppError> {
+    Ok(match req {
+        // La sorgente non può essere un collegamento: la copia elevata leggerebbe il file puntato.
+        Request::Copy { src, dst, .. } => vec![lock_with_item(src)?, lock_ancestors(dst)?],
+        // Un collegamento come bersaglio si sposta (o si elimina) come tale, senza seguirlo.
+        Request::Move { src, dst, .. } | Request::Rename { src, dst } => vec![lock_ancestors(src)?, lock_ancestors(dst)?],
+        Request::Delete { path, permanent: true, .. } | Request::Mkdir { path } => vec![lock_ancestors(path)?],
+        // Un collegamento non va nel Cestino come amministratore. Niente handle sull'elemento: senza
+        // `FILE_SHARE_DELETE` il Cestino fallirebbe; resta la finestra tra controllo e cestinazione.
+        Request::Delete { path, permanent: false, .. } => {
+            let lock = lock_ancestors(path)?;
+            let p = normalize_lexical(path);
+            if std::fs::symlink_metadata(to_extended(&p)).is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0) {
+                return Err(AppError { detail: Some("reparse_point".into()), ..AppError::new(ErrorCode::Unsupported, Some(&p)) });
+            }
+            vec![lock]
+        }
+        Request::List { path } => vec![lock_with_item(path)?],
+        Request::Hello { .. } | Request::Cancel => Vec::new(),
+    })
+}
+
+/// Valida, normalizza e blocca i percorsi (vedi `locks_for`), poi esegue con `LocalExecutor`. I
+/// blocchi si rilasciano prima della risposta finale: con `Ok` nessuna sentinella resta nella cartella.
+fn execute(req: &Request, out: &mut impl Write, cancel: &AtomicBool) -> Result<(), AppError> {
     validate(req)?;
+    let locks = locks_for(req)?;
     let x = LocalExecutor;
     let n = normalize_lexical;
     match req {
@@ -157,12 +185,109 @@ fn execute(req: &Request, out: &mut Pipe, cancel: &AtomicBool) -> Result<(), App
         Request::Mkdir { path } => x.mkdir(&n(path)),
         Request::Rename { src, dst } => x.rename(&n(src), &n(dst)),
         Request::List { path } => {
-            for e in x.list_dir(&n(path))? {
+            // Le voci si inviano sotto blocco; le sentinelle non sono voci della cartella.
+            for e in x.list_dir(&n(path))?.into_iter().filter(|e| !locks.iter().any(|l| l.hides(&e.name))) {
                 // Pipe chiusa: anche la risposta finale non arriverà, e il ciclo principale esce.
                 write_msg(out, &Response::Entry(e)).map_err(|e| AppError::from_io(&e, path))?;
             }
             Ok(())
         }
         Request::Hello { .. } | Request::Cancel => Err(AppError::new(ErrorCode::InvalidRequest, None)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::model::ListEntry;
+    use std::fs;
+    use std::path::Path;
+
+    fn junction(link: &Path, target: &Path) {
+        let ok = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(link).arg(target).output().unwrap().status.success();
+        assert!(ok, "mklink /J");
+    }
+
+    /// Esegue `req` come l'helper (senza pipe) e restituisce l'esito e le voci inviate.
+    fn exec(req: Request) -> (Result<(), AppError>, Vec<ListEntry>) {
+        let mut out = Vec::new();
+        let res = execute(&req, &mut out, &AtomicBool::new(false));
+        let mut input = out.as_slice();
+        let mut entries = Vec::new();
+        while let Some(r) = read_msg::<Response>(&mut input).unwrap() {
+            if let Response::Entry(e) = r {
+                entries.push(e);
+            }
+        }
+        (res, entries)
+    }
+
+    fn refused(req: Request, detail: &str) {
+        let e = exec(req).0.unwrap_err();
+        assert_eq!((e.code, e.detail.as_deref()), (ErrorCode::Unsupported, Some(detail)));
+    }
+
+    #[test]
+    fn requests_through_a_junction_are_refused_and_change_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let protected = d.path().join("protected");
+        fs::create_dir(&protected).unwrap();
+        fs::write(protected.join("keep.txt"), b"x").unwrap();
+        fs::create_dir(d.path().join("work")).unwrap();
+        let link = d.path().join(r"work\link");
+        junction(&link, &protected);
+
+        refused(Request::Delete { path: link.join("keep.txt"), is_dir: false, permanent: true }, "reparse_point_in_path");
+        assert!(protected.join("keep.txt").exists());
+        refused(Request::Mkdir { path: link.join("new") }, "reparse_point_in_path");
+        assert!(!protected.join("new").exists());
+        let out = d.path().join("out.txt");
+        refused(Request::Copy { src: link.join("keep.txt"), dst: out.clone(), overwrite: false, flush: false }, "reparse_point_in_path");
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn link_targets_follow_the_table() {
+        let d = tempfile::tempdir().unwrap();
+        let (real, link) = (d.path().join("real"), d.path().join("link"));
+        fs::create_dir(&real).unwrap();
+        fs::write(real.join("f.txt"), b"x").unwrap();
+        junction(&link, &real);
+
+        refused(Request::List { path: link.clone() }, "reparse_point");
+        refused(Request::Delete { path: link.clone(), is_dir: true, permanent: false }, "reparse_point");
+        assert!(link.exists());
+        exec(Request::Delete { path: link.clone(), is_dir: true, permanent: true }).0.unwrap();
+        assert!(fs::symlink_metadata(&link).is_err());
+        assert!(real.join("f.txt").exists());
+    }
+
+    #[test]
+    fn ordinary_requests_still_work() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join(r"a\b"));
+        let ok = |req: Request| exec(req).0.unwrap_or_else(|e| panic!("{e:?}"));
+        ok(Request::Mkdir { path: a.clone() });
+        ok(Request::Mkdir { path: b.clone() });
+        let f = a.join("f.txt");
+        fs::write(&f, b"x").unwrap();
+        ok(Request::Copy { src: f.clone(), dst: b.join("g.txt"), overwrite: false, flush: false });
+        ok(Request::Copy { src: f.clone(), dst: b.join("g.txt"), overwrite: true, flush: true });
+        ok(Request::Rename { src: b.join("g.txt"), dst: b.join("h.txt") });
+        ok(Request::Move { src: b.join("h.txt"), dst: a.join("h.txt"), overwrite: false });
+        let (res, entries) = exec(Request::List { path: a.clone() });
+        res.unwrap();
+        let mut names: Vec<_> = entries.into_iter().map(|e| e.name.into_string().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, ["b", "f.txt", "h.txt"]);
+        ok(Request::Delete { path: a.join("h.txt"), is_dir: false, permanent: true });
+        // Cestino: un file e una cartella vuota.
+        ok(Request::Delete { path: f.clone(), is_dir: false, permanent: false });
+        ok(Request::Delete { path: b.clone(), is_dir: true, permanent: false });
+        assert!(!f.exists() && !b.exists() && !a.join("h.txt").exists());
+        // Nessuna sentinella rimasta dopo il rilascio dei blocchi.
+        assert_eq!(fs::read_dir(&a).unwrap().count(), 0);
+        ok(Request::Delete { path: a.clone(), is_dir: true, permanent: true });
+        assert!(!a.exists());
     }
 }

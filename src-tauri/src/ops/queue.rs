@@ -598,6 +598,8 @@ mod tests {
         copies: AtomicUsize,
         /// Il parametro `flush` di ogni copy_file.
         flushes: Mutex<Vec<bool>>,
+        /// La destinazione di ogni copy_file riuscito fin qui.
+        copy_dsts: Mutex<Vec<PathBuf>>,
         /// Ogni delete: percorso e `permanent`.
         deletes: Mutex<Vec<(PathBuf, bool)>>,
     }
@@ -616,6 +618,7 @@ mod tests {
                 return Err(AppError::new(ErrorCode::AccessDenied, Some(dst)));
             }
             self.flushes.lock().unwrap().push(flush);
+            self.copy_dsts.lock().unwrap().push(dst.to_path_buf());
             let n = self.copies.fetch_add(1, Ordering::SeqCst) + 1;
             if self.fail_copy_at == Some(n) {
                 return Err(AppError::new(ErrorCode::Io, Some(dst)));
@@ -1174,6 +1177,44 @@ mod tests {
         for n in names {
             assert_eq!(std::fs::read(dest.join(n)).unwrap(), n.as_bytes());
         }
+    }
+
+    /// Dopo "Riprova come amministratore" i percorsi sotto le cartelle del job arrivano all'helper
+    /// con il prefisso risolto alla prima elevazione: la giunzione sostituita dopo non conta.
+    #[test]
+    fn elevated_paths_use_job_roots_resolved_once() {
+        let d = tempfile::tempdir().unwrap();
+        let (real, link, altrove) = (d.path().join("real"), d.path().join("link"), d.path().join("altrove"));
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(&altrove).unwrap();
+        let mklink = |target: &Path| {
+            let ok = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(&link).arg(target).output().unwrap();
+            assert!(ok.status.success(), "mklink /J");
+        };
+        mklink(&real);
+        for n in ["1.txt", "2.txt"] {
+            std::fs::write(real.join(n), n).unwrap();
+        }
+        let elevated = Arc::new(Fake::default());
+        let x = elevated.clone();
+        let elevate: Elevate = Arc::new(move || Ok(x.clone() as Arc<dyn Executor>));
+        let (q, rx) = queue_elevated(Arc::new(Fake { deny_copy: true, ..Default::default() }), elevate);
+        let sources = vec![link.join("1.txt"), link.join("2.txt")];
+        let id = q.enqueue(spec(JobKind::Copy, sources, Some(&link.join("D")), ConflictPolicy::Ask));
+        reply_error(&q, &next_prompt(&rx), ErrorAction::RetryElevated, false);
+        let p = next_prompt(&rx);
+        std::fs::remove_dir(&link).unwrap();
+        mklink(&altrove);
+        reply_error(&q, &p, ErrorAction::RetryElevated, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 0));
+        let real_d = crate::fs::listing::long_path(&real).join("D");
+        let got = elevated.copy_dsts.lock().unwrap().clone();
+        assert_eq!(got.len(), 2, "{got:?}");
+        for (dst, n) in got.iter().zip(["1.txt", "2.txt"]) {
+            assert!(same_path(dst, &real_d.join(n)), "{got:?}");
+        }
+        assert!(!exists(&altrove.join("D")));
     }
 
     #[test]

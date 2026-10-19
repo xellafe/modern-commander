@@ -130,7 +130,8 @@ fn junction(link: &Path, target: &Path) {
 ### Task 2: L'helper esegue solo su percorsi bloccati; l'app risolve i collegamenti prima dell'invio
 
 **Files:**
-- Modify: `src-tauri/src/elevation/helper.rs` (`execute`), `src-tauri/src/elevation/client.rs` (risoluzione dei percorsi in `impl Executor for ElevatedExecutor`), `src-tauri/tests/elevation_pipe.rs`
+- Create: `src-tauri/src/ops/rooted.rs`
+- Modify: `src-tauri/src/elevation/helper.rs` (`execute`), `src-tauri/src/elevation/client.rs` (nessuna risoluzione per chiamata), `src-tauri/src/ops/runner.rs` (`executor`), `src-tauri/src/ops/mod.rs`, `src-tauri/tests/elevation_pipe.rs`
 
 **Interfaces:**
 - Consumes: Task 1 `lock_ancestors`, `lock_with_item`; fase 1 `validate`, `normalize_lexical`, `LocalExecutor`
@@ -140,11 +141,26 @@ fn junction(link: &Path, target: &Path) {
 // helper.rs
 /// Blocchi da tenere durante l'esecuzione di `req` (percorsi già validati e normalizzati).
 fn locks_for(req: &Request) -> Result<Vec<PathLock>, AppError>;
-// client.rs
-/// Percorso da inviare all'helper: cartella padre risolta con GetFinalPathNameByHandleW (segue giunzioni,
-/// `subst` e unità di rete mappate) + ultimo componente; se la risoluzione fallisce, `p` invariato.
-pub(crate) fn resolve_for_helper(p: &Path) -> PathBuf;
+// ops/rooted.rs
+/// Cartella risolta con GetFinalPathNameByHandleW (segue giunzioni, `subst` e unità di rete mappate).
+/// Se `dir` non esiste si risolve l'antenato esistente più profondo e si riattacca il resto;
+/// se non si risolve niente, `dir` invariato.
+pub(crate) fn resolve_dir(dir: &Path) -> PathBuf;
+/// Radici di un job, normalizzate: la cartella padre di ogni sorgente; `dest` se è la cartella di
+/// destinazione di Copy/Move, altrimenti (nome di file, `file_target`, o Rename) la sua cartella padre.
+/// Una radice non è mai l'elemento su cui si opera: risolverla seguirebbe un collegamento.
+pub(crate) fn job_roots(spec: &JobSpec) -> Vec<PathBuf>;
+/// Esecutore elevato di un job: ogni percorso che sta sotto una radice (la più lunga) riceve il
+/// prefisso risolto di quella radice; gli altri passano invariati. Le radici si risolvono una sola
+/// volta, alla creazione.
+pub(crate) struct RootedExecutor { /* inner: Arc<dyn Executor>, roots: Vec<(PathBuf, PathBuf)> */ }
+impl RootedExecutor { pub(crate) fn new(inner: Arc<dyn Executor>, roots: Vec<PathBuf>) -> Self; }
+impl Executor for RootedExecutor { /* mappa i percorsi e delega */ }
 ```
+
+  **Perché per job e non per chiamata** (decisione dell'utente dopo la revisione): se l'app risolvesse ogni percorso subito prima dell'invio, una giunzione messa al posto di una sottocartella tra due richieste dello stesso job (dopo l'elenco di un'eliminazione ricorsiva) verrebbe seguita dall'app, e l'helper riceverebbe un percorso "reale" nel bersaglio. Risolvendo solo le radici, una volta, quando il job passa all'helper, una giunzione comparsa sotto una radice arriva all'helper come giunzione e viene rifiutata. Le giunzioni legittime che l'utente attraversa per arrivare alla cartella del job (unità `subst`, cartella collegata) stanno sopra o sulla radice e quindi si risolvono.
+
+  `runner.rs`: `executor()` crea il `RootedExecutor` la prima volta che il job passa all'helper (da `self.h.elevated()` e `job_roots(self.spec)`) e lo riusa per il resto del job. L'helper non sa niente delle radici: i controlli di sicurezza restano tutti nell'helper.
 
   `locks_for`, per richiesta:
 
@@ -157,7 +173,7 @@ pub(crate) fn resolve_for_helper(p: &Path) -> PathBuf;
   | `Mkdir` | `lock_ancestors(path)` |
   | `List` | `lock_with_item(path)`; le voci per cui `lock.hides(nome)` non si inviano |
 
-  `execute` diventa: `validate` → normalizzazione (come oggi) → `locks_for` → primitiva → rilascio dei blocchi (drop) dopo la risposta finale. `resolve_for_helper` si applica a ogni percorso in `copy_file`, `move_path`, `delete`, `mkdir`, `rename` e `list_dir` di `ElevatedExecutor`. Gira nel processo dell'app, senza privilegi: per l'helper è solo un suggerimento, perché i controlli di sicurezza restano tutti nell'helper.
+  `execute` diventa: `validate` → normalizzazione (come oggi) → `locks_for` → primitiva (le voci di `List` si inviano sotto blocco) → rilascio dei blocchi (drop) → risposta finale. Rilasciare prima della risposta evita che l'app riceva `Ok` mentre la sentinella è ancora nella cartella.
 
 - [ ] **Step 1: Test** (in `helper.rs` e `client.rs`, chiamando le funzioni senza pipe)
 
@@ -175,20 +191,28 @@ pub(crate) fn resolve_for_helper(p: &Path) -> PathBuf;
        Delete { d\link, is_dir: true, permanent: true } → Ok: sparisce la giunzione, d\real\f.txt esiste ancora */
 }
 #[test] fn ordinary_requests_still_work() { /* Mkdir, Copy, Rename, Move, Delete definitivo, List su un albero senza collegamenti: tutti Ok */ }
-// client.rs
-#[test] fn resolve_follows_junctions_and_keeps_unresolvable_paths() {
-    /* d\link giunzione a d\real: resolve_for_helper(d\link\x.txt) → long_path(d\real)\x.txt (confronto con same_path;
+// ops/rooted.rs
+#[test] fn resolve_dir_follows_junctions_and_keeps_unresolvable_paths() {
+    /* d\link giunzione a d\real: resolve_dir(d\link) → long_path(d\real) (confronto con same_path;
        long_path perché %TEMP% può contenere nomi 8.3, che GetFinalPathNameByHandleW espande);
-       resolve_for_helper(d\nope\x) → invariato; il risultato passa sempre `validate` se lo passava l'originale */
+       resolve_dir(d\link\nuova\sotto) → long_path(d\real)\nuova\sotto; resolve_dir(Z:\inesistente con unità assente) → invariato;
+       il risultato passa sempre `validate` se lo passava l'originale */
+}
+#[test] fn rooted_executor_maps_under_roots_only_and_resolves_once() {
+    /* esecutore finto che registra i percorsi ricevuti. Radici [d\link, d\altro]; d\link giunzione a d\real.
+       mkdir(d\link\a\b) → d\real\a\b (prefisso più lungo); mkdir(d\fuori\x) → invariato.
+       Poi d\link si sostituisce con una giunzione a d\altrove: mkdir(d\link\c) → ancora d\real\c (niente nuova risoluzione) */
 }
 ```
 
+  In `runner.rs`: un test con l'esecutore elevato finto mostra che dopo "Riprova come amministratore" i percorsi sotto la cartella del job arrivano con il prefisso risolto una sola volta.
+
   In `tests/elevation_pipe.rs` (helper vero avviato senza elevazione con `spawn_with`, come i test esistenti):
   - `helper_refuses_mkdir_through_junction_sent_raw`: una richiesta `Mkdir` scritta a mano sulla pipe con un percorso che attraversa una giunzione → risposta `Err` con `Unsupported` / `reparse_point_in_path`, nessuna cartella creata nel bersaglio della giunzione.
-  - `elevated_executor_resolves_legitimate_junctions`: `ElevatedExecutor::mkdir(d\link\new)` → Ok, e `d\real\new` esiste.
+  - `rooted_elevated_executor_resolves_legitimate_junctions`: `RootedExecutor::new(ElevatedExecutor, [d\link]).mkdir(d\link\new)` → Ok, e `d\real\new` esiste; dopo aver sostituito una sottocartella `d\real\sub` con una giunzione, `mkdir(d\link\sub\x)` → `Unsupported` / `reparse_point_in_path`.
 
 - [ ] **Step 2:** `cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks` → FAIL.
-- [ ] **Step 3:** Implementare `locks_for`, il nuovo `execute` e `resolve_for_helper`. Per la risoluzione: `CreateFileW(padre, FILE_READ_ATTRIBUTES, share READ|WRITE|DELETE, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS)`, che segue i collegamenti, poi `GetFinalPathNameByHandleW(..., VOLUME_NAME_DOS)` e `normalize_lexical` sul risultato.
+- [ ] **Step 3:** Implementare `locks_for`, il nuovo `execute`, `ops/rooted.rs` e l'uso nel runner. Per la risoluzione: `CreateFileW(cartella, FILE_READ_ATTRIBUTES, share READ|WRITE|DELETE, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS)`, che segue i collegamenti, poi `GetFinalPathNameByHandleW(..., VOLUME_NAME_DOS)` e `normalize_lexical` sul risultato.
 - [ ] **Step 4:** `cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks` → PASS, compresi tutti i test esistenti di `elevation_pipe.rs`.
 - [ ] **Step 5: Commit** `fix(elevation): l'helper esegue solo su percorsi bloccati e senza giunzioni intermedie`
 
@@ -199,7 +223,7 @@ pub(crate) fn resolve_for_helper(p: &Path) -> PathBuf;
 
 - [ ] **Step 1:** Nota di sicurezza in `elevation/mod.rs`:
   - in "Cosa garantiscono i controlli" aggiungere il blocco dei componenti, la sentinella (perché serve: una cartella vuota si trasforma in giunzione anche se bloccata) e il rifiuto dei reparse point;
-  - nei limiti: i reparse point che non sono collegamenti (OneDrive "File su richiesta", deduplicazione) sono rifiutati anche loro; una cartella in cui l'amministratore non può creare file (supporti in sola lettura) non si blocca;
+  - nei limiti: l'app risolve le radici del job quando il job passa all'helper, quindi una radice sostituita prima di quel momento viene seguita; l'eliminazione nel Cestino controlla l'elemento senza bloccarlo (il Cestino non può spostare un elemento bloccato), quindi resta una finestra in cui l'elemento si può scambiare con un collegamento, che finisce nel Cestino come collegamento; i reparse point che non sono collegamenti (OneDrive "File su richiesta", deduplicazione) sono rifiutati anche loro; una cartella in cui l'amministratore non può creare file (supporti in sola lettura) non si blocca;
   - in "Rischi residui" sostituire la voce sulle giunzioni con i limiti che restano: volumi montati in una cartella (anche quelli sono reparse point, quindi rifiutati) e percorsi che l'app non riesce a risolvere (arrivano invariati e l'helper li rifiuta se contengono un collegamento).
 - [ ] **Step 2: Verifica manuale** con il vero prompt UAC, build `npm run tauri dev`:
   - F7 in `C:\Program Files` → "Riprova come amministratore" → la cartella si crea (la funzione non è regredita).

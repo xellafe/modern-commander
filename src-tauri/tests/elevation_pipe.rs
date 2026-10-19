@@ -11,9 +11,10 @@
 //! confronto di produzione (server = stesso eseguibile dell'helper) si prova con la modalità
 //! `--test-pipe-server` dell'app, anch'essa solo con `test-hooks`.
 
-use modern_commander_lib::elevation::{ElevatedExecutor, shared_with};
+use modern_commander_lib::elevation::{ElevatedExecutor, Request, shared_with};
 use modern_commander_lib::error::ErrorCode;
 use modern_commander_lib::ops::exec::Executor;
+use modern_commander_lib::ops::rooted::RootedExecutor;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -266,4 +267,47 @@ fn helper_exits_when_idle() {
     assert!(t.elapsed() >= Duration::from_millis(500), "{:?}", t.elapsed());
     // Dopo l'uscita le operazioni falliscono subito, senza bloccarsi.
     assert!(x.mkdir(&d.path().join("x")).is_err());
+}
+
+fn junction(link: &Path, target: &Path) {
+    let ok = Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+    assert!(ok.status.success(), "mklink /J");
+}
+
+/// Una richiesta che attraversa una giunzione, mandata senza la risoluzione dell'app, viene
+/// rifiutata dall'helper.
+#[test]
+fn helper_refuses_mkdir_through_junction_sent_raw() {
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    fs::create_dir(&real).unwrap();
+    junction(&d.path().join("link"), &real);
+    let (x, mut child, _, _) = start(None);
+    let e = x.send_raw(Request::Mkdir { path: d.path().join(r"link\new") }).unwrap_err();
+    assert_eq!((e.code, e.detail.as_deref()), (ErrorCode::Unsupported, Some("reparse_point_in_path")));
+    assert!(!real.join("new").exists());
+    drop(x);
+    assert!(wait_exit(&mut child, T).is_some());
+}
+
+/// Le radici del job si risolvono una volta: "Riprova come amministratore" funziona attraverso una
+/// giunzione legittima, ma una giunzione comparsa dopo sotto la radice arriva all'helper e viene rifiutata.
+#[test]
+fn rooted_elevated_executor_resolves_legitimate_junctions() {
+    let d = tempfile::tempdir().unwrap();
+    let (real, link) = (d.path().join("real"), d.path().join("link"));
+    fs::create_dir_all(real.join("sub")).unwrap();
+    fs::create_dir(d.path().join("altrove")).unwrap();
+    junction(&link, &real);
+    let (x, mut child, _, _) = start(None);
+    let x = RootedExecutor::new(Arc::new(x), vec![link.clone()]);
+    x.mkdir(&link.join("new")).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(real.join("new").is_dir());
+    fs::remove_dir(real.join("sub")).unwrap();
+    junction(&real.join("sub"), &d.path().join("altrove"));
+    let e = x.mkdir(&link.join(r"sub\x")).unwrap_err();
+    assert_eq!((e.code, e.detail.as_deref()), (ErrorCode::Unsupported, Some("reparse_point_in_path")));
+    assert!(!d.path().join(r"altrove\x").exists());
+    drop(x);
+    assert!(wait_exit(&mut child, T).is_some());
 }

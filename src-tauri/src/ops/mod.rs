@@ -6,6 +6,7 @@ pub mod exec;
 pub mod model;
 pub mod plan;
 pub mod queue;
+pub mod rooted;
 mod runner;
 
 pub use conflict::{next_free_name, resolve};
