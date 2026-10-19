@@ -28,7 +28,9 @@ beforeEach(async () => {
   vi.mocked(api.watchDir).mockResolvedValue();
   vi.mocked(api.unwatchDir).mockResolvedValue();
   vi.mocked(api.calcDirSize).mockResolvedValue();
-  vi.mocked(api.cancelDirSize).mockResolvedValue();
+  vi.mocked(api.cancelRequest).mockResolvedValue();
+  let lastId = 0;
+  vi.mocked(api.nextRequestId).mockImplementation(() => ++lastId);
   vi.mocked(api.onDirSize).mockImplementation(async (cb) => {
     emit = cb;
     return () => {};
@@ -131,8 +133,8 @@ test("cambiare cartella annulla i calcoli in corso e scarta le risposte tardive"
   await vi.waitFor(() => expect(calc).toHaveBeenCalledTimes(2));
   listDir.mockResolvedValueOnce([e("a", true)]);
   await useTabViews.getState().load("t1", "C:\\z");
-  expect(api.cancelDirSize).toHaveBeenCalledTimes(2);
-  expect(vi.mocked(api.cancelDirSize).mock.calls.map((c) => c[0]).sort()).toEqual([idOf(0), idOf(1)].sort());
+  expect(api.cancelRequest).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(api.cancelRequest).mock.calls.map((c) => c[0]).sort()).toEqual([idOf(0), idOf(1)].sort());
   expect(ctx().view.sizing.size).toBe(0);
   reply(0, size(5)); // arriva dopo l'annullamento
   await Promise.resolve();
@@ -145,7 +147,7 @@ test("ricaricare la stessa cartella non annulla il calcolo", async () => {
   await vi.waitFor(() => expect(calc).toHaveBeenCalledTimes(1));
   listDir.mockResolvedValueOnce([e("a", true), e("b", true)]);
   await useTabViews.getState().reload("t1");
-  expect(api.cancelDirSize).not.toHaveBeenCalled();
+  expect(api.cancelRequest).not.toHaveBeenCalled();
   reply(0, size(7));
   await vi.waitFor(() => expect(ctx().view.dirSizes).toEqual({ a: 7 }));
 });
@@ -155,7 +157,7 @@ test("chiudere la scheda annulla i calcoli", async () => {
   await executeCommand("mc_MarkOrSize");
   await vi.waitFor(() => expect(calc).toHaveBeenCalledTimes(1));
   useTabViews.getState().dispose("t1");
-  expect(api.cancelDirSize).toHaveBeenCalledWith(idOf(0));
+  expect(api.cancelRequest).toHaveBeenCalledWith(idOf(0));
 });
 
 test("i comandi hanno il titolo in entrambe le lingue", async () => {

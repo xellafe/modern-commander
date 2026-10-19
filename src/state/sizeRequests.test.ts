@@ -5,6 +5,8 @@ import * as api from "../ipc/api";
 import { computeDirSize } from "./sizeRequests";
 
 test("se la registrazione dell'ascoltatore fallisce, la richiesta successiva riprova", async () => {
+  let lastId = 0;
+  vi.mocked(api.nextRequestId).mockImplementation(() => ++lastId);
   vi.mocked(api.calcDirSize).mockResolvedValue();
   let emit!: Parameters<typeof api.onDirSize>[0];
   vi.mocked(api.onDirSize)

@@ -5,6 +5,7 @@ pub mod fs;
 pub mod mask;
 pub mod ops;
 pub mod paths;
+pub mod requests;
 pub mod shell;
 
 use ops::queue::{Event, Queue};
@@ -15,7 +16,7 @@ use tauri::{Emitter, Manager};
 pub fn run() {
     tauri::Builder::default()
         .manage(fs::watch::Watchers::default())
-        .manage(fs::size::SizeJobs::default())
+        .manage(requests::Requests::default())
         .setup(|app| {
             if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
                 elevation::set_owner_window(hwnd);
@@ -38,7 +39,11 @@ pub fn run() {
             fs::watch::watch_dir,
             fs::watch::unwatch_dir,
             fs::size::calc_dir_size,
-            fs::size::cancel_dir_size,
+            requests::cancel_request,
+            fs::file_info,
+            fs::read_chunk,
+            fs::read_file,
+            fs::ansi_encoding,
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
             shell::drag::start_drag,

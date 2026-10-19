@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DirSizeEvent, Drive, Entry, JobId, JobSpec, JobView, Prompt, PromptReply } from "./types";
+import type { DirSizeEvent, Drive, Entry, FileInfo, JobId, JobSpec, JobView, Prompt, PromptReply } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -24,10 +24,35 @@ export const onFsChanged = (cb: (tabId: string) => void): Promise<UnlistenFn> =>
 export const calcDirSize = (requestId: number, path: string) =>
   invoke<void>("calc_dir_size", { requestId, path });
 
-export const cancelDirSize = (requestId: number) => invoke<void>("cancel_dir_size", { requestId });
+let lastRequestId = 0;
+
+/** Id per le richieste annullabili (dimensione, hash, scansione, archivi): unico per tutta l'app. */
+export const nextRequestId = () => ++lastRequestId;
+
+/** Alza il flag di annullamento della richiesta; un id già finito o sconosciuto non ha effetto. */
+export const cancelRequest = (requestId: number) => invoke<void>("cancel_request", { requestId });
 
 export const onDirSize = (cb: (e: DirSizeEvent) => void): Promise<UnlistenFn> =>
   listen<DirSizeEvent>("dir-size", (e) => cb(e.payload));
+
+export const fileInfo = (path: string) => invoke<FileInfo>("file_info", { path });
+
+/** Fino a `len` byte (al massimo 4 MiB) da `offset`; oltre la fine del file l'array è più corto o vuoto. */
+export const readChunk = async (path: string, offset: number, len: number) =>
+  new Uint8Array(await invoke<ArrayBuffer>("read_chunk", { path, offset, len }));
+
+/** Tutto il file; TOO_LARGE se supera `max` byte. */
+export const readFile = async (path: string, max: number) =>
+  new Uint8Array(await invoke<ArrayBuffer>("read_file", { path, max }));
+
+let ansi: Promise<string> | undefined;
+
+/** Etichetta `TextDecoder` della codifica ANSI di sistema; si chiede una volta sola (si riprova se fallisce). */
+export const ansiEncoding = () =>
+  (ansi ??= invoke<string>("ansi_encoding").catch((e) => {
+    ansi = undefined;
+    throw e;
+  }));
 
 /** Menu contestuale della shell; `x`/`y` in pixel fisici, client della finestra. Stessa cartella padre per tutti. */
 export const showContextMenu = (paths: string[], x: number, y: number) =>

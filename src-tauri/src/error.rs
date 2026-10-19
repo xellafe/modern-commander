@@ -24,6 +24,14 @@ pub enum ErrorCode {
     Unsupported,
     Cancelled,
     InvalidRequest,
+    /// File oltre il limite che l'operazione accetta (lettura intera, ...).
+    TooLarge,
+    /// Il file è cambiato su disco dopo l'apertura: va riletto prima di salvare.
+    ChangedOnDisk,
+    /// Il testo contiene caratteri che la codifica scelta non sa rappresentare.
+    UnmappableChars,
+    /// Archivio danneggiato o non leggibile.
+    CorruptArchive,
     Io,
 }
 
@@ -86,6 +94,15 @@ mod tests {
         assert_eq!(e(33), ErrorCode::FileInUse); // ERROR_LOCK_VIOLATION
         assert_eq!(serde_json::to_value(ErrorCode::FileInUse).unwrap(), "FILE_IN_USE");
         assert_eq!(e(9999), ErrorCode::Io);
+    }
+
+    #[test]
+    fn new_codes_serialize_screaming_snake() {
+        let s = |c| serde_json::to_value(c).unwrap();
+        assert_eq!(s(ErrorCode::TooLarge), "TOO_LARGE");
+        assert_eq!(s(ErrorCode::ChangedOnDisk), "CHANGED_ON_DISK");
+        assert_eq!(s(ErrorCode::UnmappableChars), "UNMAPPABLE_CHARS");
+        assert_eq!(s(ErrorCode::CorruptArchive), "CORRUPT_ARCHIVE");
     }
 
     #[test]

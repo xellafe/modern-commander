@@ -1,6 +1,6 @@
 // Richieste di calcolo della dimensione in corso. Stato non reattivo: l'effetto sulla vista
 // (`sizing`, `dirSizes`) lo applica chi chiama; qui solo id, evento di ritorno e annullamento.
-import { calcDirSize, cancelDirSize, onDirSize } from "../ipc/api";
+import { calcDirSize, cancelRequest, nextRequestId, onDirSize } from "../ipc/api";
 import type { AppError, DirSize } from "../ipc/types";
 
 interface Pending {
@@ -9,7 +9,6 @@ interface Pending {
   reject: (e: AppError) => void;
 }
 
-let nextId = 1;
 const pending = new Map<number, Pending>();
 let listening: Promise<unknown> | undefined;
 
@@ -30,7 +29,7 @@ const listen = () =>
 /** Dimensione di `path`. Si risolve con null se la richiesta viene annullata (`cancelTabSizes`), si rifiuta con l'AppError della radice. */
 export async function computeDirSize(tabId: string, path: string): Promise<DirSize | null> {
   await listen();
-  const id = nextId++;
+  const id = nextRequestId();
   const done = new Promise<DirSize | null>((resolve, reject) => pending.set(id, { tabId, resolve, reject }));
   try {
     await calcDirSize(id, path);
@@ -47,6 +46,6 @@ export function cancelTabSizes(tabId: string) {
     if (p.tabId !== tabId) continue;
     pending.delete(id);
     p.resolve(null);
-    void cancelDirSize(id).catch(() => {});
+    void cancelRequest(id).catch(() => {});
   }
 }

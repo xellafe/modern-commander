@@ -3,11 +3,10 @@
 
 use super::listing::walk_dir;
 use crate::error::{AppError, ErrorCode};
+use crate::requests::Requests;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
 /// Ogni quante voci si controlla l'annullamento dentro una cartella.
@@ -67,37 +66,6 @@ fn dir_size_with(path: &Path, cancelled: &mut dyn FnMut() -> bool) -> Result<Dir
     Ok(total)
 }
 
-/// Flag di annullamento dei calcoli in corso, per id di richiesta.
-#[derive(Default, Clone)]
-pub struct SizeJobs(Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>);
-
-/// Toglie la richiesta dal registro al drop, anche se il thread va in panic.
-struct Registered<'a>(&'a SizeJobs, u64);
-
-impl Drop for Registered<'_> {
-    fn drop(&mut self) {
-        self.0.finish(self.1);
-    }
-}
-
-impl SizeJobs {
-    fn start(&self, id: u64) -> Arc<AtomicBool> {
-        let flag = Arc::new(AtomicBool::new(false));
-        self.0.lock().unwrap().insert(id, flag.clone());
-        flag
-    }
-
-    fn finish(&self, id: u64) {
-        self.0.lock().unwrap().remove(&id);
-    }
-
-    fn cancel(&self, id: u64) {
-        if let Some(f) = self.0.lock().unwrap().get(&id) {
-            f.store(true, Ordering::Relaxed);
-        }
-    }
-}
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DirSizeEvent {
@@ -110,25 +78,17 @@ struct DirSizeEvent {
 /// Risponde subito; il risultato arriva con l'evento `dir-size`. Una richiesta per thread dedicato:
 /// il frontend limita la concorrenza.
 #[tauri::command]
-pub fn calc_dir_size(app: AppHandle, jobs: State<'_, SizeJobs>, request_id: u64, path: String) {
-    let jobs = jobs.inner().clone();
-    let cancel = jobs.start(request_id);
+pub fn calc_dir_size(app: AppHandle, requests: State<'_, Requests>, request_id: u64, path: String) {
+    let guard = requests.register(request_id);
     tauri::async_runtime::spawn_blocking(move || {
-        let r = {
-            let _registered = Registered(&jobs, request_id);
-            dir_size(&PathBuf::from(&path), &cancel)
-        };
+        let r = dir_size(&PathBuf::from(&path), guard.flag());
+        drop(guard); // fuori dal registro prima di emettere il risultato
         let (result, error) = match r {
             Ok(v) => (Some(v), None),
             Err(e) => (None, Some(e)),
         };
         let _ = app.emit("dir-size", DirSizeEvent { request_id, path, result, error });
     });
-}
-
-#[tauri::command]
-pub fn cancel_dir_size(jobs: State<'_, SizeJobs>, request_id: u64) {
-    jobs.cancel(request_id);
 }
 
 #[cfg(test)]
@@ -172,19 +132,6 @@ mod tests {
         .unwrap_err();
         assert_eq!(e.code, ErrorCode::Cancelled);
         assert_eq!(calls, 2);
-    }
-
-    #[test]
-    fn registry_entry_is_removed_even_on_panic() {
-        let j = SizeJobs::default();
-        j.start(7);
-        let j2 = j.clone();
-        let r = std::panic::catch_unwind(move || {
-            let _g = Registered(&j2, 7);
-            panic!("simulato");
-        });
-        assert!(r.is_err());
-        assert!(j.0.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -259,16 +206,5 @@ mod tests {
         assert_eq!(r, DirSize { bytes: 6, files: 3, dirs: 3, skipped: 0 });
         // Chiesta direttamente, la radice invece si apre.
         assert_eq!(dir_size(&link, &AtomicBool::new(false)).unwrap().bytes, 1000);
-    }
-
-    #[test]
-    fn jobs_cancel_sets_only_the_flag_of_that_id() {
-        let j = SizeJobs::default();
-        let (a, b) = (j.start(1), j.start(2));
-        j.cancel(1);
-        assert!(a.load(Ordering::Relaxed) && !b.load(Ordering::Relaxed));
-        j.finish(1);
-        j.cancel(1); // id sconosciuto: nessun effetto
-        assert!(!b.load(Ordering::Relaxed));
     }
 }

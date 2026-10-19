@@ -1,4 +1,4 @@
-// Rispecchia i tipi Rust (src-tauri/src/error.rs, fs/listing.rs, fs/drives.rs, ops/model.rs, ops/queue.rs).
+// Rispecchia i tipi Rust (src-tauri/src/error.rs, fs/listing.rs, fs/content.rs, fs/drives.rs, ops/model.rs, ops/queue.rs).
 
 export type ErrorCode =
   | "NOT_FOUND"
@@ -15,6 +15,10 @@ export type ErrorCode =
   | "UNSUPPORTED"
   | "CANCELLED"
   | "INVALID_REQUEST"
+  | "TOO_LARGE"
+  | "CHANGED_ON_DISK"
+  | "UNMAPPABLE_CHARS"
+  | "CORRUPT_ARCHIVE"
   | "IO";
 
 export interface AppError {
@@ -52,6 +56,16 @@ export interface DirSize {
   files: number;
   dirs: number;
   skipped: number;
+}
+
+/** fs/content.rs. Date in millisecondi dall'epoca Unix, attributi Win32 grezzi. */
+export interface FileInfo {
+  size: number;
+  isDir: boolean;
+  createdMs: number;
+  modifiedMs: number;
+  accessedMs: number;
+  attributes: number;
 }
 
 export interface DirSizeEvent {

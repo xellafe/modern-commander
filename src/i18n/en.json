@@ -162,6 +162,10 @@
     "UNSUPPORTED": "This item is not supported by the operation.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",
+    "TOO_LARGE": "The file is too large for this operation.",
+    "CHANGED_ON_DISK": "The file was changed on disk by another program.",
+    "UNMAPPABLE_CHARS": "The text contains characters the chosen encoding cannot represent.",
+    "CORRUPT_ARCHIVE": "The archive is damaged or cannot be read.",
     "IO": "Input/output error."
   },
   "ops": {
