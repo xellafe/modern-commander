@@ -45,6 +45,13 @@ export const readChunk = async (path: string, offset: number, len: number) =>
 export const readFile = async (path: string, max: number) =>
   new Uint8Array(await invoke<ArrayBuffer>("read_file", { path, max }));
 
+/**
+ * Salva il testo dell'editor senza mai scrivere sul posto (`<file>.mcpart` poi sostituzione). Con una data
+ * attesa `CHANGED_ON_DISK` se il file è cambiato; `null` sovrascrive. `UNMAPPABLE_CHARS` se la codifica non basta.
+ */
+export const writeTextFile = (path: string, text: string, encoding: string, bom: boolean, expectedModifiedMs: number | null) =>
+  invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs });
+
 let ansi: Promise<string> | undefined;
 
 /** Etichetta `TextDecoder` della codifica ANSI di sistema; si chiede una volta sola (si riprova se fallisce). */

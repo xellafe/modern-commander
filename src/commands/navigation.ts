@@ -11,6 +11,7 @@ import {
   finishSizing, hasSize, invertMarks, markRange, parentPath, sizable, startSizing, toggleMark,
   type SortKey, type TabView,
 } from "../state/tabView";
+import { dirtyEditorCount, useEditors } from "../state/editors";
 import { computeDirSize } from "../state/sizeRequests";
 import { activeTabContext, useTabViews, type LoadOpts } from "../state/tabViews";
 import { useUi } from "../state/ui";
@@ -111,13 +112,20 @@ export function ensureDirTab(path?: string): string {
   return activeTab(layout()).id;
 }
 
-/** Chiude la scheda e ne libera lo stato (watcher, listing, viewer). L'ultima scheda dell'ultimo gruppo resta. */
-export function closeTab(tabId: string) {
+/** Chiude la scheda e ne libera lo stato (watcher, listing, viewer, editor), senza chiedere. L'ultima scheda dell'ultimo gruppo resta. */
+export function closeTabNow(tabId: string) {
   layout().closeTab(tabId);
   if (!layout().tabs[tabId]) {
     views().dispose(tabId);
     useViewers.getState().dispose(tabId);
+    useEditors.getState().dispose(tabId);
   }
+}
+
+/** Chiude la scheda; un editor con modifiche non salvate chiede prima cosa farne (Salva / Non salvare / Annulla). */
+export function closeTab(tabId: string) {
+  if (useEditors.getState().docs[tabId]?.dirty) useUi.getState().openDialog({ kind: "unsaved", tabId });
+  else closeTabNow(tabId);
 }
 
 function goHistory(delta: 1 | -1) {
@@ -171,15 +179,16 @@ let exiting = false;
 
 /**
  * Chiusura della finestra: la X, Alt+F4 e cm_Exit passano tutti di qui. Con operazioni non finite
- * (in coda, in corso, in pausa, in attesa di risposta) si chiede conferma invece di ucciderle.
+ * (in coda, in corso, in pausa, in attesa di risposta) o con file non salvati negli editor si chiede conferma.
  */
 export const initCloseGuard = () =>
   getCurrentWindow().onCloseRequested((e) => {
     const count = unfinishedJobs(useJobs.getState().jobs).length;
-    if (!count && !exiting) return;
+    const dirty = dirtyEditorCount();
+    if (!count && !dirty && !exiting) return;
     e.preventDefault();
     // Sostituisce un'eventuale altra finestra aperta: l'utente vuole uscire.
-    if (!exiting) useUi.setState({ dialog: { kind: "exit", count } });
+    if (!exiting) useUi.setState({ dialog: { kind: "exit", count, dirty } });
   });
 
 /** Dalla conferma: annulla tutti i job, ne attende la fine (al massimo `EXIT_WAIT_MS`) e chiude. */

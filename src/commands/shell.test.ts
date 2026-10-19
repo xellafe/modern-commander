@@ -77,9 +77,7 @@ test("cm_Return on a file opens it with the default program", async () => {
   expect(api.listDir).toHaveBeenCalledTimes(1); // nessuna navigazione
 });
 
-test("cm_List opens the cursor file in a viewer tab, cm_Edit uses the external editor; folders and '..' are ignored", async () => {
-  vi.mocked(api.openWith).mockResolvedValue();
-  useSettings.setState({ externalEditor: "code.exe" });
+test("cm_List opens the cursor file in a viewer tab, cm_Edit in an editor tab; folders and '..' are ignored", async () => {
   setCursor("a.txt");
   await executeCommand("cm_List");
   expect(activeTab(useLayout.getState()).file).toEqual({ path: "C:\\x\\a.txt", mode: "viewer" });
@@ -87,14 +85,26 @@ test("cm_List opens the cursor file in a viewer tab, cm_Edit uses the external e
   expect(api.openPath).not.toHaveBeenCalled(); // F3 non apre più programmi esterni
   useLayout.getState().activateTab("t1");
   await executeCommand("cm_Edit");
-  expect(api.openWith).toHaveBeenCalledWith("code.exe", "C:\\x\\a.txt");
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "C:\\x\\a.txt", mode: "editor" });
+  expect(useLayout.getState().groups[0].tabIds).toHaveLength(3);
+  expect(api.openWith).not.toHaveBeenCalled(); // di default F4 usa l'editor interno
+  useLayout.getState().activateTab("t1");
   for (const name of ["sub", ".."]) {
     setCursor(name);
     await executeCommand("cm_List");
     await executeCommand("cm_Edit");
   }
-  expect(useLayout.getState().groups[0].tabIds).toHaveLength(2);
-  expect(api.openWith).toHaveBeenCalledTimes(1);
+  expect(useLayout.getState().groups[0].tabIds).toHaveLength(3);
+});
+
+test("cm_Edit with the external editor option opens that program and no tab", async () => {
+  vi.mocked(api.openWith).mockResolvedValue();
+  useSettings.setState({ externalEditor: "code.exe", useExternalEditor: true });
+  setCursor("a.txt");
+  await executeCommand("cm_Edit");
+  expect(api.openWith).toHaveBeenCalledWith("code.exe", "C:\\x\\a.txt");
+  expect(useLayout.getState().groups[0].tabIds).toHaveLength(1);
+  useSettings.setState({ useExternalEditor: false });
 });
 
 test("cm_Properties uses the marked rows, or the current folder on '..'", async () => {

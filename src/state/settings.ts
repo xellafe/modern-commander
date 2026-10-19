@@ -7,6 +7,8 @@ export interface Settings {
   showHidden: boolean;
   showSystem: boolean;
   confirmDelete: boolean;
+  /** F4 apre `externalEditor` invece dell'editor interno. */
+  useExternalEditor: boolean;
   externalEditor: string;
 }
 
@@ -16,6 +18,7 @@ export const defaultSettings = (osLocale: string): Settings => ({
   showHidden: false,
   showSystem: false,
   confirmDelete: true,
+  useExternalEditor: false,
   externalEditor: "notepad.exe",
 });
 
@@ -33,6 +36,7 @@ const pickSettings = (s: Settings): Settings => ({
   showHidden: s.showHidden,
   showSystem: s.showSystem,
   confirmDelete: s.confirmDelete,
+  useExternalEditor: s.useExternalEditor,
   externalEditor: s.externalEditor,
 });
 

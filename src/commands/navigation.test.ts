@@ -1,12 +1,19 @@
 import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("../ipc/api");
+// La finestra di Tauri non esiste in Node: serve solo a catturare il gestore di chiusura.
+const closeHandlers = vi.hoisted(() => [] as ((e: { preventDefault(): void }) => void)[]);
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ onCloseRequested: async (h: (typeof closeHandlers)[number]) => void closeHandlers.push(h) }),
+}));
 import * as api from "../ipc/api";
 import type { Entry } from "../ipc/types";
 import { activeTab, openFileTab, useLayout } from "../state/layout";
+import { useEditors } from "../state/editors";
 import { activeTabContext, useTabViews } from "../state/tabViews";
+import { useUi } from "../state/ui";
 import { useViewers } from "../state/viewers";
-import { closeTab, ensureDirTab, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
+import { closeTab, closeTabNow, ensureDirTab, initCloseGuard, NAVIGATION_COMMAND_IDS, nextSort, registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
@@ -24,6 +31,8 @@ beforeEach(async () => {
     activationOrder: ["g1"],
   });
   useTabViews.setState({ views: {}, notice: null });
+  useUi.setState({ dialog: null });
+  useEditors.setState({ docs: {} });
   listDir.mockResolvedValueOnce([f("sub", true), f("a.txt"), f("b.txt")]);
   await useTabViews.getState().load("t1", "C:\\x");
 });
@@ -88,6 +97,44 @@ test("closing a viewer tab frees its viewer state, closing the last tab of the l
   expect(Object.keys(useViewers.getState().states)).toEqual(["t1"]);
   closeTab("t1"); // l'ultima scheda dell'ultimo gruppo resta
   expect(useViewers.getState().states.t1).toBeDefined();
+});
+
+const editorDoc = (dirty: boolean) => ({ path: "C:\\x\\f.txt", encoding: "utf-8", bom: false, modifiedMs: 1, dirty, readOnly: false });
+
+test("closing a modified editor asks first and keeps the tab; closeTabNow closes it and frees the document", () => {
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\f.txt", mode: "editor" }));
+  const id = activeTab(useLayout.getState()).id;
+  useEditors.setState({ docs: { [id]: editorDoc(true) } });
+  closeTab(id);
+  expect(useUi.getState().dialog).toEqual({ kind: "unsaved", tabId: id });
+  expect(useLayout.getState().tabs[id]).toBeDefined();
+  expect(useEditors.getState().docs[id]).toBeDefined();
+  closeTabNow(id);
+  expect(useLayout.getState().tabs[id]).toBeUndefined();
+  expect(useEditors.getState().docs[id]).toBeUndefined();
+});
+
+test("closing an unmodified editor closes it without asking", () => {
+  useLayout.setState(openFileTab(useLayout.getState(), "g1", { path: "C:\\x\\f.txt", mode: "editor" }));
+  const id = activeTab(useLayout.getState()).id;
+  useEditors.setState({ docs: { [id]: editorDoc(false) } });
+  closeTab(id);
+  expect(useUi.getState().dialog).toBeNull();
+  expect(useLayout.getState().tabs[id]).toBeUndefined();
+});
+
+test("the window close guard also counts unsaved editors", async () => {
+  await initCloseGuard();
+  const guard = closeHandlers[closeHandlers.length - 1];
+  const event = () => ({ preventDefault: vi.fn() });
+  const clean = event();
+  guard(clean);
+  expect(clean.preventDefault).not.toHaveBeenCalled(); // niente job né modifiche: la finestra si chiude
+  useEditors.setState({ docs: { a: editorDoc(true), b: editorDoc(false), c: editorDoc(true) } });
+  const blocked = event();
+  guard(blocked);
+  expect(blocked.preventDefault).toHaveBeenCalled();
+  expect(useUi.getState().dialog).toEqual({ kind: "exit", count: 0, dirty: 2 });
 });
 
 test("tab and group commands are 'group', so they stay available on file tabs", async () => {

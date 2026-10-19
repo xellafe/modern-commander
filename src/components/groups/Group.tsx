@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useLayout, type Group as GroupModel } from "../../state/layout";
 import { useTabViews, type MenuItem } from "../../state/tabViews";
+import { Editor } from "../editor/Editor";
 import { Viewer } from "../viewer/Viewer";
 import { Breadcrumb } from "./Breadcrumb";
 import { FileList } from "./FileList";
@@ -17,6 +18,7 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
   const path = useLayout((s) => s.tabs[tabId].path);
   const isFile = useLayout((s) => !!s.tabs[tabId].file);
   const viewerPath = useLayout((s) => (s.tabs[tabId].file?.mode === "viewer" ? s.tabs[tabId].file!.path : null));
+  const editorPath = useLayout((s) => (s.tabs[tabId].file?.mode === "editor" ? s.tabs[tabId].file!.path : null));
   const hasView = useTabViews((s) => tabId in s.views);
   const overlay = useTabViews((s) => (s.overlay?.tabId === tabId ? s.overlay : null));
   const notice = useTabViews((s) => (s.notice?.tabId === tabId ? s.notice : null));
@@ -38,8 +40,8 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
       }}
     >
       <TabStrip group={group} />
-      {/* Il corpo dell'editor arriva con il suo task: per ora una scheda editor mostra solo la barra. */}
       {viewerPath && <Viewer key={tabId} tabId={tabId} path={viewerPath} />}
+      {editorPath && <Editor key={tabId} tabId={tabId} path={editorPath} />}
       {!isFile && <Breadcrumb key={tabId} tabId={tabId} path={path} />}
       {!isFile && <div className="mc-group-body">
         <FileList tabId={tabId} active={active} />

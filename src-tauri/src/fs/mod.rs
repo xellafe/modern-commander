@@ -56,6 +56,18 @@ pub async fn read_file(path: String, max: u64) -> Result<Response, AppError> {
     Ok(Response::new(bytes))
 }
 
+/// Salvataggio dell'editor (vedi `content::write_text_file`); restituisce il `FileInfo` dopo la scrittura.
+#[tauri::command]
+pub async fn write_text_file(
+    path: String,
+    text: String,
+    encoding: String,
+    bom: bool,
+    expected_modified_ms: Option<i64>,
+) -> Result<content::FileInfo, AppError> {
+    blocking(move || content::write_text_file(Path::new(&path), &text, &encoding, bom, expected_modified_ms)).await?
+}
+
 /// Etichetta della codifica ANSI di sistema (code page `GetACP`) nel formato di `TextDecoder`.
 #[tauri::command]
 pub fn ansi_encoding() -> String {

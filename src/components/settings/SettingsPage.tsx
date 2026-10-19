@@ -9,7 +9,7 @@ const CATEGORIES: Category[] = ["appearance", "files", "editor"];
 
 type Item =
   | { id: "theme" | "language"; category: Category; kind: "select"; options: string[] }
-  | { id: "showHidden" | "showSystem" | "confirmDelete"; category: Category; kind: "check" }
+  | { id: "showHidden" | "showSystem" | "confirmDelete" | "useExternalEditor"; category: Category; kind: "check" }
   | { id: "externalEditor"; category: Category; kind: "text" };
 
 const ITEMS: Item[] = [
@@ -18,6 +18,7 @@ const ITEMS: Item[] = [
   { id: "showHidden", category: "files", kind: "check" },
   { id: "showSystem", category: "files", kind: "check" },
   { id: "confirmDelete", category: "files", kind: "check" },
+  { id: "useExternalEditor", category: "editor", kind: "check" },
   { id: "externalEditor", category: "editor", kind: "text" },
 ];
 

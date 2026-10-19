@@ -43,7 +43,7 @@ pub struct LocalExecutor;
 
 type Progress<'a> = &'a mut dyn FnMut(u64) -> bool;
 
-fn wide(p: &Path) -> HSTRING {
+pub(crate) fn wide(p: &Path) -> HSTRING {
     HSTRING::from(to_extended(p).as_path())
 }
 
@@ -53,7 +53,7 @@ fn from_hresult(hr: i32, detail: String, path: &Path) -> AppError {
     AppError { detail: Some(detail), ..AppError::from_io(&std::io::Error::from_raw_os_error(code), path) }
 }
 
-fn from_win(e: &windows::core::Error, path: &Path) -> AppError {
+pub(crate) fn from_win(e: &windows::core::Error, path: &Path) -> AppError {
     from_hresult(e.code().0, e.message(), path)
 }
 

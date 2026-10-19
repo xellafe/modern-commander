@@ -182,9 +182,13 @@ const DEFS: [string, Command["run"]][] = [
     const l = useLayout.getState();
     if (f) l.openFileTab(l.activeGroupId, { path: f.path, mode: "viewer" });
   }],
+  // F4: editor interno in una scheda, oppure (impostazione) il programma esterno come nella fase 1.
   ["cm_Edit", () => {
     const f = cursorFile();
-    if (f) return editFile(f.tabId, f.path);
+    if (!f) return;
+    if (useSettings.getState().useExternalEditor) return editFile(f.tabId, f.path);
+    const l = useLayout.getState();
+    l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor" });
   }],
 ];
 

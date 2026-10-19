@@ -43,6 +43,7 @@ pub fn run() {
             fs::file_info,
             fs::read_chunk,
             fs::read_file,
+            fs::write_text_file,
             fs::ansi_encoding,
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,

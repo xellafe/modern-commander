@@ -92,6 +92,19 @@
     "unsupportedPdf": "Questo PDF non si può aprire. Usa Testo o Esadecimale per vedere il file.",
     "openExternal": "Apri con il programma predefinito"
   },
+  "editor": {
+    "unsavedTitle": "Modifiche non salvate",
+    "unsavedText": "«{{name}}» ha modifiche non salvate. Salvarle prima di chiudere?",
+    "save": "Salva",
+    "discard": "Non salvare",
+    "saveErrorTitle": "Impossibile salvare",
+    "changedOnDisk": "«{{name}}» è stato modificato da un altro programma dopo l'apertura. Sovrascriverlo farebbe perdere quelle modifiche.",
+    "unmappable": "Il testo di «{{name}}» contiene caratteri che {{encoding}} non sa rappresentare. Salvando in quella codifica andrebbero persi.",
+    "overwrite": "Sovrascrivi",
+    "saveUtf8": "Salva in UTF-8",
+    "readOnly": "Aperto in sola lettura: il file sembra binario o non si decodifica senza perdere dati, quindi salvarlo potrebbe danneggiarlo. Premi F3 nella lista dei file per vederlo in esadecimale.",
+    "tooLarge": "Il file è troppo grande per essere modificato (oltre {{size}}). Premi F3 nella lista dei file per visualizzarlo."
+  },
   "hotlist": {
     "title": "Hotlist cartelle",
     "addCurrent": "Aggiungi cartella corrente",
@@ -236,9 +249,11 @@
     "deleteText": "Spostare {{what}} nel Cestino?",
     "deletePermanentText": "Eliminare definitivamente {{what}}? L'operazione non si può annullare.",
     "exitTitle": "Esci da Modern Commander",
-    "exitText_one": "{{count}} operazione non è finita. Annullarla e uscire?",
-    "exitText_other": "{{count}} operazioni non sono finite. Annullarle e uscire?",
-    "exitConfirm": "Annulla ed esci",
+    "exitJobs_one": "{{count}} operazione non è finita e verrà annullata.",
+    "exitJobs_other": "{{count}} operazioni non sono finite e verranno annullate.",
+    "exitUnsaved_one": "{{count}} file ha modifiche non salvate che andranno perse.",
+    "exitUnsaved_other": "{{count}} file hanno modifiche non salvate che andranno perse.",
+    "exitConfirm": "Esci comunque",
     "delete": "Elimina",
     "selectTitle": "Seleziona file",
     "unselectTitle": "Deseleziona file",
@@ -304,9 +319,13 @@
         "label": "Conferma prima di eliminare",
         "desc": "Chiede conferma prima di spostare gli elementi nel Cestino o di eliminarli."
       },
+      "useExternalEditor": {
+        "label": "Modifica con un editor esterno",
+        "desc": "F4 apre il programma qui sotto invece dell'editor integrato."
+      },
       "externalEditor": {
         "label": "Editor esterno",
-        "desc": "Programma che apre i file con F4 (comando o percorso completo)."
+        "desc": "Programma che apre i file con F4 quando l'editor esterno è attivo (comando o percorso completo)."
       }
     },
     "options": {

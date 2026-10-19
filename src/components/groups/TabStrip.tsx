@@ -3,6 +3,7 @@ import type { PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { closeTab } from "../../commands/navigation";
 import { DRIVES, folderName } from "../../lib/paths";
+import { useEditors } from "../../state/editors";
 import { useLayout, type Group, type Tab } from "../../state/layout";
 
 // Trascinamento delle schede con pointer events e non con HTML5 DnD: su Windows il DnD HTML5
@@ -61,6 +62,7 @@ export function TabStrip({ group }: { group: Group }) {
   const { t } = useTranslation();
   const tabs = useLayout((s) => s.tabs);
   const newTab = useLayout((s) => s.newTab);
+  const docs = useEditors((s) => s.docs);
   const label = (tab: Tab) =>
     tab.file ? folderName(tab.file.path) : tab.path === DRIVES ? t("groups.drives") : folderName(tab.path);
 
@@ -78,6 +80,7 @@ export function TabStrip({ group }: { group: Group }) {
         >
           {tabs[id].file && (tabs[id].file!.mode === "editor" ? <Pencil size={12} aria-hidden /> : <Eye size={12} aria-hidden />)}
           <span className="mc-tab-label">{label(tabs[id])}</span>
+          {docs[id]?.dirty && <span className="mc-tab-dirty" role="img" aria-label={t("editor.unsavedTitle")} title={t("editor.unsavedTitle")} />}
           <button
             className="mc-tab-close"
             aria-label={t("groups.closeTab")}

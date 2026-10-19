@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ConflictPolicy } from "../ipc/types";
+import type { SaveOptions } from "./editors";
 
 export type SidebarView = "explorer" | "search" | "git" | "favorites";
 
@@ -32,8 +33,15 @@ export type DialogRequest =
   | { kind: "mkdir"; tabId: string; path: string }
   | { kind: "delete"; permanent: boolean; sources: string[] }
   | { kind: "mask"; tabId: string; select: boolean }
-  /** Chiusura della finestra con `count` operazioni non finite. */
-  | { kind: "exit"; count: number };
+  /** Chiusura di una scheda editor con modifiche non salvate. */
+  | { kind: "unsaved"; tabId: string }
+  /**
+   * Salvataggio rifiutato per un file cambiato su disco o per caratteri che la codifica non rappresenta.
+   * `opts`: le opzioni del tentativo fallito, a cui il dialogo aggiunge la correzione scelta.
+   */
+  | { kind: "saveError"; tabId: string; code: "CHANGED_ON_DISK" | "UNMAPPABLE_CHARS"; opts: SaveOptions }
+  /** Chiusura della finestra con `count` operazioni non finite e `dirty` file non salvati. */
+  | { kind: "exit"; count: number; dirty: number };
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 
