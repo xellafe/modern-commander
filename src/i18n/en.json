@@ -38,7 +38,14 @@
       "move": "Move",
       "copyHere": "Copy here",
       "rename": "Rename",
-      "deletePermanent": "Delete permanently"
+      "deletePermanent": "Delete permanently",
+      "brief": "Brief",
+      "full": "Full",
+      "byName": "By name",
+      "byExt": "By extension",
+      "byDate": "By date",
+      "bySize": "By size",
+      "unsorted": "Unsorted"
     }
   },
   "status": {

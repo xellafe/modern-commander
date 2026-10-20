@@ -21,9 +21,19 @@ const SHIFT: FKeySlot[] = [
 ];
 // Fase 1: dell'Alt c'è solo l'uscita.
 const ALT: FKeySlot[] = [slot("F4", "cm_Exit", "exit")];
+// Come in TC: vista breve o dettagliata e ordinamento.
+const CTRL: FKeySlot[] = [
+  slot("F1", "cm_SrcShort", "brief"),
+  slot("F2", "cm_SrcLong", "full"),
+  slot("F3", "cm_SrcByName", "byName"),
+  slot("F4", "cm_SrcByExt", "byExt"),
+  slot("F5", "cm_SrcByDateTime", "byDate"),
+  slot("F6", "cm_SrcBySize", "bySize"),
+  slot("F7", "cm_SrcUnsorted", "unsorted"),
+];
 
 /** Slot del livello esatto dei modificatori premuti (altre combinazioni: nessuno), solo per i comandi registrati. */
 export function fkeyLabels(mods: Mods, available: Set<string>): FKeySlot[] {
-  const layer = mods.ctrl ? [] : mods.alt ? (mods.shift ? [] : ALT) : mods.shift ? SHIFT : BASE;
+  const layer = mods.ctrl ? (mods.alt || mods.shift ? [] : CTRL) : mods.alt ? (mods.shift ? [] : ALT) : mods.shift ? SHIFT : BASE;
   return layer.filter((s) => available.has(s.commandId));
 }

@@ -38,7 +38,14 @@
       "move": "Sposta",
       "copyHere": "Copia qui",
       "rename": "Rinomina",
-      "deletePermanent": "Elimina definitivamente"
+      "deletePermanent": "Elimina definitivamente",
+      "brief": "Breve",
+      "full": "Dettagli",
+      "byName": "Per nome",
+      "byExt": "Per estensione",
+      "byDate": "Per data",
+      "bySize": "Per dimensione",
+      "unsorted": "Non ordinato"
     }
   },
   "status": {

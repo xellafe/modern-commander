@@ -6,6 +6,8 @@ import { fkeyLabels } from "./fkeys";
 const ALL = new Set([
   "cm_List", "cm_Edit", "cm_Copy", "cm_CopySamepanel", "cm_RenMov", "cm_RenameOnly",
   "cm_MkDir", "cm_Delete", "mc_DeletePermanent", "cm_Exit", "cm_PackFiles",
+  "cm_SrcShort", "cm_SrcLong", "cm_SrcByName", "cm_SrcByExt", "cm_SrcByDateTime", "cm_SrcBySize", "cm_SrcUnsorted",
+  "cm_SrcShort", "cm_SrcLong", "cm_SrcByName", "cm_SrcByExt", "cm_SrcByDateTime", "cm_SrcBySize", "cm_SrcUnsorted",
 ]);
 const none = { shift: false, ctrl: false, alt: false };
 const pairs = (m: Parameters<typeof fkeyLabels>[0], a = ALL) => fkeyLabels(m, a).map((s) => [s.key, s.commandId]);
@@ -27,9 +29,16 @@ test("con Alt: solo Alt+F4", () => {
   expect(pairs({ ...none, alt: true })).toEqual([["F4", "cm_Exit"]]);
 });
 
-test("combinazione senza livello (Ctrl, Shift+Ctrl): barra vuota", () => {
-  expect(pairs({ ...none, ctrl: true })).toEqual([]);
+test("con Ctrl: vista e ordinamento come in TC", () => {
+  expect(pairs({ ...none, ctrl: true })).toEqual([
+    ["F1", "cm_SrcShort"], ["F2", "cm_SrcLong"], ["F3", "cm_SrcByName"], ["F4", "cm_SrcByExt"],
+    ["F5", "cm_SrcByDateTime"], ["F6", "cm_SrcBySize"], ["F7", "cm_SrcUnsorted"],
+  ]);
+});
+
+test("combinazione senza livello (Shift+Ctrl, Ctrl+Alt): barra vuota", () => {
   expect(pairs({ shift: true, ctrl: true, alt: false })).toEqual([]);
+  expect(pairs({ shift: false, ctrl: true, alt: true })).toEqual([]);
 });
 
 test("un comando non registrato non compare", () => {
@@ -38,9 +47,9 @@ test("un comando non registrato non compare", () => {
   expect(fkeyLabels({ ...none, shift: true }, without)).toEqual([]);
 });
 
-test("ogni etichetta dei tre livelli esiste in en.json e it.json", () => {
-  const all = [none, { ...none, shift: true }, { ...none, alt: true }].flatMap((m) => fkeyLabels(m, ALL));
-  expect(all.length).toBe(7 + 3 + 1);
+test("ogni etichetta dei quattro livelli esiste in en.json e it.json", () => {
+  const all = [none, { ...none, shift: true }, { ...none, alt: true }, { ...none, ctrl: true }].flatMap((m) => fkeyLabels(m, ALL));
+  expect(all.length).toBe(7 + 3 + 1 + 7);
   const lookup = (res: object, key: string) => key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], res);
   for (const { labelKey } of all) {
     expect(typeof lookup(en, labelKey), `en ${labelKey}`).toBe("string");
