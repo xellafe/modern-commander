@@ -59,14 +59,15 @@ export function rowContextMenu(tabId: string, i: number | null, e: MouseEvent) {
 }
 
 /**
- * Listener globale di `contextmenu`. Il tasto Menu apre cm_ContextMenu al keydown (mappa tasti); al keyup
- * Chromium genera anche un contextmenu senza pulsante (`button` -1) che aprirebbe il menu di WebView2.
- * Nei campi di testo resta il menu di modifica.
+ * Listener globale di `contextmenu`: il menu di WebView2 (Ricarica, Stampa, Ispeziona…) non compare mai fuori
+ * dai campi di testo, dove resta il menu di modifica. Il tasto Menu apre cm_ContextMenu al keydown (mappa tasti) e
+ * al keyup Chromium genera un contextmenu senza pulsante (`button` -1). Con `keepMouseMenu` (sviluppo) il tasto
+ * destro lo lascia, per Ispeziona.
  */
-export function suppressKeyboardContextMenu(e: Pick<globalThis.MouseEvent, "button" | "target" | "preventDefault">) {
+export function suppressNativeContextMenu(e: Pick<globalThis.MouseEvent, "button" | "target" | "preventDefault">, keepMouseMenu: boolean) {
   const t = e.target as Element | null;
   const editable = typeof t?.closest === "function" && t.closest('input, textarea, [contenteditable]:not([contenteditable="false"])');
-  if (e.button !== 2 && !editable) e.preventDefault();
+  if (!editable && !(keepMouseMenu && e.button === 2)) e.preventDefault();
 }
 
 interface SelfDragState {

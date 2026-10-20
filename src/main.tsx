@@ -6,7 +6,7 @@ import { registerHotlistCommands } from "./commands/hotlist";
 import { initCloseGuard, registerNavigationCommands } from "./commands/navigation";
 import { registerPaletteCommands } from "./commands/palette";
 import { registerSettingsCommands } from "./commands/settings";
-import { registerShellCommands, suppressKeyboardContextMenu } from "./commands/shell";
+import { registerShellCommands, suppressNativeContextMenu } from "./commands/shell";
 import { registerTerminalCommands } from "./commands/terminal";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
@@ -31,7 +31,7 @@ registerShellCommands();
 registerSettingsCommands();
 registerPaletteCommands();
 registerTerminalCommands();
-window.addEventListener("contextmenu", suppressKeyboardContextMenu);
+window.addEventListener("contextmenu", (e) => suppressNativeContextMenu(e, import.meta.env.DEV));
 window.addEventListener("beforeunload", blockUnloadIfDirty);
 // Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
 initJobs().catch(console.error);

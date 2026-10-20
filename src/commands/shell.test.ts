@@ -12,7 +12,7 @@ import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 import {
   classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
-  suppressKeyboardContextMenu, toPhysical,
+  suppressNativeContextMenu, toPhysical,
 } from "./shell";
 
 const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
@@ -225,18 +225,20 @@ test("programs open in the viewer with F3 and run with cm_Return", async () => {
   expect(api.openPath).toHaveBeenCalledWith("C:\\y\\setup.BAT");
 });
 
-test("suppressKeyboardContextMenu prevents keyboard menus outside text fields only", () => {
-  const ev = (button: number, editable: boolean) => {
+test("suppressNativeContextMenu keeps the WebView2 menu only in text fields (and on right click in dev)", () => {
+  const ev = (button: number, editable: boolean, dev = false) => {
     const e = { button, target: { closest: () => (editable ? {} : null) }, preventDefault: vi.fn() };
-    suppressKeyboardContextMenu(e as never);
+    suppressNativeContextMenu(e as never, dev);
     return e.preventDefault.mock.calls.length > 0;
   };
-  expect(ev(-1, false)).toBe(true);
+  expect(ev(-1, false)).toBe(true); // tasto Menu: lo gestisce cm_ContextMenu
   expect(ev(0, false)).toBe(true);
-  expect(ev(2, false)).toBe(false); // tasto destro: lo gestisce la lista (o resta il menu di WebView2)
+  expect(ev(2, false)).toBe(true); // tasto destro fuori dalla lista: niente Ricarica, Stampa, Ispeziona
+  expect(ev(2, false, true)).toBe(false); // in sviluppo resta, per Ispeziona
   expect(ev(-1, true)).toBe(false); // menu di modifica del testo
+  expect(ev(2, true)).toBe(false);
   const noTarget = { button: -1, target: null, preventDefault: vi.fn() };
-  suppressKeyboardContextMenu(noTarget as never);
+  suppressNativeContextMenu(noTarget as never, false);
   expect(noTarget.preventDefault).toHaveBeenCalled();
 });
 
