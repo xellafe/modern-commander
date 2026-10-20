@@ -394,6 +394,18 @@ mod tests {
     }
 
     #[test]
+    fn save_while_another_program_holds_the_file_without_delete_share() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("held.txt");
+        std::fs::write(&f, "v1").unwrap();
+        let _held = std::fs::OpenOptions::new().read(true).share_mode(0x1 | 0x2).open(&f).unwrap(); // READ|WRITE, niente DELETE
+        assert_eq!(write_text_file(&f, "v2", "utf-8", false, None).unwrap_err().code, ErrorCode::FileInUse);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "v1");
+        assert_eq!(names(d.path()), ["held.txt"]);
+    }
+
+    #[test]
     fn a_part_file_that_already_exists_is_never_touched() {
         // Il `.mcpart` di una copia in corso (o un file dell'utente con quel nome) non è nostro:
         // la scrittura usa un nome proprio e non lo sovrascrive né lo elimina, nemmeno se fallisce.

@@ -53,13 +53,14 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
           </div>
         )}
         {(overlay?.kind === "filter" || filter) && <QuickFilter tabId={tabId} focus={overlay?.kind === "filter"} />}
-        {notice && (
-          <div className="mc-notice" role="alert">
-            {t(`errors.${notice.code}`)}
-            {notice.path && <span>{notice.path}</span>}
-          </div>
-        )}
       </div>}
+      {/* Anche sulle schede di file: un salvataggio fallito dell'editor (file in uso, accesso negato) arriva qui. */}
+      {notice && (
+        <div className="mc-notice" role="alert">
+          {t(`errors.${notice.code}`)}
+          {notice.path && <span>{notice.path}</span>}
+        </div>
+      )}
     </section>
   );
 }
