@@ -34,5 +34,6 @@
 .mc-term { position: absolute; inset: 0; visibility: hidden; }
 .mc-term.on { visibility: visible; }
 .mc-term .xterm { height: 100%; padding: 4px 6px; box-sizing: border-box; }
-/* xterm 6 disegna una barra propria (.xterm-scrollable-element): quella nativa del viewport sarebbe un doppione */
-.mc-term .xterm-viewport { scrollbar-width: none; }
+/* xterm 6 disegna una barra propria (.xterm-scrollable-element): quella nativa del viewport sarebbe un doppione.
+   Il viewport copre anche il padding di .xterm: col nero di xterm.css farebbe una cornice attorno al terminale. */
+.mc-term .xterm-viewport { scrollbar-width: none; background-color: var(--mc-panel); }
