@@ -43,9 +43,11 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - Immagine adattata al riquadro e 1:1 al click (`max-height: 100%` nel flex).
 - PDF di 300 pagine: prima pagina in meno di 1 s, scorrimento senza blocchi; ridimensionando il riquadro con un PDF aperto; aprendo e chiudendo subito un PDF grosso non restano richieste in DevTools → Network.
 - MP4 da 2 GB: salto a metà immediato, la memoria non cresce della dimensione del file (richieste Range).
-- MKV: avviso con "Apri con il programma predefinito".
+- Video non riproducibile (`rotto.mp4`, byte casuali): avviso con "Apri con il programma predefinito". Un MKV non è tra i formati della WebView (`preview.ts`): si apre in esadecimale, senza avviso.
 - Tasti `1` e `3` dalle modalità native; tema chiaro e scuro.
 - "Apri con il programma predefinito" nel `MediaPane` ignora gli errori di `openPath` (`.catch(() => {})`): con un file senza associazione o in uso non compare nulla. Provarlo e decidere se mostrare un avviso.
+
+✅ Verificato il 2026-10-20 (`tauri dev`, file da `D:\mc-test\media`: immagini 3000×2000 in sette formati, PDF di 300 pagine, MP4 H.264 da 2 GB, `rotto.mp4` e `rotto.ogv`). Tutti i punti superati; il silenzio di `openPath` senza associazione è accettato così.
 
 **Editor F4** (Task 6)
 - F4 su un `.ts`: sintassi evidenziata; Ctrl+S salva e la data cambia nella lista (watcher). Verificare che Monaco e i suoi worker si carichino nella WebView (finora controllata solo la separazione dei chunk).
@@ -61,6 +63,8 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - Ctrl+S dopo un clic sulla barra delle schede (focus sul body, non in Monaco) salva comunque; con il focus in un dialogo o in un campo di testo non cambia nulla.
 - Ctrl+Tab e Ctrl+Shift+Tab con il focus in Monaco cambiano scheda.
 - Salvare un file che un altro programma tiene aperto senza condivisione di cancellazione: il messaggio è "file in uso" (`ReplaceFileW` 1175), non un errore generico.
+
+✅ Verificato il 2026-10-20 (`tauri dev`, file da `D:\mc-test\editor`). Ctrl+Tab e Ctrl+Shift+Tab cambiano scheda nel solo gruppo col focus, come atteso. Il salvataggio del file in uso falliva correttamente ma l'avviso non compariva nelle schede di file: corretto (`Group.tsx`, test Rust `save_while_another_program_holds_the_file_without_delete_share`).
 
 **Command palette e Ctrl+P** (Task 7, Task 8)
 - Ctrl+Shift+P → "cop" → Invio esegue Copia; il focus torna alla lista prima del dialogo. Con un viewer o un editor attivo i comandi della lista non compaiono. Il click sul campo del titolo apre la palette. Resa visiva (posizione, `mark`, `kbd`, scorrimento della riga selezionata, hover contro tastiera).
