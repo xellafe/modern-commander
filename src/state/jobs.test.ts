@@ -3,7 +3,16 @@ import { expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { JobView, Prompt } from "../ipc/types";
-import { cancelAllAndWait, conflictChoices, conflictReply, pendingPrompts, renamePath, unfinishedJobs, useJobs, waitForJob } from "./jobs";
+import { cancelAllAndWait, conflictChoices, conflictReply, newestJob, pendingPrompts, renamePath, unfinishedJobs, useJobs, waitForJob } from "./jobs";
+
+test("newestJob: only a job added after the last one seen, not a reorder or a removal", () => {
+  expect(newestJob([], 0)).toBeNull();
+  expect(newestJob([1, 2], 0)).toBe(2);
+  expect(newestJob([1, 2], 2)).toBeNull();
+  expect(newestJob([2, 1], 2)).toBeNull(); // riordino col trascinamento: l'ultima riga cambia, nessun job nuovo
+  expect(newestJob([3, 1, 2], 2)).toBe(3); // il nuovo può non essere l'ultimo dopo un riordino
+  expect(newestJob([1], 2)).toBeNull(); // "Rimuovi finite" ha tolto il più recente
+});
 
 test("conflictChoices on the same file offers only skip, rename and cancel", () => {
   expect(conflictChoices(true)).toEqual(["skip", "rename", "cancel"]);

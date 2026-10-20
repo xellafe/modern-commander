@@ -1,10 +1,10 @@
 import { Copy, FolderInput, FolderPlus, GripVertical, PencilLine, Play, Pause, Trash2, X, type LucideIcon } from "lucide-react";
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { cancelJob, clearFinished, moveJob, pauseJob, resumeJob } from "../../ipc/api";
 import type { JobKind, JobView } from "../../ipc/types";
 import { formatEta, formatSize } from "../../lib/format";
-import { isFinished, kindKey, progressOf, useJobs } from "../../state/jobs";
+import { isFinished, kindKey, newestJob, progressOf, useJobs } from "../../state/jobs";
 import "./panel.css";
 
 const ICONS: Record<JobKind["type"], LucideIcon> = {
@@ -13,12 +13,24 @@ const ICONS: Record<JobKind["type"], LucideIcon> = {
 
 const refresh = () => useJobs.getState().refresh().catch(console.error);
 
-/** Coda delle operazioni: avanzamento, velocità, ETA, pausa/riprendi/annulla, riordino col trascinamento. */
-export function OperationsView() {
+/**
+ * Coda delle operazioni: avanzamento, velocità, ETA, pausa/riprendi/annulla, riordino col trascinamento.
+ * Un job nuovo si porta in vista; se la scheda è nascosta, la prima volta che si mostra.
+ */
+export function OperationsView({ visible }: { visible: boolean }) {
   const { t } = useTranslation();
   const order = useJobs((s) => s.order);
   const jobs = useJobs((s) => s.jobs);
   const list = useRef<HTMLDivElement>(null);
+  const seen = useRef(0);
+
+  useEffect(() => {
+    if (!visible) return;
+    const id = newestJob(order, seen.current);
+    if (id === null) return;
+    seen.current = id;
+    list.current?.querySelector(`[data-job-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [order, visible]);
   // Trascinamento in corso: job e posizione d'arrivo (indice nella coda senza il job trascinato).
   const [drag, setDrag] = useState<{ id: number; to: number } | null>(null);
 

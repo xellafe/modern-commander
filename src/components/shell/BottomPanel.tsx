@@ -26,7 +26,7 @@ export function BottomPanel({ hidden }: { hidden: boolean }) {
         </button>
       </div>
       <div className="mc-panel-body" hidden={tab !== "operations"}>
-        <OperationsView />
+        <OperationsView visible={!hidden && tab === "operations"} />
       </div>
       <div className="mc-panel-body mc-panel-term" hidden={tab !== "terminal"}>
         <TerminalView />

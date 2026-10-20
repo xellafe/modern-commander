@@ -99,6 +99,11 @@ body {
 .mc-panel-head button { padding: 0 0 1px; border-radius: 0; letter-spacing: inherit; text-transform: inherit; }
 .mc-panel-head .on { color: var(--mc-text); border-bottom: 1px solid var(--mc-accent); }
 .mc-panel-body { flex: 1; min-height: 0; overflow: auto; }
+/* Barra come quella di xterm nel terminale: 14px, cursore del colore del testo al 20%, senza binario */
+.mc-panel-body::-webkit-scrollbar { width: 14px; height: 14px; }
+.mc-panel-body::-webkit-scrollbar-track, .mc-panel-body::-webkit-scrollbar-corner { background: transparent; }
+.mc-panel-body::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--mc-text) 20%, transparent); }
+.mc-panel-body::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--mc-text) 35%, transparent); }
 .mc-panel-term { overflow: hidden; }
 
 /* Splitter: maniglia di 5px a cavallo del bordo */

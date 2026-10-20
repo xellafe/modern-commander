@@ -147,3 +147,9 @@ export async function cancelAllAndWait(timeoutMs: number): Promise<void> {
 /** Job avviati e non finiti (in corso, in attesa di risposta, in pausa), nell'ordine della coda: la barra di stato mostra il primo. */
 export const activeJobs = (order: JobId[], jobs: Record<JobId, JobView>): JobView[] =>
   order.flatMap((i) => (["running", "waiting", "paused"].includes(jobs[i]?.state.type ?? "") ? [jobs[i]] : []));
+
+/** Il job aggiunto dopo `seen` (gli id crescono), se c'è: un riordino o una rimozione non ne creano uno. */
+export function newestJob(order: JobId[], seen: JobId): JobId | null {
+  const max = Math.max(0, ...order);
+  return max > seen ? max : null;
+}
