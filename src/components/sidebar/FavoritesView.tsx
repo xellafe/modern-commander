@@ -1,7 +1,9 @@
-import { Check, ChevronDown, ChevronRight, Folder, FolderPlus, FolderTree, Pencil, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Folder, FolderPlus, FolderTree, Pencil, Star, Trash2 } from "lucide-react";
 import { useRef, useState, type PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { DRIVES, folderName } from "../../lib/paths";
 import { resolveDrop, useHotlist, type HotlistItem } from "../../state/hotlist";
+import { activeTab, useLayout } from "../../state/layout";
 import { openInActiveTab } from "./FolderTree";
 
 type Row = { item: HotlistItem; depth: number };
@@ -182,10 +184,19 @@ export function FavoritesView() {
   const { t } = useTranslation();
   const editing = useHotlist((s) => s.editing);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const current = useLayout((s) => activeTab(s).path); // anche per una scheda di file è la sua cartella
 
   return (
     <>
       <div className="mc-side-tools">
+        <button
+          aria-label={t("hotlist.addCurrent")}
+          title={t("hotlist.addCurrent")}
+          disabled={current === DRIVES}
+          onClick={() => useHotlist.getState().addDir(current, folderName(current))}
+        >
+          <Star size={14} />
+        </button>
         {editing && (
           <button
             aria-label={t("hotlist.newSubmenu")}
