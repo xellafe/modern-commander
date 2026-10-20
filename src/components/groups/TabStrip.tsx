@@ -1,7 +1,10 @@
-import { Eye, Pencil, Plus, X } from "lucide-react";
+import { Eye, Pencil, Plus, SquareSplitHorizontal, X } from "lucide-react";
 import type { PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { chordParts } from "../../commands/keys";
+import { chordsOf } from "../../commands/keymap";
 import { closeTab } from "../../commands/navigation";
+import { useKeybindings } from "../../state/keybindings";
 import { DRIVES, folderName } from "../../lib/paths";
 import { useEditors } from "../../state/editors";
 import { useLayout, type Group, type Tab } from "../../state/layout";
@@ -63,6 +66,8 @@ export function TabStrip({ group }: { group: Group }) {
   const tabs = useLayout((s) => s.tabs);
   const newTab = useLayout((s) => s.newTab);
   const docs = useEditors((s) => s.docs);
+  const splitKeys = useKeybindings((s) => chordsOf(s.keymap, "mc_SplitGroup")[0]);
+  const splitTitle = t("commands.mc_SplitGroup") + (splitKeys ? ` (${chordParts(splitKeys).join("+")})` : "");
   const label = (tab: Tab) =>
     tab.file ? folderName(tab.file.path) : tab.path === DRIVES ? t("groups.drives") : folderName(tab.path);
 
@@ -101,6 +106,15 @@ export function TabStrip({ group }: { group: Group }) {
         onClick={() => newTab(group.id, tabs[group.activeTabId].path)}
       >
         <Plus size={14} />
+      </button>
+      <button
+        className="mc-tab-split"
+        aria-label={splitTitle}
+        title={splitTitle}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => useLayout.getState().splitGroup(group.id)}
+      >
+        <SquareSplitHorizontal size={14} />
       </button>
     </div>
   );

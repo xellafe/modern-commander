@@ -26,6 +26,7 @@
 .mc-tab.on .mc-tab-close, .mc-tab:hover .mc-tab-close { visibility: visible; }
 .mc-shell .mc-tab-close:hover { background: var(--mc-selection); }
 .mc-shell .mc-tab-add { width: 28px; flex: none; }
+.mc-shell .mc-tab-split { width: 28px; flex: none; margin-left: auto; } /* in fondo a destra, come in VS Code */
 .mc-tab.drop-before { box-shadow: inset 2px 0 0 var(--mc-accent); }
 .mc-tab.drop-after { box-shadow: inset -2px 0 0 var(--mc-accent); }
 .mc-tabs.drop-end { box-shadow: inset 0 -2px 0 var(--mc-accent); }
