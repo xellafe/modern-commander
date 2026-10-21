@@ -1,6 +1,7 @@
 // Comandi della palette (Ctrl+Shift+P) e del salto rapido (Ctrl+P), e le voci che la palette mostra.
 import type { ScanEntry } from "../ipc/types";
 import { joinPath } from "../lib/paths";
+import { activeTab, useLayout } from "../state/layout";
 import { usePalette } from "../state/palette";
 import { useTabViews } from "../state/tabViews";
 import { useUi } from "../state/ui";
@@ -18,7 +19,8 @@ export interface PaletteItem {
   detail?: string;
   /** Un tasto per ogni elemento, ogni tasto come elenco di parti (['Ctrl', 'Shift', 'P']). */
   keys?: string[][];
-  run(): void | Promise<void>;
+  /** `ctrl`: scelta con Ctrl+Invio o Ctrl+clic (il salto rapido la usa per la nuova scheda; i comandi la ignorano). */
+  run(ctrl?: boolean): void | Promise<void>;
 }
 
 /** I comandi eseguibili ora (la palette stessa esclusa), col titolo tradotto e i tasti della mappa viva. */
@@ -62,10 +64,21 @@ export function jumpTarget(item: JumpItem, root: string): { dir: string; focus?:
   return { dir: cut < 0 ? root : joinPath(root, item.rel.slice(0, cut)), focus: item.rel.slice(cut + 1) };
 }
 
-/** Va alla voce scelta, nella scheda cartella del gruppo attivo (da un viewer/editor si torna alla lista). */
-export async function runJump(item: JumpItem, root: string): Promise<void> {
+/** Nuova scheda per la voce scelta: Ctrl (Ctrl+Invio, Ctrl+clic) inverte l'impostazione `jumpInNewTab`. */
+export const wantsNewTab = (ctrl: boolean, always: boolean) => ctrl !== always;
+
+/** Scheda in cui aprire `dir`: una nuova subito dopo quella attiva, oppure la scheda cartella del gruppo attivo. */
+export function jumpTab(dir: string, newTab: boolean): string {
+  if (!newTab) return ensureDirTab(dir);
+  const l = useLayout.getState();
+  l.newTab(l.activeGroupId, dir);
+  return activeTab(useLayout.getState()).id;
+}
+
+/** Va alla voce scelta, nella scheda cartella del gruppo attivo (da un viewer/editor si torna alla lista) o in una nuova. */
+export async function runJump(item: JumpItem, root: string, newTab = false): Promise<void> {
   const { dir, focus } = jumpTarget(item, root);
-  await useTabViews.getState().load(ensureDirTab(dir), dir, { focus });
+  await useTabViews.getState().load(jumpTab(dir, newTab), dir, { focus });
 }
 
 /** Apre il salto rapido. Con una finestra di dialogo aperta non fa nulla. */

@@ -13,6 +13,8 @@ export interface Settings {
   externalEditor: string;
   /** Shell dei nuovi terminali; `auto` = la migliore disponibile (pwsh, powershell, cmd). */
   terminalShell: "auto" | ShellKind;
+  /** Il salto rapido (Ctrl+P) apre in una nuova scheda; Ctrl+Invio fa il contrario. */
+  jumpInNewTab: boolean;
 }
 
 export const defaultSettings = (osLocale: string): Settings => ({
@@ -24,6 +26,7 @@ export const defaultSettings = (osLocale: string): Settings => ({
   useExternalEditor: false,
   externalEditor: "notepad.exe",
   terminalShell: "auto",
+  jumpInNewTab: false,
 });
 
 export const resolveTheme = (theme: Settings["theme"], prefersDark: boolean): "dark" | "light" =>
@@ -43,6 +46,7 @@ const pickSettings = (s: Settings): Settings => ({
   useExternalEditor: s.useExternalEditor,
   externalEditor: s.externalEditor,
   terminalShell: s.terminalShell,
+  jumpInNewTab: s.jumpInNewTab,
 });
 
 // Le scritture partono in ordine di chiamata: l'ultimo update() vince sempre.

@@ -1,9 +1,36 @@
 import { expect, test } from 'vitest';
-import { initialLayout, openFileTab, useLayout } from '../state/layout';
+import { activeTab, initialLayout, openFileTab, useLayout } from '../state/layout';
 import { usePalette } from '../state/palette';
 import { DEFAULT_KEYMAP } from './tcKeymap';
 import { useUi } from '../state/ui';
-import { jumpItems, jumpTarget, paletteCommands, quickJump, togglePalette } from './palette';
+import { jumpItems, jumpTab, jumpTarget, paletteCommands, quickJump, togglePalette, wantsNewTab } from './palette';
+
+test('wantsNewTab: Ctrl inverts the setting', () => {
+  expect(wantsNewTab(false, false)).toBe(false);
+  expect(wantsNewTab(true, false)).toBe(true);
+  expect(wantsNewTab(false, true)).toBe(true);
+  expect(wantsNewTab(true, true)).toBe(false);
+});
+
+test('jumpTab: a new folder tab right after the active one, in the same group', () => {
+  const saved = useLayout.getState();
+  const s = initialLayout(['C:\\a']);
+  useLayout.setState(s);
+  try {
+    const g = s.groups[0];
+    const first = g.activeTabId;
+    const id = jumpTab('C:\\b', true);
+    const l = useLayout.getState();
+    expect(l.groups[0].tabIds).toEqual([first, id]);
+    expect(l.groups).toHaveLength(s.groups.length);
+    expect(activeTab(l).id).toBe(id);
+    expect(l.tabs[id].path).toBe('C:\\b');
+    expect(jumpTab('C:\\c', false)).toBe(id); // senza nuova scheda: quella attiva
+    expect(useLayout.getState().groups[0].tabIds).toHaveLength(2);
+  } finally {
+    useLayout.setState(saved);
+  }
+});
 import type { Command } from './registry';
 
 const cmd = (id: string, when: Command['when']): Command => ({ id, titleKey: id, when, run: () => {} });

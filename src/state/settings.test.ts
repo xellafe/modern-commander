@@ -6,7 +6,7 @@ import it from '../i18n/it.json';
 test('defaults follow OS locale', () => {
   expect(defaultSettings('it-IT').language).toBe('it');
   expect(defaultSettings('de-DE').language).toBe('en');
-  expect(defaultSettings('en-US')).toMatchObject({ theme: 'system', showHidden: false, showSystem: false, confirmDelete: true, externalEditor: 'notepad.exe', useExternalEditor: false, terminalShell: 'auto' });
+  expect(defaultSettings('en-US')).toMatchObject({ theme: 'system', showHidden: false, showSystem: false, confirmDelete: true, externalEditor: 'notepad.exe', useExternalEditor: false, terminalShell: 'auto', jumpInNewTab: false });
 });
 
 test('resolveTheme', () => {

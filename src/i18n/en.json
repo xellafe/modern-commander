@@ -164,6 +164,8 @@
     "emptyJump": "No matching folders or files",
     "scanning": "Scanning…",
     "truncated": "Results truncated",
+    "ctrlEnterNewTab": "Ctrl+Enter: open in a new tab",
+    "ctrlEnterHere": "Ctrl+Enter: open in the current tab",
     "folder": "Folder"
   },
   "commands": {
@@ -375,6 +377,10 @@
       "confirmDelete": {
         "label": "Confirm before deleting",
         "desc": "Ask for confirmation before moving items to the Recycle Bin or deleting them."
+      },
+      "jumpInNewTab": {
+        "label": "Always open search results in a new tab",
+        "desc": "Quick jump (Ctrl+P) opens the chosen item in a new tab of the same group. Ctrl+Enter does the opposite."
       },
       "useExternalEditor": {
         "label": "Edit with an external editor",

@@ -164,6 +164,8 @@
     "emptyJump": "Nessuna cartella o file trovato",
     "scanning": "Scansione in corso…",
     "truncated": "Risultati troncati",
+    "ctrlEnterNewTab": "Ctrl+Invio: apri in una nuova scheda",
+    "ctrlEnterHere": "Ctrl+Invio: apri nella scheda corrente",
     "folder": "Cartella"
   },
   "commands": {
@@ -375,6 +377,10 @@
       "confirmDelete": {
         "label": "Conferma prima di eliminare",
         "desc": "Chiede conferma prima di spostare gli elementi nel Cestino o di eliminarli."
+      },
+      "jumpInNewTab": {
+        "label": "Apri sempre la ricerca in una nuova scheda",
+        "desc": "Il salto rapido (Ctrl+P) apre la voce scelta in una nuova scheda dello stesso gruppo. Ctrl+Invio fa il contrario."
       },
       "useExternalEditor": {
         "label": "Modifica con un editor esterno",

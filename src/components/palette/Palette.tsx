@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { jumpItems, paletteCommands, runJump, type JumpItem, type PaletteItem } from "../../commands/palette";
+import { jumpItems, paletteCommands, runJump, wantsNewTab, type JumpItem, type PaletteItem } from "../../commands/palette";
 import { getCommands } from "../../commands/registry";
 import { cancelRequest, nextRequestId, scanTree } from "../../ipc/api";
 import type { ScanEntry } from "../../ipc/types";
@@ -83,6 +83,7 @@ function PaletteBox({ mode }: { mode: PaletteMode }) {
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
   const jump = mode === "jump";
+  const inNewTab = useSettings((s) => s.jumpInNewTab);
   const source = useJumpSource(jump);
   // Le voci si fissano all'apertura: i comandi eseguibili in quel momento.
   const items = useMemo<PaletteItem[]>(
@@ -108,10 +109,10 @@ function PaletteBox({ mode }: { mode: PaletteMode }) {
   const close = () => usePalette.getState().close();
 
   // Chiude (e restituisce il focus a chi lo aveva: useModalFocus) prima di eseguire, così il comando parte dalla lista.
-  const pick = async (item: PaletteItem) => {
+  const pick = async (item: PaletteItem, ctrl: boolean) => {
     flushSync(close);
     try {
-      await item.run();
+      await item.run(ctrl);
     } catch (e) {
       console.error(e);
     }
@@ -131,7 +132,7 @@ function PaletteBox({ mode }: { mode: PaletteMode }) {
       case "ArrowDown": move(1); break;
       case "ArrowUp": move(-1); break;
       case "Enter":
-        if (rows[sel]) void pick(rows[sel].item);
+        if (rows[sel]) void pick(rows[sel].item, e.ctrlKey);
         break;
       case "Escape": close(); break;
       case "Tab": break; // il focus resta nel campo
@@ -173,7 +174,7 @@ function PaletteBox({ mode }: { mode: PaletteMode }) {
                 className={i === sel ? "sel" : undefined}
                 onMouseDown={(e) => e.preventDefault()} // il focus resta nel campo
                 onMouseMove={() => i !== sel && setSel(i)}
-                onClick={() => void pick(item)}
+                onClick={(e) => void pick(item, e.ctrlKey)}
               >
                 <span className="mc-palette-label">
                   {/* tratti di testo come elementi React: mai HTML da dati */}
@@ -194,6 +195,7 @@ function PaletteBox({ mode }: { mode: PaletteMode }) {
         {jump && source.scan !== "done" && (
           <div className="mc-palette-status" role="status">{t(source.scan === "scanning" ? "palette.scanning" : "palette.truncated")}</div>
         )}
+        {jump && <div className="mc-palette-status">{t(inNewTab ? "palette.ctrlEnterHere" : "palette.ctrlEnterNewTab")}</div>}
       </div>
     </div>
   );
@@ -207,6 +209,6 @@ function jumpPaletteItem(item: JumpItem, root: string | null, t: (key: string) =
     label: item.label,
     detail: item.kind === "favorite" ? item.path : item.kind === "file" && item.isDir ? t("palette.folder") : undefined,
     // I file arrivano solo da una scansione, quindi `root` c'è; le recenti e i preferiti non ne hanno bisogno.
-    run: () => runJump(item, root ?? ""),
+    run: (ctrl) => runJump(item, root ?? "", wantsNewTab(!!ctrl, useSettings.getState().jumpInNewTab)),
   };
 }
