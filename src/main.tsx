@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
+import { LAYOUT_VKS, setLayoutLabels } from "./commands/keys";
+import { keyLabels } from "./ipc/api";
 import { initCloseGuard, registerNavigationCommands } from "./commands/navigation";
 import { registerPaletteCommands } from "./commands/palette";
 import { registerSettingsCommands } from "./commands/settings";
@@ -45,6 +47,7 @@ async function bootstrap() {
     useSettings.getState().load().catch(() => {}), // se fallisce l'app parte con i valori di default
     useHotlist.getState().load(),
     useKeybindings.getState().load().catch(console.error), // se fallisce restano i tasti di fabbrica
+    keyLabels(LAYOUT_VKS).then(setLayoutLabels).catch(() => {}), // se fallisce restano le etichette americane
   ]);
   await initI18n(useSettings.getState().language);
   applyTheme();

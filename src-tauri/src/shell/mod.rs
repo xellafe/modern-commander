@@ -7,6 +7,7 @@
 
 pub mod context_menu;
 pub mod drag;
+pub mod keys;
 pub mod open;
 pub mod properties;
 pub mod thumbnail;

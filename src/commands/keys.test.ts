@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { chordFromEvent, chordParts, isBrowserAccelerator, quickSearchChar } from './keys';
+import { chordFromEvent, chordParts, isBrowserAccelerator, LAYOUT_VKS, quickSearchChar, setLayoutLabels } from './keys';
 
 const ev = (keyCode: number, m: { c?: boolean; s?: boolean; a?: boolean } = {}) => ({
   keyCode,
@@ -60,6 +60,19 @@ test('chordParts: readable key names for display', () => {
   expect(chordParts('NumSubtract')).toEqual(['Num -']);
   expect(chordParts('NumMultiply')).toEqual(['Num *']);
   expect(chordParts('Ctrl+VK186')).toEqual(['Ctrl', 'VK186']);
+});
+
+test('chordParts: the active keyboard layout labels OEM keys (Italian: ò and \\)', () => {
+  try {
+    setLayoutLabels(LAYOUT_VKS.map((vk) => ({ 192: 'ò', 220: '\\', 186: 'è' })[vk] ?? null));
+    expect(chordParts('Ctrl+Oem3')).toEqual(['Ctrl', 'ò']);
+    expect(chordParts('Ctrl+Shift+Oem5')).toEqual(['Ctrl', 'Shift', '\\']);
+    expect(chordParts('Ctrl+VK186')).toEqual(['Ctrl', 'è']);
+    expect(chordParts('Ctrl+Comma')).toEqual(['Ctrl', ',']); // senza etichetta del layout resta quella fissa
+  } finally {
+    setLayoutLabels([]);
+  }
+  expect(chordParts('Ctrl+Oem3')).toEqual(['Ctrl', '`']);
 });
 
 test('isBrowserAccelerator: ricarica e stampa di WebView2 si inghiottono sempre', () => {

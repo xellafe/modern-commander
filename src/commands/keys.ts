@@ -15,12 +15,22 @@ function keyName(code: number): string {
   return NAMED[code] ?? `VK${code}`;
 }
 
+// Etichette della tastiera americana: valgono finché il layout attivo non dà le sue (setLayoutLabels).
 const DISPLAY: Record<string, string> = {
   Oem3: '`', Oem5: '\\', Comma: ',', NumAdd: 'Num +', NumSubtract: 'Num -', NumMultiply: 'Num *',
 };
 
-/** Un chord canonico ('Ctrl+Oem3') come elenco di tasti da mostrare (['Ctrl', '`']). */
-export const chordParts = (chord: string): string[] => chord.split('+').map((k) => DISPLAY[k] ?? k);
+/** Virtual key dei tasti di punteggiatura, il cui carattere cambia col layout (VK_OEM_1…8, VK_OEM_102). */
+export const LAYOUT_VKS = [186, 187, 188, 189, 190, 191, 192, 219, 220, 221, 222, 223, 226];
+let layoutLabels: Record<string, string> = {};
+
+/** Etichette del layout attivo, nell'ordine di `LAYOUT_VKS` (dal backend: `MapVirtualKeyW`); null = nessuna. */
+export function setLayoutLabels(labels: (string | null)[]): void {
+  layoutLabels = Object.fromEntries(LAYOUT_VKS.flatMap((vk, i) => (labels[i] ? [[keyName(vk), labels[i]!]] : [])));
+}
+
+/** Un chord canonico ('Ctrl+Oem3') come elenco di tasti da mostrare (['Ctrl', 'ò'] sul layout italiano). */
+export const chordParts = (chord: string): string[] => chord.split('+').map((k) => layoutLabels[k] ?? DISPLAY[k] ?? k);
 
 // Acceleratori del browser (WebView2) che ricaricano o stampano la pagina: ricaricarla perde editor non salvati,
 // uccide i terminali e azzera il layout. Si inghiottono sempre, anche quando il chord non ha un comando eseguibile.

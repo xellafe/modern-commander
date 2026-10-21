@@ -136,6 +136,9 @@ export const readFile = async (path: string, max: number) =>
 export const writeTextFile = (path: string, text: string, encoding: string, bom: boolean, expectedModifiedMs: number | null) =>
   invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs });
 
+/** Carattere di ogni virtual key nel layout di tastiera attivo (`MapVirtualKeyW`); null se il tasto non ne ha. */
+export const keyLabels = (vks: number[]) => invoke<(string | null)[]>("key_labels", { vks });
+
 let ansi: Promise<string> | undefined;
 
 /** Etichetta `TextDecoder` della codifica ANSI di sistema; si chiede una volta sola (si riprova se fallisce). */
