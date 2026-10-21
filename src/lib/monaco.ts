@@ -27,6 +27,20 @@ export function worthColorizing(text: string, language: string | null): language
 }
 const MAX_COLORIZE_LINE = 2000;
 
+/** Righe colorate nell'anteprima: oltre, `colorize` blocca la UI per centinaia di ms (256 KiB a righe corte). */
+export const COLORIZE_LINES = 2000;
+
+/** Le prime `lines` righe (con il loro a capo) da colorare, e il resto da mostrare come testo semplice. */
+export function splitForColorize(text: string, lines = COLORIZE_LINES): [string, string] {
+  let at = 0;
+  for (let n = 0; n < lines; n++) {
+    const nl = text.indexOf("\n", at);
+    if (nl < 0) return [text, ""];
+    at = nl + 1;
+  }
+  return [text.slice(0, at), text.slice(at)];
+}
+
 /** Colore CSS dei token (`#rgb`, `#rrggbb`, `rgb()`, `rgba()`) in esadecimale, l'unico formato dei temi di Monaco. */
 export function cssToHex(value: string): string | undefined {
   const v = value.trim().toLowerCase();

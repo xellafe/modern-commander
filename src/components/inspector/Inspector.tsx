@@ -1,9 +1,9 @@
 import { Copy } from "lucide-react";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { HashAlgo } from "../../ipc/types";
 import { formatAttrs, formatDate, formatSize } from "../../lib/format";
-import { loadMonaco, worthColorizing } from "../../lib/monaco";
+import { loadMonaco, splitForColorize, worthColorizing } from "../../lib/monaco";
 import { folderName, joinPath } from "../../lib/paths";
 import { PREVIEW_BYTES, useInspector, type Preview } from "../../state/inspector";
 import { useLayout } from "../../state/layout";
@@ -43,25 +43,29 @@ function TargetFeed() {
   return null;
 }
 
-/** Testo semplice subito; colorato da Monaco appena pronto (l'HTML di `colorize` nasce da testo con `<`, `>` e `&` già sostituiti). */
+/**
+ * Testo semplice subito; le prime righe colorate da Monaco appena pronto, il resto resta semplice (`colorize` gira
+ * sul thread della UI). L'HTML di `colorize` nasce da testo con `<`, `>` e `&` già sostituiti.
+ */
 function TextPreview({ text, language }: { text: string; language: string | null }) {
   const [html, setHtml] = useState<string | null>(null);
+  const [head, tail] = useMemo(() => splitForColorize(text), [text]);
   useEffect(() => {
     setHtml(null);
-    if (!worthColorizing(text, language)) return; // resta testo semplice
+    if (!worthColorizing(head, language)) return; // resta testo semplice
     let live = true;
     loadMonaco()
-      .then((m) => m.editor.colorize(text, language, { tabSize: 4 }))
+      .then((m) => m.editor.colorize(head, language, { tabSize: 4 }))
       .then((h) => live && setHtml(h))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [text, language]);
+  }, [head, language]);
   return html === null ? (
     <pre className="mc-inspector-text">{text}</pre>
   ) : (
-    <pre className="mc-inspector-text" dangerouslySetInnerHTML={{ __html: html }} />
+    <pre className="mc-inspector-text"><span dangerouslySetInnerHTML={{ __html: html }} />{tail}</pre>
   );
 }
 

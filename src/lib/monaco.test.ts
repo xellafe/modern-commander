@@ -1,5 +1,15 @@
 import { expect, test } from "vitest";
-import { cssToHex, languageFor, worthColorizing } from "./monaco";
+import { COLORIZE_LINES, cssToHex, languageFor, splitForColorize, worthColorizing } from "./monaco";
+
+test("splitForColorize: only the first COLORIZE_LINES lines go to colorize, the rest stays plain", () => {
+  expect(splitForColorize("a\nb\nc", 2)).toEqual(["a\nb\n", "c"]);
+  expect(splitForColorize("a\nb", 2)).toEqual(["a\nb", ""]);
+  expect(splitForColorize("", 2)).toEqual(["", ""]);
+  const big = "x\n".repeat(COLORIZE_LINES + 5);
+  const [head, tail] = splitForColorize(big);
+  expect(head.split("\n").length - 1).toBe(COLORIZE_LINES);
+  expect(head + tail).toBe(big);
+});
 
 const langs = [
   { id: "typescript", extensions: [".ts", ".tsx"] },
