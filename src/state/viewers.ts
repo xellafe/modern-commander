@@ -2,6 +2,7 @@
 // gruppo si smonta, e al ritorno il viewer riappare allo stesso punto.
 import { create } from "zustand";
 import { codeUnit, detectEncoding } from "../lib/encoding";
+import { fileKind } from "../lib/format";
 import { looksBinary, previewKind } from "../lib/preview";
 import { disposeLineCache } from "./lineCache";
 
@@ -18,10 +19,14 @@ export interface ViewerState {
   left: number;
 }
 
-/** Vista nativa del file (immagine, PDF, video, audio), se la WebView la mostra. */
+/**
+ * Vista nativa del file (immagine, PDF, video, audio), se la WebView la mostra. Le immagini che non decodifica
+ * (TIFF, HEIC) vanno comunque in `ImagePane`, che ripiega sull'anteprima della shell.
+ */
 export function nativeMode(name: string): ViewerMode | null {
   const kind = previewKind(name);
-  return kind === "image" || kind === "pdf" || kind === "video" || kind === "audio" ? kind : null;
+  if (kind === "image" || kind === "pdf" || kind === "video" || kind === "audio") return kind;
+  return fileKind(name, false) === "image" ? "image" : null;
 }
 
 /** Modalità iniziale: la vista nativa se c'è; il resto testo o esadecimale (il Markdown renderizzato è dell'ispettore). */

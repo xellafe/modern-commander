@@ -1,7 +1,15 @@
 import { beforeEach, expect, test } from "vitest";
-import { alignTop, initialViewerState, useViewers } from "./viewers";
+import { alignTop, initialViewerState, nativeMode, useViewers } from "./viewers";
 
 const W = "windows-1252";
+
+test("images the WebView cannot decode open as image: ImagePane falls back to the shell preview", () => {
+  const tiff = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00]);
+  expect(nativeMode("a.tif")).toBe("image");
+  expect(nativeMode("a.HEIC")).toBe("image");
+  expect(initialViewerState("a.tiff", tiff, W, true).mode).toBe("image");
+  expect(nativeMode("a.zip")).toBeNull(); // le altre estensioni non cambiano
+});
 
 test("initial mode and encoding", () => {
   const txt = new TextEncoder().encode("ciao");
