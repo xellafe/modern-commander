@@ -106,6 +106,8 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - Chiudendo l'app non restano `pwsh.exe`, `conhost.exe` o `OpenConsole.exe` orfani (`RunEvent::Exit` → `kill_all`; verificare che l'uscita arrivi a `RunEvent::Exit`).
 - Ricaricando la pagina in `tauri dev` le shell aperte si chiudono (`on_page_load(Started)` → `kill_all`).
 
+✅ Verificato il 2026-10-21 (`tauri dev`, pwsh, powershell, cmd e WSL). `vim` non è installato in WSL: il ridimensionamento è provato con `top`. Dopo la chiusura con terminali e una scansione aperti non resta nessun processo figlio di `modern-commander.exe`. Corretti: la cornice nera tornava dopo un riavvio (xterm.css, caricato dopo, vinceva a parità di specificità) e il menu delle shell era alto una riga (`max-height` in % del pulsante "+").
+
 **Build release** (Task 14, Step 3 e 5)
 - Avvio della build release a finestra pronta in meno di 1 s (come nel Task 22 della fase 1): cronometro, a caldo e a freddo, senza debugger. Non misurato: serve `npm run tauri build` e la GUI.
 - Il chunk principale (`index-*.js`) non contiene Monaco, pdf.js, xterm né markdown-it: controllato sulla build di `npm run build` (vedi sotto), non su quella release.
