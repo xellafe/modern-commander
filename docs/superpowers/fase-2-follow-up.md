@@ -132,6 +132,8 @@ Avvio: ~1.090 ms senza debugger, dentro il nuovo budget di 1,2 s (vedi il primo 
 
 ## Scelte da confermare
 
+✅ Tutte confermate dall'utente il 2026-10-21, così come sono descritte qui sotto. Per la 10 (debounce del salto rapido) la misura è 15,7 ms su 20.008 voci: da rivedere su PC più lenti. Dalla 12 nasce un follow-up di sicurezza (CSP, vedi "Follow-up noti").
+
 - **Ctrl+P** va al salto rapido come da spec §5.7, anche se in TC è "percorso nella riga di comando". Se si vuole altro: una riga in `tcKeymap.ts`; l'utente può rimappare.
 - **`cm_Exchange`** non fa niente se una delle due schede attive è un file. **`mc_OpenInPrevGroup`/`mc_OpenInNextGroup`** aprono una nuova scheda cartella nel gruppo di destinazione se la sua scheda attiva è un file. Lo spec non lo dice; vale per 3 comandi.
 - **Destinazione di F5/F6 e del drag** con una scheda file nell'altro gruppo: la cartella contenitore del file.
@@ -147,6 +149,9 @@ Avvio: ~1.090 ms senza debugger, dentro il nuovo budget di 1,2 s (vedi il primo 
 - **Chunk principale oltre 500 kB**: `chunkSizeWarningLimit: 3000` in `vite.config.ts` nasconde l'avviso anche per il chunk principale (circa 507 kB); il commento è corretto. Decidere se serve un budget per il solo chunk principale.
 
 ## Follow-up noti
+
+**Sicurezza**
+- `tauri.conf.json` ha `csp: null`: nessuna Content Security Policy. Oggi nessun HTML dei file entra nel DOM (Markdown con `html: false`, immagini del Markdown disattivate, `colorize` da testo già sostituito), ma manca una difesa in profondità. Da affrontare con la fase 3, quando arriveranno contenuti remoti (FTP, SFTP): una CSP che ammetta l'asset protocol, i worker di Monaco e pdf.js e gli stili in linea.
 
 **Fuori perimetro (da proporre)**
 - Ricerca nel viewer (F7 del Lister di TC) e Shift+F4 (nuovo file).
