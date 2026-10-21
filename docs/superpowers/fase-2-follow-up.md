@@ -74,6 +74,8 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - Il pulsante nella barra del titolo mostra Ctrl+Shift+P; un clic fuori dalla palette la chiude; Esc con la palette aperta da Monaco riporta il focus a Monaco.
 - Aspetto dell'indicatore di stato della scansione ("scansione in corso") nella palette.
 
+✅ Verificato il 2026-10-21 (`tauri dev`, `C:\Windows` e `D:\mc-test\jump` con giunzione, `node_modules`, `.git` e un nascosto). `fuzzyFilter` su 20.008 voci: 15,7 ms, appena sotto la soglia di 16 ms: il debounce resta non applicato, da rivedere se su un PC più lento si supera. Aggiunti su richiesta Ctrl+Invio / Ctrl+clic per aprire la voce in una nuova scheda dello stesso gruppo e l'impostazione "Apri sempre la ricerca in una nuova scheda", che li inverte.
+
 **Miniature** (Task 9)
 - Cartella con 2.000 JPEG: Ctrl+Shift+F1 mostra subito i riquadri; le miniature arrivano senza bloccare lo scorrimento; le frecce si muovono sulla griglia senza ritardo (< 16 ms).
 - MP4 e PDF mostrano la miniatura della shell; F3 su un TIFF mostra l'anteprima della shell con la nota.
