@@ -109,7 +109,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 ✅ Verificato il 2026-10-21 (`tauri dev`, pwsh, powershell, cmd e WSL). `vim` non è installato in WSL: il ridimensionamento è provato con `top`. Dopo la chiusura con terminali e una scansione aperti non resta nessun processo figlio di `modern-commander.exe`. Corretti: la cornice nera tornava dopo un riavvio (xterm.css, caricato dopo, vinceva a parità di specificità) e il menu delle shell era alto una riga (`max-height` in % del pulsante "+").
 
 **Build release** (Task 14, Step 3 e 5)
-- Avvio della build release a finestra pronta in meno di 1 s (come nel Task 22 della fase 1): cronometro, a caldo e a freddo, senza debugger. Non misurato: serve `npm run tauri build` e la GUI.
+- Avvio della build release. **Misura:** dalla creazione del processo alla prima riga della lista disegnata (LCP su `.c-name`), a caldo. Si legge via CDP; la porta di debug aggiunge 30–40 ms, da togliere. **Pavimento:** su questa macchina (WebView2 155.0.4283.62, installato il 2026-10-19) un'app Tauri vuota arriva a `Navigate` in ~700 ms. Quasi tutto è l'avvio del browser WebView2 (`CreateCoreWebView2Controller` ~420 ms, primo script di init ~140 ms), che l'app non controlla. Né il profilo WebView2 né gli argomenti del browser lo spostano. **Budget:** il vecchio "< 1 s" non è raggiungibile sopra questo pavimento (anche il codice della fase 1, ricompilato oggi, sta a ~1.070 ms). Il nuovo budget è sotto 1,2 s a caldo senza debugger, con la quota dell'app (LCP meno il pavimento misurato nello stesso momento) che non cresce oltre ~400 ms. Oggi: LCP ~1.130 ms con CDP, ~1.090 ms senza; la fase 1 stava a ~1.070 ms. Il prefetch di `list_dir` prima del render è stato provato e scartato: la lista arriva più tardi, perché il collo di bottiglia sono i frame del primo paint e non l'IPC.
 - Il chunk principale (`index-*.js`) non contiene Monaco, pdf.js, xterm né markdown-it: controllato sulla build di `npm run build` (vedi sotto), non su quella release.
 - I cinque punti della Review Focus sulla build release:
   1. file di più GB o con una riga enorme (log da 5 GB, JSON da 200 MB su una riga, zeri): F3 si apre subito, Fine e il trascinamento arrivano in fondo, memoria stabile;
@@ -119,11 +119,16 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
   5. tasti nel posto sbagliato: lettere nel viewer non alla ricerca rapida; Tab, Ctrl+Tab, Ctrl+W su un viewer agiscono su gruppi e schede; Ctrl+ò e Ctrl+Shift+P anche con il focus nel terminale o in Monaco; Ctrl+C, Tab e frecce nel terminale restano alla shell.
 - Chunk principale: circa 507 kB (495 KiB); il commento in `vite.config.ts` ora lo dice.
 
+✅ Verificato il 2026-10-21 sulla build release (`npm run tauri build`, eseguibile portable e installer NSIS): i cinque punti della Review Focus e il menu del tasto destro sono a posto. Chunk principale 527 kB, senza Monaco, pdf.js, xterm né markdown-it (solo i loro `import()`).
+Avvio: ~1.090 ms senza debugger, dentro il nuovo budget di 1,2 s (vedi il primo punto di questa sezione). Il codice della fase 2 aggiunge ~60 ms rispetto alla fase 1; il resto è il pavimento di WebView2.
+
 **Scorciatoie nuove**
 - Ctrl+Q (vista rapida) e Ctrl+Shift+F1 (miniature) sono i tasti di TC per le stesse funzioni (confermato sul forum ufficiale ghisler.ch), usati come in TC.
 - Ctrl+P in TC è "percorso nella riga di comando"; qui è il salto rapido perché l'app non ha una riga di comando (spec §5.7).
 - Ctrl+Shift+P, Ctrl+ò (`Ctrl+Oem3`) e Ctrl+Shift+ò (`Ctrl+Shift+Oem3`) non risultano tra i tasti di TC secondo le fonti secondarie. L'help ufficiale non è raggiungibile (404 su ghisler.com/tcmdhelp): non verificato, come in fase 1.
 - Ctrl+Shift+P, Ctrl+ò e Ctrl+Shift+ò su tastiera non italiana: `Oem3` cambia lettera col layout.
+
+✅ Verificato il 2026-10-21 per quanto possibile qui. Le etichette mostravano sempre i tasti americani (Ctrl+`, Ctrl+Shift+\ ): ora vengono dal layout attivo (`MapVirtualKeyW`, comando `key_labels`) e sulla tastiera italiana compare Ctrl+ò. Non verificabili su questo PC: i conflitti con TC (non installato) e il comportamento su un layout non italiano (nessun secondo layout installato).
 
 ## Scelte da confermare
 

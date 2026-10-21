@@ -250,7 +250,7 @@ Una sola interfaccia nel backend, "provider di cartella" (elenco, stat, lettura 
 Ogni azione dell'utente è un comando con id, titolo tradotto e handler. Tastiera, F-key, command palette e menu richiamano tutti lo stesso registro dei comandi. Il remapping lavora su questo registro.
 
 ### 7.4 Obiettivi di prestazioni **[S]**
-- Avvio a finestra pronta: meno di 1 s su SSD.
+- Avvio fino alla lista disegnata: meno di 1,2 s a caldo su SSD, senza debugger, con la quota dell'app (oltre il tempo che WebView2 impiega da solo ad arrivare alla navigazione, ~700 ms nell'ottobre 2026) entro ~400 ms. Il "meno di 1 s" iniziale non stava sopra il pavimento di WebView2; misura e motivi in `fase-2-follow-up.md`, sezione "Build release".
 - Cartella da 10.000 elementi: lista visibile in meno di 150 ms. Cartella da 100.000: utilizzabile, con scorrimento fluido e caricamento progressivo.
 - Navigazione da tastiera senza ritardo percepibile: input → cursore in meno di 16 ms.
 - Anteprima nell'ispettore: mai bloccante; si annulla al cambio di file.
