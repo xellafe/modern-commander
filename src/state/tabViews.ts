@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { listDir, listDrives, nearestExistingAncestor, unwatchDir, watchDir } from "../ipc/api";
 import type { AppError, Drive, ErrorCode } from "../ipc/types";
+import { typeKey, visibleColumns } from "../lib/columns";
 import { quickFilterMask } from "../lib/mask";
 import { DRIVES } from "../lib/paths";
 import { setTabPath, useLayout } from "./layout";
@@ -8,6 +9,7 @@ import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
 import { cancelTabSizes } from "./sizeRequests";
 import { buildRows, emptyView, jumpTo, navigateTo, type Row, type TabView } from "./tabView";
+import { ensureTypeNames, useTypeNames } from "./typeNames";
 
 export interface Notice {
   tabId: string;
@@ -67,7 +69,7 @@ const watched = new Map<string, string>();
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 const driveRow = (d: Drive): Row => ({
-  name: d.root, isDir: true, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false, drive: d,
+  name: d.root, isDir: true, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false, drive: d,
 });
 
 interface Listing { path: string; entries: Row[]; error?: AppError }
@@ -89,6 +91,7 @@ function rowsFor(entries: Row[], path: string, v: TabView): Row[] {
   const { showHidden, showSystem } = useSettings.getState();
   return buildRows(entries, path, v.sort, {
     showHidden, showSystem, filter: quickFilterMask(v.filter), dirSizes: v.dirSizes,
+    typeNames: useTypeNames.getState().names,
   });
 }
 
@@ -168,6 +171,7 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
       if (!reload && res.path !== DRIVES) useRecentDirs.getState().push(res.path);
       if (res.error) get().showNotice(tabId, res.error);
       syncWatcher(tabId, res.path);
+      void requestTypes(tabId);
 
       if (import.meta.env.DEV && typeof requestAnimationFrame === "function") {
         const t2 = performance.now();
@@ -208,6 +212,7 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
     const rows = rowsFor(listings.get(tabId) ?? [], v.history[v.historyIndex], v);
     const cursor = indexOrClamp(rows, v0.rows[v0.cursor]?.name, v0.cursor);
     set((s) => ({ views: { ...s.views, [tabId]: { ...v, rows, cursor } } }));
+    void requestTypes(tabId);
   },
 
   rebuildAll: () => {
@@ -236,6 +241,20 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
 
   setOverlay: (overlay) => set({ overlay }),
 }));
+
+/**
+ * Testi del Tipo per il listing della scheda, solo se servono (colonna visibile o ordinamento per Tipo). All'arrivo di
+ * testi nuovi una scheda ordinata per Tipo si riordina; le altre si ridisegnano da sole leggendo `useTypeNames`.
+ */
+export async function requestTypes(tabId: string): Promise<void> {
+  const v = useTabViews.getState().views[tabId];
+  if (!v) return;
+  const { columns, extInName } = useSettings.getState();
+  if (v.sort.key !== "type" && !visibleColumns(columns, extInName).some((c) => c.id === "type")) return;
+  const entries = listings.get(tabId) ?? [];
+  const added = await ensureTypeNames(entries.map((e) => typeKey(e.name, e.isDir)));
+  if (added && useTabViews.getState().views[tabId]?.sort.key === "type") useTabViews.getState().rebuild(tabId, {});
+}
 
 /** Scheda attiva del gruppo attivo: il contesto di tutti i comandi sulla lista. */
 export function activeTabContext() {

@@ -50,18 +50,27 @@
 .mc-group-body { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .mc-list { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .mc-cols {
-  display: grid; align-items: center; column-gap: 8px; padding: 0 10px;
-  grid-template-columns: 16px minmax(0, 1fr) 52px 72px 112px 36px;
+  display: grid; align-items: center; column-gap: 8px; padding: 0 10px; /* grid-template-columns dalle impostazioni */
 }
 .mc-list-head {
   flex: none; height: 22px; margin: 0 var(--mc-row-inset); /* allineata alle righe rientrate */ font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mc-muted);
 }
 .mc-list-head > span { display: flex; align-items: center; gap: 2px; overflow: hidden; }
 .mc-list-head > span:hover { color: var(--mc-text); }
-.mc-list-head .c-size, .mc-list-head .c-date, .mc-list-head .c-attr { justify-content: flex-end; }
+.mc-list-head .c-right { justify-content: flex-end; }
+.mc-list-head > span { position: relative; height: 100%; }
+.mc-col-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-list-head > .drop-before { box-shadow: inset 2px 0 0 var(--mc-accent); }
+.mc-list-head > .drop-after { box-shadow: inset -2px 0 0 var(--mc-accent); }
+/* maniglia della larghezza sul bordo destro dell'intestazione */
+.mc-col-grip { position: absolute; top: 4px; bottom: 4px; right: 0; width: 5px; cursor: col-resize; border-right: 1px solid transparent; }
+.mc-list-head:hover .mc-col-grip { border-right-color: var(--mc-border); }
+.mc-list-head .mc-col-grip:hover, .mc-list-head .mc-col-grip:active { border-right-color: var(--mc-accent); }
 /* contain: la larghezza delle righe/colonne virtuali non deve allargare la griglia della finestra */
 .mc-list-scroll { flex: 1; min-height: 0; overflow: auto; contain: strict; }
 .mc-list-brief .mc-list-scroll { overflow-x: scroll; overflow-y: hidden; }
+/* il Nome ha un minimo di 80 px: se le colonne non ci stanno si taglia, niente barra orizzontale */
+.mc-list-full .mc-list-scroll, .mc-list-full .mc-list-head { overflow-x: hidden; }
 .mc-list-canvas { position: relative; }
 .mc-list-brief .mc-list-canvas { height: 100%; }
 
@@ -71,14 +80,15 @@
 }
 .mc-row.cur { background: var(--mc-selection); }
 .mc-group:not(.active) .mc-row.cur { background: var(--mc-selection-inactive); }
-.mc-row.mk .c-name, .mc-row.mk .c-ext { color: var(--mc-accent); }
+.mc-row.mk .c-name, .mc-row.mk .c-ext, .mc-row.mk .c-ext-inline { color: var(--mc-accent); }
 .mc-row > span { overflow: hidden; text-overflow: ellipsis; }
 .c-icon { display: flex; align-items: center; justify-content: center; }
 .mc-icon { display: block; flex: none; }
-.mc-row .c-ext, .mc-row .c-size, .mc-row .c-date, .mc-row .c-attr, .mc-row .c-drive { color: var(--mc-muted); font-size: 11px; }
-.mc-row .c-size, .mc-row .c-date, .mc-row .c-attr { text-align: right; }
-.mc-row .c-attr { font-family: var(--mc-font-mono); font-size: 10px; font-variant-ligatures: none; } /* "--" di Cascadia Code */
-.mc-row .c-drive { grid-column: 3 / -1; }
+.mc-row .c-ext, .mc-row .c-size, .mc-row .c-modified, .mc-row .c-created, .mc-row .c-accessed, .mc-row .c-attributes,
+.mc-row .c-type, .mc-row .c-drive { color: var(--mc-muted); font-size: 11px; }
+.mc-row .c-ext-inline { color: var(--mc-muted); }
+.mc-row .c-right { text-align: right; }
+.mc-row .c-attributes { font-family: var(--mc-font-mono); font-size: 10px; font-variant-ligatures: none; } /* "--" di Cascadia Code */
 .mc-row .c-size.sizing { animation: mc-pulse 1s ease-in-out infinite; }
 .mc-skipped { margin-right: 4px; color: var(--mc-accent); }
 .mc-skipped svg { vertical-align: -1px; }
@@ -137,6 +147,14 @@
 .mc-menu-item.sel { background: var(--mc-selection); }
 .mc-menu-item.current > span:first-child { color: var(--mc-accent); }
 .mc-menu-item .detail { color: var(--mc-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+/* Menu delle colonne (click destro sull'intestazione) */
+.mc-col-menu { position: fixed; min-width: 260px; }
+.mc-col-item { justify-content: flex-start; gap: 8px; }
+.mc-col-item:hover:not(.disabled) { background: var(--mc-selection); }
+.mc-col-item.disabled { color: var(--mc-muted); }
+.mc-col-item .detail { margin-left: auto; }
+.mc-col-check { display: flex; width: 12px; color: var(--mc-accent); }
+.mc-menu-sep { height: 1px; margin: 4px 0; background: var(--mc-border); }
 
 /* Rinomina in place (Shift+F6) */
 .mc-rename { position: relative; display: block; width: 100%; }

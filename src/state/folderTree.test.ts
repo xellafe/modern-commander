@@ -6,7 +6,7 @@ import type { Entry } from "../ipc/types";
 import { childDirs, useFolderTree } from "./folderTree";
 
 const listDir = vi.mocked(api.listDir);
-const e = (name: string, isDir: boolean, attributes = 0): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes, isSymlink: false });
+const e = (name: string, isDir: boolean, attributes = 0): Entry => ({ name, isDir, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes, isSymlink: false });
 const tree = () => useFolderTree.getState();
 
 beforeEach(() => {

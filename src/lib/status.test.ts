@@ -7,8 +7,8 @@ import { activeJobs } from "../state/jobs";
 import type { Row } from "../state/tabView";
 import { driveOf, summarize, summaryText } from "./status";
 
-const file = (name: string, size: number): Row => ({ name, isDir: false, size, modifiedMs: 0, attributes: 0, isSymlink: false });
-const dir = (name: string): Row => ({ name, isDir: true, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
+const file = (name: string, size: number): Row => ({ name, isDir: false, size, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false });
+const dir = (name: string): Row => ({ name, isDir: true, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false });
 const parent: Row = { ...dir(".."), isParent: true };
 const rows = [parent, dir("src"), dir("docs"), file("a.txt", 1000), file("b.txt", 2000)];
 

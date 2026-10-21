@@ -80,8 +80,27 @@
       "name": "Name",
       "ext": "Ext",
       "size": "Size",
-      "date": "Modified",
-      "attributes": "Attr"
+      "modified": "Modified",
+      "created": "Created",
+      "accessed": "Accessed",
+      "attributes": "Attr",
+      "type": "Type"
+    },
+    "columnsMenu": {
+      "title": "Columns",
+      "alwaysVisible": "always visible",
+      "extInName": "Extension in name",
+      "reset": "Reset default columns",
+      "columns": {
+        "name": "Name",
+        "ext": "Extension",
+        "size": "Size",
+        "modified": "Date modified",
+        "created": "Date created",
+        "accessed": "Date accessed",
+        "attributes": "Attributes",
+        "type": "Type"
+      }
     }
   },
   "viewer": {

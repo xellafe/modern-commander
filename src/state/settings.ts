@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { readConfig, writeConfig } from "../ipc/api";
 import type { ShellKind } from "../ipc/types";
+import { DEFAULT_COLUMNS, normalizeColumns, type ColumnConfig } from "../lib/columns";
 
 export interface Settings {
   theme: "dark" | "light" | "system";
@@ -15,6 +16,10 @@ export interface Settings {
   terminalShell: "auto" | ShellKind;
   /** Il salto rapido (Ctrl+P) apre in una nuova scheda; Ctrl+Invio fa il contrario. */
   jumpInNewTab: boolean;
+  /** Colonne della vista dettagliata, in ordine, uguali per tutte le schede. */
+  columns: ColumnConfig[];
+  /** Il Nome mostra anche l'estensione e la colonna Estensione sparisce. */
+  extInName: boolean;
 }
 
 export const defaultSettings = (osLocale: string): Settings => ({
@@ -27,6 +32,8 @@ export const defaultSettings = (osLocale: string): Settings => ({
   externalEditor: "notepad.exe",
   terminalShell: "auto",
   jumpInNewTab: false,
+  columns: DEFAULT_COLUMNS,
+  extInName: false,
 });
 
 export const resolveTheme = (theme: Settings["theme"], prefersDark: boolean): "dark" | "light" =>
@@ -47,6 +54,8 @@ const pickSettings = (s: Settings): Settings => ({
   externalEditor: s.externalEditor,
   terminalShell: s.terminalShell,
   jumpInNewTab: s.jumpInNewTab,
+  columns: s.columns,
+  extInName: s.extInName,
 });
 
 // Le scritture partono in ordine di chiamata: l'ultimo update() vince sempre.
@@ -62,6 +71,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     for (const k of Object.keys(defaults) as (keyof Settings)[]) {
       if (stored && k in stored) (merged as Record<string, unknown>)[k] = stored[k];
     }
+    merged.columns = normalizeColumns(merged.columns);
     set(merged);
   },
   update: async (patch) => {

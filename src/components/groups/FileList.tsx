@@ -1,18 +1,22 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
-import { ArrowDown, ArrowUp, TriangleAlert } from "lucide-react";
-import { memo, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from "react";
+import { TriangleAlert } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { nameError, renameInPlace } from "../../commands/fileOps";
-import { setGridColumns, setPageSize, sortBy } from "../../commands/navigation";
+import { setGridColumns, setPageSize } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
 import { rowContextMenu, trackDragOut } from "../../commands/shell";
+import { driveSpan, gridTemplate, typeKey, visibleColumns, type ColumnId } from "../../lib/columns";
 import { formatAttrs, formatDate, formatSize, splitName } from "../../lib/format";
 import { joinPath } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
-import { hasSize, markRange, toggleMark, type Row, type SortKey, type TabView } from "../../state/tabView";
+import { useSettings } from "../../state/settings";
+import { hasSize, markRange, toggleMark, type Row, type TabView } from "../../state/tabView";
 import { useTabViews } from "../../state/tabViews";
 import { THUMB_SIZE, thumbKey, thumbs } from "../../state/thumbnails";
+import { useTypeNames } from "../../state/typeNames";
+import { cellClass, ColumnHeader } from "./ColumnHeader";
 import { FileIcon } from "./FileIcon";
 
 const BRIEF_COL_WIDTH = 220;
@@ -138,11 +142,19 @@ function sizeText(row: Row, dirSize: number | undefined, sizing: boolean, lng: s
 }
 
 function FullList({ tabId, view, active, rowHeight }: ListProps) {
-  const { t, i18n } = useTranslation();
+  const { i18n } = useTranslation();
   const lng = i18n.language;
   const ref = useRef<HTMLDivElement>(null);
   const height = useHeight(ref);
   const renaming = useRenaming(tabId);
+  const columns = useSettings((s) => s.columns);
+  const extInName = useSettings((s) => s.extInName);
+  const typeNames = useTypeNames((s) => s.names);
+  const visible = useMemo(() => visibleColumns(columns, extInName), [columns, extInName]);
+  // Stabili finché la configurazione non cambia: le righe memo non si ridisegnano per il cursore.
+  const ids = useMemo(() => visible.map((c) => c.id), [visible]);
+  const [liveTemplate, setLiveTemplate] = useState<string | null>(null);
+  const template = liveTemplate ?? gridTemplate(visible);
   const virt = useVirtualizer({
     count: view.rows.length,
     getScrollElement: () => ref.current,
@@ -158,27 +170,14 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
     if (view.rows.length) virt.scrollToIndex(view.cursor, { align: "auto" });
   }, [virt, view.cursor, view.rows]);
 
-  const head = (key: SortKey | null, label: string, cls: string) => (
-    <span className={cls} onClick={key ? () => sortBy(tabId, key) : undefined}>
-      {label}
-      {key && view.sort.key === key && (view.sort.desc ? <ArrowDown size={10} /> : <ArrowUp size={10} />)}
-    </span>
-  );
-
   return (
     <div className="mc-list mc-list-full">
-      <div className="mc-list-head mc-cols">
-        <span />
-        {head("name", t("groups.columns.name"), "c-name")}
-        {head("ext", t("groups.columns.ext"), "c-ext")}
-        {head("size", t("groups.columns.size"), "c-size")}
-        {head("date", t("groups.columns.date"), "c-date")}
-        {head(null, t("groups.columns.attributes"), "c-attr")}
-      </div>
+      <ColumnHeader tabId={tabId} sort={view.sort} visible={visible} template={template} onLiveTemplate={setLiveTemplate} />
       <div className="mc-list-scroll" ref={ref} onContextMenu={(e) => rowContextMenu(tabId, null, e)}>
         <div className="mc-list-canvas" style={{ height: virt.getTotalSize() }}>
           {virt.getVirtualItems().map(({ index: i, start }) => {
             const row = view.rows[i];
+            const tk = typeKey(row.name, row.isDir);
             return (
               <FullRow
                 key={i}
@@ -193,6 +192,10 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
                 skipped={hasSize(view.skipped, row.name) ? view.skipped[row.name] : 0}
                 lng={lng}
                 renaming={renaming === row.name}
+                ids={ids}
+                template={template}
+                extInName={extInName}
+                typeName={hasSize(typeNames, tk) ? typeNames[tk] : ""}
               />
             );
           })}
@@ -214,29 +217,33 @@ interface RowProps {
   skipped: number;
   lng: string;
   renaming: boolean;
+  /** Colonne visibili in ordine, dopo l'icona: stesso array finché la configurazione non cambia. */
+  ids: ColumnId[];
+  template: string;
+  extInName: boolean;
+  typeName: string;
 }
 
 // memo: spostando il cursore si ridisegnano solo le due righe che cambiano classe.
-const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSize, sizing, skipped, lng, renaming }: RowProps) {
-  const { t } = useTranslation();  const [base, ext] = row.isParent || row.drive ? [row.name, ""] : splitName(row.name, row.isDir);
-  const d = row.drive;
-  return (
-    <div
-      className={`${cls} mc-cols${renaming ? " renaming" : ""}`}
-      style={{ transform: `translateY(${start}px)`, height }}
-      {...rowHandlers(tabId, i)}
-    >
-      <span className="c-icon"><FileIcon row={row} /></span>
-      <span className="c-name">{renaming ? <RenameInput tabId={tabId} row={row} /> : base}</span>
-      {d ? (
-        <span className="c-drive">
-          {[d.label, d.ready && t("groups.driveSpace", { free: formatSize(d.free, lng), total: formatSize(d.total, lng) })]
-            .filter(Boolean).join(" · ")}
-        </span>
-      ) : (
-        <>
-          <span className="c-ext">{ext}</span>
-          <span className={`c-size${sizing ? " sizing" : ""}`} title={sizing ? t("groups.sizing") : undefined}>
+const FullRow = memo(function FullRow(p: RowProps) {
+  const { tabId, row, i, start, height, cls, dirSize, sizing, skipped, lng, renaming, ids, template, extInName, typeName } = p;
+  const { t } = useTranslation();
+  const [base, ext] = row.isParent || row.drive ? [row.name, ""] : splitName(row.name, row.isDir);
+  const name = renaming ? (
+    <RenameInput tabId={tabId} row={row} />
+  ) : extInName && row.name !== base ? (
+    // il resto del nome vero, non "." + ext: "file." non deve perdere il punto
+    <>{base}<span className="c-ext-inline">{row.name.slice(base.length)}</span></>
+  ) : base;
+
+  const cell = (id: ColumnId) => {
+    if (id === "name") return <span key={id} className="c-name">{name}</span>;
+    if (row.isParent) return <span key={id} />;
+    switch (id) {
+      case "ext": return <span key={id} className={cellClass(id)}>{ext}</span>;
+      case "size":
+        return (
+          <span key={id} className={`${cellClass(id)}${sizing ? " sizing" : ""}`} title={sizing ? t("groups.sizing") : undefined}>
             {skipped > 0 && (
               <span className="mc-skipped" title={t("groups.skipped", { count: skipped })} role="img" aria-label={t("groups.skipped", { count: skipped })}>
                 <TriangleAlert size={10} aria-hidden />
@@ -244,10 +251,42 @@ const FullRow = memo(function FullRow({ tabId, row, i, start, height, cls, dirSi
             )}
             {sizeText(row, dirSize, sizing, lng, t)}
           </span>
-          <span className="c-date">{row.isParent ? "" : formatDate(row.modifiedMs, lng)}</span>
-          <span className="c-attr">{row.isParent ? "" : formatAttrs(row.attributes)}</span>
-        </>
-      )}
+        );
+      case "modified": return <span key={id} className={cellClass(id)}>{formatDate(row.modifiedMs, lng)}</span>;
+      case "created": return <span key={id} className={cellClass(id)}>{formatDate(row.createdMs, lng)}</span>;
+      case "accessed": return <span key={id} className={cellClass(id)}>{formatDate(row.accessedMs, lng)}</span>;
+      case "attributes": return <span key={id} className={cellClass(id)}>{formatAttrs(row.attributes)}</span>;
+      case "type": return <span key={id} className={cellClass(id)}>{typeName}</span>;
+    }
+  };
+
+  const d = row.drive;
+  let cells;
+  if (d) {
+    // Unità: etichetta e spazio libero occupano le colonne accanto al Nome, in qualunque ordine siano;
+    // con il solo Nome visibile stanno nella sua cella.
+    const span = driveSpan(ids);
+    const info = [d.label, d.ready && t("groups.driveSpace", { free: formatSize(d.free, lng), total: formatSize(d.total, lng) })]
+      .filter(Boolean).join(" · ");
+    cells = (
+      <>
+        <span className="c-name" style={{ gridColumn: ids.indexOf("name") + 2, gridRow: 1 }}>
+          {name}
+          {!span && info && <span className="c-drive"> · {info}</span>}
+        </span>
+        {span && <span className="c-drive" style={{ gridColumn: span, gridRow: 1 }} title={info}>{info}</span>}
+      </>
+    );
+  } else cells = ids.map(cell);
+
+  return (
+    <div
+      className={`${cls} mc-cols${renaming ? " renaming" : ""}`}
+      style={{ transform: `translateY(${start}px)`, height, gridTemplateColumns: template }}
+      {...rowHandlers(tabId, i)}
+    >
+      <span className="c-icon" style={d ? { gridColumn: 1, gridRow: 1 } : undefined}><FileIcon row={row} /></span>
+      {cells}
     </div>
   );
 });

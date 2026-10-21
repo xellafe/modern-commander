@@ -1,12 +1,13 @@
 import { expect, test } from 'vitest';
 import { defaultSettings, resolveTheme } from './settings';
+import { DEFAULT_COLUMNS } from '../lib/columns';
 import en from '../i18n/en.json';
 import it from '../i18n/it.json';
 
 test('defaults follow OS locale', () => {
   expect(defaultSettings('it-IT').language).toBe('it');
   expect(defaultSettings('de-DE').language).toBe('en');
-  expect(defaultSettings('en-US')).toMatchObject({ theme: 'system', showHidden: false, showSystem: false, confirmDelete: true, externalEditor: 'notepad.exe', useExternalEditor: false, terminalShell: 'auto', jumpInNewTab: false });
+  expect(defaultSettings('en-US')).toMatchObject({ theme: 'system', showHidden: false, showSystem: false, confirmDelete: true, externalEditor: 'notepad.exe', useExternalEditor: false, terminalShell: 'auto', jumpInNewTab: false, columns: DEFAULT_COLUMNS, extInName: false });
 });
 
 test('resolveTheme', () => {

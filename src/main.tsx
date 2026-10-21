@@ -17,7 +17,7 @@ import { useHotlist } from "./state/hotlist";
 import { initJobs } from "./state/jobs";
 import { useKeybindings } from "./state/keybindings";
 import { resolveTheme, useSettings } from "./state/settings";
-import { useTabViews } from "./state/tabViews";
+import { requestTypes, useTabViews } from "./state/tabViews";
 
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 const applyTheme = () => {
@@ -57,6 +57,10 @@ async function bootstrap() {
     if (s.language !== prev.language) void i18n.changeLanguage(s.language);
     // File nascosti/di sistema: tutte le schede aperte si ricostruiscono subito dal listing in memoria.
     if (s.showHidden !== prev.showHidden || s.showSystem !== prev.showSystem) useTabViews.getState().rebuildAll();
+    // Colonna Tipo accesa con schede già caricate: i testi si chiedono subito.
+    if (s.columns !== prev.columns || s.extInName !== prev.extInName) {
+      for (const tabId of Object.keys(useTabViews.getState().views)) void requestTypes(tabId);
+    }
   });
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

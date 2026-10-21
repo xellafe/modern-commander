@@ -33,6 +33,9 @@ export interface Entry {
   size: number;
   /** Millisecondi dall'epoca Unix. */
   modifiedMs: number;
+  createdMs: number;
+  /** Windows spesso non aggiorna l'ultimo accesso. */
+  accessedMs: number;
   /** Attributi Win32 grezzi. */
   attributes: number;
   isSymlink: boolean;

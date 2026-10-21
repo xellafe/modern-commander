@@ -80,8 +80,27 @@
       "name": "Nome",
       "ext": "Est.",
       "size": "Dim.",
-      "date": "Modificato",
-      "attributes": "Attr."
+      "modified": "Modificato",
+      "created": "Creato",
+      "accessed": "Ultimo accesso",
+      "attributes": "Attr.",
+      "type": "Tipo"
+    },
+    "columnsMenu": {
+      "title": "Colonne",
+      "alwaysVisible": "sempre visibile",
+      "extInName": "Estensione nel nome",
+      "reset": "Ripristina colonne predefinite",
+      "columns": {
+        "name": "Nome",
+        "ext": "Estensione",
+        "size": "Dimensione",
+        "modified": "Data di modifica",
+        "created": "Data di creazione",
+        "accessed": "Data di ultimo accesso",
+        "attributes": "Attributi",
+        "type": "Tipo"
+      }
     }
   },
   "viewer": {

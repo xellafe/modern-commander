@@ -131,3 +131,10 @@ test("termWrite, termResize e termKill chiamano i comandi con l'id", async () =>
   expect(invoke).toHaveBeenCalledWith("term_resize", { id: 1, cols: 100, rows: 30 });
   expect(invoke).toHaveBeenCalledWith("term_kill", { id: 1 });
 });
+
+test("typeNames passa le chiavi a type_names", async () => {
+  const { typeNames } = await import("./api");
+  vi.mocked(invoke).mockResolvedValue(["Cartella di file", "Documento di testo"]);
+  expect(await typeNames(["/", "txt"])).toEqual(["Cartella di file", "Documento di testo"]);
+  expect(invoke).toHaveBeenCalledWith("type_names", { keys: ["/", "txt"] });
+});

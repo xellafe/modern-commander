@@ -10,7 +10,7 @@ import { executeCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
 const calc = vi.mocked(api.calcDirSize);
-const e = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
+const e = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false });
 const ctx = () => activeTabContext();
 const size = (bytes: number, skipped = 0): DirSize => ({ bytes, files: 1, dirs: 0, skipped });
 
