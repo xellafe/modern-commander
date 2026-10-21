@@ -8,6 +8,7 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   'Shift+F5': 'cm_CopySamepanel', // in TC il nome è cm_CopySamepanel (p minuscola)
   F6: 'cm_RenMov',
   'Shift+F6': 'cm_RenameOnly',
+  F2: 'cm_RenameOnly', // come in Explorer, oltre a Shift+F6 di TC
   F7: 'cm_MkDir',
   F8: 'cm_Delete',
   Delete: 'cm_Delete',

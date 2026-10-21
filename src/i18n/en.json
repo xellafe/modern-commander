@@ -45,7 +45,9 @@
       "byExt": "By extension",
       "byDate": "By date",
       "bySize": "By size",
-      "unsorted": "Unsorted"
+      "unsorted": "Unsorted",
+      "drives": "Drives",
+      "thumbs": "Thumbnails"
     }
   },
   "status": {

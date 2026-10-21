@@ -58,6 +58,11 @@ test('phase 2 keys are in the default keymap', () => {
   for (const [chord, id] of PHASE2_KEYS) expect(DEFAULT_KEYMAP[chord], chord).toBe(id);
 });
 
+test('F2 renames like Explorer, besides Shift+F6 of TC', () => {
+  expect(DEFAULT_KEYMAP.F2).toBe('cm_RenameOnly');
+  expect(DEFAULT_KEYMAP['Shift+F6']).toBe('cm_RenameOnly');
+});
+
 test('no chord is bound twice (case and modifier order do not matter)', () => {
   const norm = (c: string) => {
     // l'ultimo '+' è il tasto stesso se il chord finisce per '+' ('Ctrl++')

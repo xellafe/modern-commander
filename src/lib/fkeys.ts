@@ -6,6 +6,7 @@ export interface Mods { shift: boolean; ctrl: boolean; alt: boolean }
 const slot = (key: string, commandId: string, label: string): FKeySlot => ({ key, commandId, labelKey: `shell.fkeys.${label}` });
 
 const BASE: FKeySlot[] = [
+  slot("F2", "cm_RenameOnly", "rename"),
   slot("F3", "cm_List", "view"),
   slot("F4", "cm_Edit", "edit"),
   slot("F5", "cm_Copy", "copy"),
@@ -19,8 +20,8 @@ const SHIFT: FKeySlot[] = [
   slot("F6", "cm_RenameOnly", "rename"),
   slot("F8", "mc_DeletePermanent", "deletePermanent"),
 ];
-// Fase 1: dell'Alt c'è solo l'uscita.
-const ALT: FKeySlot[] = [slot("F4", "cm_Exit", "exit")];
+const ALT: FKeySlot[] = [slot("F1", "cm_SrcOpenDrives", "drives"), slot("F4", "cm_Exit", "exit")];
+const CTRL_SHIFT: FKeySlot[] = [slot("F1", "cm_SrcThumbs", "thumbs")];
 // Come in TC: vista breve o dettagliata e ordinamento.
 const CTRL: FKeySlot[] = [
   slot("F1", "cm_SrcShort", "brief"),
@@ -34,6 +35,8 @@ const CTRL: FKeySlot[] = [
 
 /** Slot del livello esatto dei modificatori premuti (altre combinazioni: nessuno), solo per i comandi registrati. */
 export function fkeyLabels(mods: Mods, available: Set<string>): FKeySlot[] {
-  const layer = mods.ctrl ? (mods.alt || mods.shift ? [] : CTRL) : mods.alt ? (mods.shift ? [] : ALT) : mods.shift ? SHIFT : BASE;
+  const layer = mods.ctrl
+    ? (mods.alt ? [] : mods.shift ? CTRL_SHIFT : CTRL)
+    : mods.alt ? (mods.shift ? [] : ALT) : mods.shift ? SHIFT : BASE;
   return layer.filter((s) => available.has(s.commandId));
 }

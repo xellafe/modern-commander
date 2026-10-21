@@ -45,7 +45,9 @@
       "byExt": "Per estensione",
       "byDate": "Per data",
       "bySize": "Per dimensione",
-      "unsorted": "Non ordinato"
+      "unsorted": "Non ordinato",
+      "drives": "Unità",
+      "thumbs": "Miniature"
     }
   },
   "status": {
