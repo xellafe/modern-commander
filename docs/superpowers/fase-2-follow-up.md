@@ -81,6 +81,8 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - MP4 e PDF mostrano la miniatura della shell; F3 su un TIFF mostra l'anteprima della shell con la nota.
 - A occhio: allineamento dei riquadri, nome su 2 righe con ellissi, rinomina in un riquadro, scala di Windows al 125% e 150%, bordi di PNG con alfa (possibili bordi scuri, vedi Follow-up).
 
+✅ Verificato il 2026-10-21 (`tauri dev`, 2.000 JPEG in `D:\mc-test\thumbs`, `D:\mc-test\media`). F3 su un TIFF andava in esadecimale: corretto, le immagini che la WebView non decodifica vanno in `ImagePane` e da lì all'anteprima della shell. Aggiunti su richiesta F2 per rinominare (oltre a Shift+F6) e i livelli Alt e Ctrl+Shift della barra dei tasti.
+
 **Ispettore Ctrl+Q** (Task 11)
 - ↓ tenuto premuto su 1.000 file misti con l'ispettore aperto: il cursore non rallenta e alla fine l'anteprima è quella del file sotto il cursore.
 - Una cartella enorme (`C:\Windows`): il calcolo parte e si annulla appena ci si sposta.
@@ -89,6 +91,8 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - SHA-256 di un file da 4 GB: si annulla spostando il cursore.
 - Aspetto del pannello (splitter sul bordo sinistro, temi chiaro e scuro, colori di `colorize`), Ctrl+Q e pulsante nella barra del titolo.
 - Tempo di `colorize` su 256 KiB con righe corte (vedi Follow-up).
+
+✅ Verificato il 2026-10-21 (`tauri dev`, `D:\mc-test\inspector`: 1.000 file misti, Markdown con HTML, ZIP buono e rotto, 7z, sorgente da 256 KiB). `colorize` su 256 KiB a righe corte bloccava ↓ finché non compariva l'anteprima: ora si colorano solo le prime 2.000 righe (`COLORIZE_LINES`), il resto resta testo semplice; verificato fluido.
 
 **Terminale** (Task 12, Task 13)
 - Ctrl+ò apre il pannello con PowerShell 7 nella cartella del gruppo attivo; di nuovo Ctrl+ò lo nasconde e l'output resta al ritorno. Prima apertura con il pannello nascosto; clic sulla scheda "Terminale" senza sessioni (ne apre una).
@@ -179,7 +183,7 @@ Se un caso fallisce, per quei file restano le modalità testo ed esadecimale: an
 - Test mancanti: `cancelOwner` di A non cancella la stessa chiave di B, refresh LRU.
 
 **Ispettore**
-- `colorize` è O(righe²) su 256 KiB con righe corte: misurare e valutare un limite (~2000 righe o 64 KiB). Colorato solo se la riga ≤ 2000 caratteri.
+- ~~`colorize` è O(righe²) su 256 KiB con righe corte: misurare e valutare un limite (~2000 righe o 64 KiB).~~ Risolto: colorate solo le prime 2.000 righe. Colorato solo se la riga ≤ 2000 caratteri.
 - L'errore di un hash (es. `FILE_IN_USE`) non ha messaggio: il tipo `hashes` del piano non ha uno stato d'errore. Il pulsante hash non si annulla con un clic.
 - Il primo `computeDirSize` non è annullabile per un istante (fase 1); `setInspectorWidth` non ri-clampa al ridimensionamento della finestra e il clamp non è testato; `key={e.path}` duplicate nell'elenco archivio.
 - La prima anteprima di testo aspetta il caricamento di Monaco (per `languageFor`); se l'import fallisce, testo semplice.
