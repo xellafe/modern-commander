@@ -139,6 +139,9 @@ export const writeTextFile = (path: string, text: string, encoding: string, bom:
 /** Carattere di ogni virtual key nel layout di tastiera attivo (`MapVirtualKeyW`); null se il tasto non ne ha. */
 export const keyLabels = (vks: number[]) => invoke<(string | null)[]>("key_labels", { vks });
 
+/** Descrizione di Windows del tipo per ogni chiave (`"/"` cartella, `""` senza estensione, altrimenti l'estensione); `""` se manca. */
+export const typeNames = (keys: string[]) => invoke<string[]>("type_names", { keys });
+
 let ansi: Promise<string> | undefined;
 
 /** Etichetta `TextDecoder` della codifica ANSI di sistema; si chiede una volta sola (si riprova se fallisce). */

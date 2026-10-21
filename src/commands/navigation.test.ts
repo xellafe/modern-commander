@@ -17,7 +17,7 @@ import { closeTab, closeTabNow, cursorStep, ensureDirTab, initCloseGuard, NAVIGA
 import { executeCommand, getCommand } from "./registry";
 
 const listDir = vi.mocked(api.listDir);
-const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
+const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false });
 const ctx = () => activeTabContext();
 
 beforeAll(registerNavigationCommands);

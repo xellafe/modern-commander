@@ -7,10 +7,12 @@ import { useLayout } from "./layout";
 import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
 import { useTabViews } from "./tabViews";
+import { useTypeNames } from "./typeNames";
+import { DEFAULT_COLUMNS, toggleColumn } from "../lib/columns";
 
 const listDir = vi.mocked(api.listDir);
 const nearestExistingAncestor = vi.mocked(api.nearestExistingAncestor);
-const f = (name: string): Entry => ({ name, isDir: false, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
+const f = (name: string): Entry => ({ name, isDir: false, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -24,6 +26,8 @@ beforeEach(() => {
     activationOrder: ["g1"],
   });
   useTabViews.setState({ views: {}, notice: null });
+  useTypeNames.setState({ names: {} });
+  useSettings.setState({ columns: DEFAULT_COLUMNS, extInName: false });
 });
 
 test("missing folder falls back to nearest ancestor", async () => {
@@ -173,4 +177,64 @@ test("una cartella caricata finisce tra le recenti; unità, riletture e cartelle
   nearestExistingAncestor.mockResolvedValue("C:\\a");
   await useTabViews.getState().load("t1", "C:\\gone");
   expect(useRecentDirs.getState().dirs).toEqual(["C:\\a", "C:\\b"]);
+});
+
+const typeNames = vi.mocked(api.typeNames);
+const rowNames = () => useTabViews.getState().views["t1"].rows.map((r) => r.name);
+
+test("type names are not requested when the column is hidden and sort is not type", async () => {
+  listDir.mockResolvedValue([f("b.txt"), f("a.png")]);
+  await useTabViews.getState().load("t1", "C:\\x");
+  await Promise.resolve();
+  expect(typeNames).not.toHaveBeenCalled();
+});
+
+test("sort by type reorders once names arrive", async () => {
+  listDir.mockResolvedValue([f("b.txt"), f("a.png")]);
+  let resolve!: (v: string[]) => void;
+  typeNames.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+  await useTabViews.getState().load("t1", "C:\\x");
+  useTabViews.getState().update("t1", (v) => ({ ...v, cursor: v.rows.findIndex((r) => r.name === "a.png") }));
+  useTabViews.getState().rebuild("t1", { sort: { key: "type", desc: false } });
+  expect(rowNames()).toEqual(["..", "a.png", "b.txt"]); // testi non ancora arrivati: decide il nome
+  expect(typeNames).toHaveBeenCalledWith(["txt", "png"]);
+  resolve(["Documento di testo", "Immagine PNG"]);
+  await vi.waitFor(() => expect(rowNames()).toEqual(["..", "b.txt", "a.png"]));
+  const v = useTabViews.getState().views["t1"];
+  expect(v.rows[v.cursor].name).toBe("a.png");
+  expect(typeNames).toHaveBeenCalledTimes(1);
+});
+
+test("reload does not refetch known type names", async () => {
+  useSettings.setState({ columns: toggleColumn(DEFAULT_COLUMNS, "type") });
+  listDir.mockResolvedValue([f("b.txt")]);
+  typeNames.mockResolvedValue(["Documento di testo"]);
+  await useTabViews.getState().load("t1", "C:\\x");
+  await vi.waitFor(() => expect(useTypeNames.getState().names).toEqual({ txt: "Documento di testo" }));
+  await useTabViews.getState().reload("t1");
+  await Promise.resolve();
+  expect(typeNames).toHaveBeenCalledTimes(1);
+});
+
+test("two tabs sorted by type both reorder when shared names arrive", async () => {
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["t1"], activeTabId: "t1" }, { id: "g2", tabIds: ["t2"], activeTabId: "t2" }],
+    tabs: { t1: { id: "t1", path: "C:\\x" }, t2: { id: "t2", path: "C:\\x" } },
+    activeGroupId: "g1",
+    activationOrder: ["g1", "g2"],
+  });
+  listDir.mockResolvedValue([f("b.txt"), f("a.png")]);
+  let resolve!: (v: string[]) => void;
+  typeNames.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+  await useTabViews.getState().load("t1", "C:\\x");
+  await useTabViews.getState().load("t2", "C:\\x");
+  useTabViews.getState().rebuild("t1", { sort: { key: "type", desc: false } });
+  useTabViews.getState().rebuild("t2", { sort: { key: "type", desc: false } }); // le chiavi sono già in volo per t1
+  resolve(["Documento di testo", "Immagine PNG"]);
+  const names = (id: string) => useTabViews.getState().views[id].rows.map((r) => r.name);
+  await vi.waitFor(() => {
+    expect(names("t1")).toEqual(["..", "b.txt", "a.png"]);
+    expect(names("t2")).toEqual(["..", "b.txt", "a.png"]);
+  });
+  expect(typeNames).toHaveBeenCalledTimes(1);
 });

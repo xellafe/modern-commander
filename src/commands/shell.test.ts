@@ -15,7 +15,7 @@ import {
   suppressNativeContextMenu, toPhysical,
 } from "./shell";
 
-const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false });
+const f = (name: string, isDir = false): Entry => ({ name, isDir, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false });
 const view = () => activeTabContext().view;
 const setCursor = (name: string) =>
   useTabViews.getState().update("t1", (v) => ({ ...v, cursor: v.rows.findIndex((r) => r.name === name) }));

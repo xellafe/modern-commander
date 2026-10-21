@@ -11,6 +11,7 @@ pub mod keys;
 pub mod open;
 pub mod properties;
 pub mod thumbnail;
+pub mod types;
 
 use crate::error::{AppError, ErrorCode};
 use crate::paths::has_trailing_dot_or_space;

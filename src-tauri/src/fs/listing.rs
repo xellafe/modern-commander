@@ -5,7 +5,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::paths::{normalize_lexical, to_extended};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, HANDLE};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, FILETIME, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FIND_FIRST_EX_LARGE_FETCH,
     FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW,
@@ -26,6 +26,10 @@ pub struct Entry {
     pub size: u64,
     /// Ultima modifica, millisecondi dall'epoca Unix.
     pub modified_ms: i64,
+    /// Creazione, millisecondi dall'epoca Unix.
+    pub created_ms: i64,
+    /// Ultimo accesso, millisecondi dall'epoca Unix (Windows spesso non lo aggiorna).
+    pub accessed_ms: i64,
     /// Attributi Win32 grezzi (`FILE_ATTRIBUTE_*`).
     pub attributes: u32,
     /// Collegamento simbolico o giunzione.
@@ -41,20 +45,25 @@ impl Drop for FindHandle {
     }
 }
 
+fn filetime_ms(ft: FILETIME) -> i64 {
+    let t = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
+    (t / 10_000) as i64 - FILETIME_UNIX_DIFF_MS
+}
+
 fn entry_from(d: &WIN32_FIND_DATAW) -> Option<Entry> {
     let len = d.cFileName.iter().position(|&c| c == 0).unwrap_or(d.cFileName.len());
     let name = &d.cFileName[..len];
     if name == [b'.' as u16] || name == [b'.' as u16, b'.' as u16] {
         return None;
     }
-    let ft = (u64::from(d.ftLastWriteTime.dwHighDateTime) << 32)
-        | u64::from(d.ftLastWriteTime.dwLowDateTime);
     let attributes = d.dwFileAttributes;
     Some(Entry {
         name: String::from_utf16_lossy(name),
         is_dir: attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
         size: (u64::from(d.nFileSizeHigh) << 32) | u64::from(d.nFileSizeLow),
-        modified_ms: (ft / 10_000) as i64 - FILETIME_UNIX_DIFF_MS,
+        modified_ms: filetime_ms(d.ftLastWriteTime),
+        created_ms: filetime_ms(d.ftCreationTime),
+        accessed_ms: filetime_ms(d.ftLastAccessTime),
         attributes,
         // Dopo FindFirstFile, `dwReserved0` contiene il reparse tag quando l'attributo è presente.
         is_symlink: attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
@@ -167,6 +176,15 @@ mod tests {
         assert_eq!((v[0].name.as_str(), v[0].is_dir, v[0].size), ("a.txt", false, 5));
         assert!(v[1].is_dir && v[1].name == "sub");
         assert!(v[0].modified_ms > 0);
+    }
+
+    #[test]
+    fn lists_creation_and_access_times() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), b"x").unwrap();
+        let e = &list_dir(d.path()).unwrap()[0];
+        assert!(e.created_ms > 0 && e.accessed_ms > 0);
+        assert!(e.created_ms <= e.modified_ms + 2_000); // stessa scala temporale della modifica
     }
 
     #[test]

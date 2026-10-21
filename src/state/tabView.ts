@@ -1,7 +1,8 @@
 import type { DirSize, Drive, Entry } from "../ipc/types";
+import { typeKey } from "../lib/columns";
 import { compileMask } from "../lib/mask";
 
-export type SortKey = "name" | "ext" | "size" | "date" | "none";
+export type SortKey = "name" | "ext" | "size" | "date" | "created" | "accessed" | "type" | "none";
 export interface Row extends Entry {
   isParent?: boolean;
   /** Solo nella pseudo-cartella `drives:`: l'unità rappresentata dalla riga. */
@@ -28,6 +29,8 @@ interface BuildOpts {
   showSystem: boolean;
   filter: string;
   dirSizes?: Record<string, number>;
+  /** Testi dei tipi per chiave di `typeKey`: servono solo all'ordinamento per Tipo. */
+  typeNames?: Record<string, string>;
 }
 
 const ATTR_HIDDEN = 0x2;
@@ -48,7 +51,7 @@ export const emptyView = (path: string): TabView => ({
   skipped: {},
 });
 
-export const hasSize = (sizes: Record<string, number>, name: string): boolean =>
+export const hasSize = (sizes: Record<string, unknown>, name: string): boolean =>
   Object.prototype.hasOwnProperty.call(sizes, name); // Object.hasOwn è ES2022, il target è ES2020
 
 export function parentPath(path: string): string | null {
@@ -75,6 +78,11 @@ export function buildRows(
   opts: BuildOpts,
 ): Row[] {
   const sizes = opts.dirSizes ?? {};
+  const types = opts.typeNames ?? {};
+  const typeOf = (e: Entry) => {
+    const k = typeKey(e.name, e.isDir);
+    return hasSize(types, k) ? types[k] : ""; // "a.constructor" non deve leggere il prototipo
+  };
   const sizeOf = (e: Entry) => (e.isDir ? (hasSize(sizes, e.name) ? sizes[e.name] : 0) : e.size);
   const key = (a: Entry, b: Entry): number => {
     switch (sort.key) {
@@ -82,6 +90,9 @@ export function buildRows(
       case "ext": return collator.compare(extOf(a.name), extOf(b.name));
       case "size": return sizeOf(a) - sizeOf(b);
       case "date": return a.modifiedMs - b.modifiedMs;
+      case "created": return a.createdMs - b.createdMs;
+      case "accessed": return a.accessedMs - b.accessedMs;
+      case "type": return collator.compare(typeOf(a), typeOf(b));
       default: return 0;
     }
   };
@@ -102,7 +113,7 @@ export function buildRows(
   const parent: Row[] =
     parentPath(path) === null
       ? []
-      : [{ name: "..", isDir: true, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false, isParent: true }];
+      : [{ name: "..", isDir: true, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false, isParent: true }];
   return [...parent, ...sorted];
 }
 

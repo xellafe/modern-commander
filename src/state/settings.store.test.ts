@@ -1,7 +1,8 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
 vi.mock('../ipc/api', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
-import { writeConfig } from '../ipc/api';
+import { readConfig, writeConfig } from '../ipc/api';
+import { DEFAULT_COLUMNS } from '../lib/columns';
 import { useSettings } from './settings';
 
 const write = vi.mocked(writeConfig);
@@ -32,4 +33,12 @@ test('a rejected write does not block the next one', async () => {
   await expect(useSettings.getState().update({ confirmDelete: false })).rejects.toThrow('boom');
   await expect(useSettings.getState().update({ confirmDelete: true })).resolves.toBeUndefined();
   expect(write).toHaveBeenCalledTimes(2);
+});
+
+test('load normalizza columns', async () => {
+  vi.mocked(readConfig).mockResolvedValueOnce({ columns: [{ id: 'name', visible: false, width: 1 }] });
+  await useSettings.getState().load();
+  const cols = useSettings.getState().columns;
+  expect(cols.find((c) => c.id === 'name')).toEqual({ id: 'name', visible: true, width: null });
+  expect(cols.map((c) => c.id).sort()).toEqual(DEFAULT_COLUMNS.map((c) => c.id).sort());
 });

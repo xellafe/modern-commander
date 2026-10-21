@@ -69,6 +69,7 @@ pub fn run() {
             shell::open::open_with,
             shell::thumbnail::get_thumbnail,
             shell::keys::key_labels,
+            shell::types::type_names,
             config::read_config,
             config::write_config,
             ops::queue::enqueue_job,

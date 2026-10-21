@@ -22,10 +22,10 @@ import {
 } from "./tabView";
 
 const f = (name: string, size = 0, attributes = 0, modifiedMs = 0): Entry => ({
-  name, isDir: false, size, modifiedMs, attributes, isSymlink: false,
+  name, isDir: false, size, modifiedMs, createdMs: 0, accessedMs: 0, attributes, isSymlink: false,
 });
 const d = (name: string, attributes = 0): Entry => ({
-  name, isDir: true, size: 0, modifiedMs: 0, attributes, isSymlink: false,
+  name, isDir: true, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes, isSymlink: false,
 });
 const opts = { showHidden: false, showSystem: false, filter: "" };
 const sortName = { key: "name" as const, desc: false };
@@ -35,6 +35,21 @@ const view = (names: string[]): TabView => ({ ...emptyView("C:\\x"), rows: rowsN
 const names = (rows: Row[]) => rows.map((r) => r.name);
 
 describe("buildRows", () => {
+  it("sorts by created, accessed and type", () => {
+    const t = (name: string, createdMs: number, accessedMs: number) => ({ ...f(name), createdMs, accessedMs });
+    const e = [t("a.txt", 3, 1), t("b.png", 1, 2), t("c.zzz", 2, 3), d("dir")];
+    const by = (key: "created" | "accessed" | "type", desc = false, typeNames?: Record<string, string>) =>
+      names(buildRows(e, "C:\\", { key, desc }, { ...opts, typeNames }));
+    expect(by("created")).toEqual(["dir", "b.png", "c.zzz", "a.txt"]);
+    expect(by("created", true)).toEqual(["dir", "a.txt", "c.zzz", "b.png"]);
+    expect(by("accessed")).toEqual(["dir", "a.txt", "b.png", "c.zzz"]);
+    expect(by("accessed", true)).toEqual(["dir", "c.zzz", "b.png", "a.txt"]);
+    // un'estensione senza testo vale stringa vuota e va in testa; le cartelle restano prima
+    expect(by("type", false, { txt: "Documento di testo", png: "Immagine PNG", "/": "Cartella di file" })).toEqual(["dir", "c.zzz", "a.txt", "b.png"]);
+    const odd = [f("x.constructor"), f("y.txt")];
+    expect(names(buildRows(odd, "C:\\", { key: "type", desc: false }, { ...opts, typeNames: { txt: "Documento" } }))).toEqual(["x.constructor", "y.txt"]);
+  });
+
   it("parent first, dirs before files, then sort", () => {
     const e = [f("b.txt", 2), d("zdir"), f("a.md", 9), d("adir")];
     const rows = buildRows(e, "C:\\x", { key: "size", desc: true }, opts);
@@ -43,7 +58,7 @@ describe("buildRows", () => {
 
   it("riga '..' con i valori fissi", () => {
     expect(buildRows([], "C:\\x", sortName, opts)[0]).toEqual({
-      name: "..", isDir: true, size: 0, modifiedMs: 0, attributes: 0, isSymlink: false, isParent: true,
+      name: "..", isDir: true, size: 0, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false, isParent: true,
     });
   });
 
