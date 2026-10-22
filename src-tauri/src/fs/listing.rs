@@ -35,7 +35,8 @@ pub struct Entry {
     pub attributes: u32,
     /// Collegamento simbolico o giunzione.
     pub is_symlink: bool,
-    /// Permessi POSIX delle sorgenti remote; `None` in locale.
+    /// Permessi POSIX delle sorgenti remote; `None` in locale, e allora il campo non si invia.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<u32>,
 }
 

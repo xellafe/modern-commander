@@ -268,8 +268,9 @@ mod tests {
         m.writer("/d/b", true).unwrap().write_all(b"nuovo").unwrap();
         assert_eq!(m.writer("/d/b", true).err().unwrap().code, ErrorCode::AlreadyExists);
         assert_eq!(m.rename("/d/b", "/d/a.txt", false).unwrap_err().code, ErrorCode::AlreadyExists);
-        assert!(m.rename("/d/b", "/d/a.txt", true).is_err());
+        assert_eq!(m.rename("/d/b", "/d/a.txt", true).unwrap_err().code, ErrorCode::Io);
         assert_eq!(m.data("/d/a.txt").unwrap(), b"0123456789");
+        assert_eq!(m.data("/d/b").unwrap(), b"nuovo");
         m.atomic_replace = true;
         m.rename("/d/b", "/d/a.txt", true).unwrap();
         assert_eq!((m.data("/d/a.txt").unwrap(), m.data("/d/b")), (b"nuovo".to_vec(), None));

@@ -2,7 +2,7 @@
 //! e coda locale restano sul codice di `fs` e `ops`. I percorsi sono quelli Windows, sempre con `to_extended`.
 
 use super::provider::{Caps, Provider, Stat};
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::fs::content::{ms, open_shared, read_chunk};
 use crate::ops::exec::{clear_readonly_of, move_file};
 use crate::paths::to_extended;
@@ -95,7 +95,9 @@ impl Provider for LocalProvider {
     fn set_meta(&self, path: &str, modified_ms: Option<i64>, _mode: Option<u32>) -> Result<(), AppError> {
         let Some(t) = modified_ms else { return Ok(()) };
         let d = Duration::from_millis(t.unsigned_abs());
-        let time = if t >= 0 { UNIX_EPOCH + d } else { UNIX_EPOCH - d };
+        // Una data fuori dall'intervallo di `SystemTime` (da un server remoto) non manda in panico: `INVALID_REQUEST`.
+        let time = if t >= 0 { UNIX_EPOCH.checked_add(d) } else { UNIX_EPOCH.checked_sub(d) }
+            .ok_or_else(|| AppError::new(ErrorCode::InvalidRequest, Some(Path::new(path))))?;
         let f = File::options().access_mode(WRITE_ATTRIBUTES).custom_flags(BACKUP_SEMANTICS).open(ext(path));
         f.and_then(|f| f.set_modified(time)).map_err(io_err(path))
     }
@@ -104,7 +106,6 @@ impl Provider for LocalProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::ErrorCode;
     use std::io::{Read, Write};
 
     #[test]
@@ -122,6 +123,8 @@ mod tests {
         assert_eq!(s, "due");
         assert_eq!(lp.read_at(&p("a"), 1, 10).unwrap(), b"ue");
         lp.set_meta(&p("a"), Some(1_000_000_000_000), Some(0o644)).unwrap();
+        assert_eq!(lp.set_meta(&p("a"), Some(i64::MAX), None).unwrap_err().code, ErrorCode::InvalidRequest);
+        assert_eq!(lp.set_meta(&p("a"), Some(i64::MIN), None).unwrap_err().code, ErrorCode::InvalidRequest);
         assert_eq!(lp.stat(&p("a")).unwrap().modified_ms, Some(1_000_000_000_000));
         lp.mkdir(&p("c")).unwrap();
         let mut names: Vec<_> = lp.list(&d.path().to_string_lossy()).unwrap().into_iter().map(|s| (s.name, s.is_dir)).collect();
