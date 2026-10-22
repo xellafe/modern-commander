@@ -62,7 +62,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 | Ctrl+F | Gestore delle connessioni: nuova, modifica, duplica, elimina, connetti, importa da WinSCP |
 | `\\server` nella barra del percorso | Elenco delle condivisioni SMB del server |
 
-- **Protocolli**: SFTP (password o keyboard-interactive), FTP e FTPS (esplicito e implicito, modalità passiva), indici HTTP/HTTPS di Apache, nginx e IIS (Basic e Digest). Le schede remote si usano come quelle locali: F3, F4, F5, F6, F7, F8, ispettore, conflitti e coda.
+- **Protocolli**: SFTP (password o keyboard-interactive), FTP e FTPS (esplicito e implicito, modalità passiva), indici HTTP/HTTPS di Apache, nginx e IIS (Basic e Digest). Le schede remote si usano come quelle locali: F3, F4, F5, F6, F7, F8 (HTTP: solo lettura), ispettore, conflitti e coda.
 - **Password**: solo nel Windows Credential Manager (`ModernCommander:<id connessione>`), mai nei file di configurazione. Le connessioni stanno in `connections.json` nella cartella di configurazione.
 - **Impronte**: le chiavi SSH degli host e i certificati TLS non riconosciuti dall'archivio di Windows si accettano con un dialogo e si ricordano in `known_hosts.json` (stessa cartella). Una chiave cambiata blocca la connessione finché non si usa "Dimentica impronta".
 - **Import da WinSCP**: siti dal registro o da `WinSCP.ini`, senza password; SCP diventa SFTP, WebDAV e S3 si saltano.
