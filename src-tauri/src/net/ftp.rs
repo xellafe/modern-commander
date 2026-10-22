@@ -452,9 +452,12 @@ impl FtpProvider {
         s.note(r)
     }
 
-    /// Come `with`, per un comando che cambia il server: l'elenco ricordato si dimentica, anche se il comando fallisce.
+    /// Come `with`, per un comando che cambia il server: l'elenco ricordato si dimentica prima (le verifiche di
+    /// esistenza di `rename` e `mkdir` rileggono il server: un'altra sessione può aver creato la destinazione) e dopo,
+    /// anche se il comando fallisce.
     fn change<T>(&self, f: impl FnOnce(&mut Ftp) -> Result<T, AppError>) -> Result<T, AppError> {
         self.with(|ftp| {
+            self.last.clear();
             let r = f(ftp);
             self.last.clear();
             r
@@ -512,8 +515,8 @@ impl FtpProvider {
     /// `LISTING_TTL` finché nessun comando di questo provider cambia il server.
     /// ponytail: un caricamento cambia il server, quindi ogni file caricato in una cartella costa ancora un elenco;
     /// aggiornare l'elenco ricordato al posto di dimenticarlo, se serve. Un cambiamento fatto da un'altra sessione
-    /// non si vede per `LISTING_TTL`: la verifica di `create_new` e di `rename` può guardare un elenco vecchio di
-    /// qualche secondo (non era atomica neanche prima).
+    /// non si vede per `LISTING_TTL`: la verifica di `create_new` in `writer` può guardare un elenco vecchio di
+    /// qualche secondo (non era atomica neanche prima); `rename` e `mkdir` rileggono sempre (vedi `change`).
     fn stat_in(&self, ftp: &mut Ftp, path: &str) -> Result<Stat, AppError> {
         let name = name_of(path).to_owned();
         if name.is_empty() {
