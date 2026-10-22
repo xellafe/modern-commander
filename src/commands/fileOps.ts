@@ -34,12 +34,18 @@ export function nameError(name: string, base = ""): string | null {
 
 const ABS_ROOT = /^(?:[A-Za-z]:\\|\\\\[^\\/]+\\[^\\/]+\\)/;
 
+/** Su una scheda remota un `/` iniziale è la radice del server: `/etc` → `sftp://w/etc`. */
+function serverAbsolute(base: string, input: string): string {
+  const r = parseRemote(base);
+  return r && input.startsWith("/") ? `${r.scheme}://${r.conn}${input}` : input;
+}
+
 /**
  * Percorso da creare con F7: relativo alla cartella corrente (con `\`, o `/` sul remoto, per le intermedie) o assoluto.
  * `focus` è il nome, dentro la cartella corrente, su cui portare il cursore dopo la creazione.
  */
 export function mkdirTarget(base: string, input: string): { path: string; focus: string | null } | { error: string } {
-  const s = input.trim();
+  const s = serverAbsolute(base, input.trim());
   const r = parseRemote(s);
   const root = r ? `${r.scheme}://${r.conn}/` : (ABS_ROOT.exec(s)?.[0] ?? "");
   if (!root && !sourceCaps(base).write) return { error: "ops.nameInvalid" };
@@ -54,7 +60,9 @@ export function mkdirTarget(base: string, input: string): { path: string; focus:
   const rel = parts.join(sep);
   if (!root) return { path: joinPath(base, rel), focus: parts[0] };
   const path = root + rel;
-  return { path, focus: parentPath(path)?.toLowerCase() === base.toLowerCase() ? parts[parts.length - 1] : null };
+  // Sul server i nomi distinguono maiuscole e minuscole.
+  const same = r ? parentPath(path) === base : parentPath(path)?.toLowerCase() === base.toLowerCase();
+  return { path, focus: same ? parts[parts.length - 1] : null };
 }
 
 /**
@@ -65,7 +73,7 @@ export function mkdirTarget(base: string, input: string): { path: string; focus:
 export function resolveDest(base: string, input: string): string | null {
   const s = input.trim();
   if (!s) return null;
-  const p = normalizePath(s);
+  const p = normalizePath(serverAbsolute(base, s));
   const abs = /^(?:[A-Za-z]:\\|\\\\)/.test(p) || isRemote(p) ? p
     : !sourceCaps(base).write ? null
     : isRemote(base) ? normalizePath(joinPath(base, s)) : joinPath(base, p);
@@ -100,10 +108,10 @@ function selection() {
   return sources.length ? { ...ctx, sources } : null;
 }
 
-/** Sorgente in sola lettura (HTTP, lista delle unità): la notifica al posto del backend. */
+/** Sorgente in sola lettura: su HTTP la notifica al posto del backend, nella lista delle unità niente (come prima). */
 function readOnly(tabId: string, path: string): boolean {
   if (sourceCaps(path).write) return false;
-  views().showNotice(tabId, { code: "READ_ONLY_SOURCE" });
+  if (isRemote(path)) views().showNotice(tabId, { code: "READ_ONLY_SOURCE" });
   return true;
 }
 

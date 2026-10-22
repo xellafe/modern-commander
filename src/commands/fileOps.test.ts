@@ -100,6 +100,13 @@ test("remote names forbid only '/' and NUL; remote destinations resolve with '/'
   expect(mkdirTarget("sftp://w/var", "a/../b")).toEqual({ error: "ops.nameInvalid" });
   expect(mkdirTarget("http://h/", "x")).toEqual({ error: "ops.nameInvalid" });
 
+  // Un `/` iniziale su una scheda remota è la radice del server, non una sottocartella.
+  expect(resolveDest("sftp://w/var", "/etc/x")).toBe("sftp://w/etc/x");
+  expect(resolveDest("sftp://w/var", "/etc/")).toBe("sftp://w/etc/");
+  expect(mkdirTarget("sftp://w/var", "/etc/x")).toEqual({ path: "sftp://w/etc/x", focus: null });
+  expect(mkdirTarget("sftp://w/var", "/var/n")).toEqual({ path: "sftp://w/var/n", focus: "n" });
+  expect(mkdirTarget("sftp://w/var", "/VAR/n")).toEqual({ path: "sftp://w/VAR/n", focus: null }); // POSIX: maiuscole diverse
+
   expect(mustChangeDest({ from: "sftp://w/a", move: true, requireChange: false }, "sftp://w/a/")).toBe(true);
   expect(mustChangeDest({ from: "sftp://w/a", move: true, requireChange: false }, "sftp://w/A")).toBe(false);
 });

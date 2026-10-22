@@ -12,8 +12,8 @@ import { registerCommand } from "./registry";
  */
 export async function newTerminal(shell?: ShellKind): Promise<void> {
   const l = useLayout.getState();
-  const cwd = [l.activeGroupId, ...l.activationOrder]
-    .flatMap((id) => l.groups.filter((g) => g.id === id).map((g) => l.tabs[g.activeTabId].path))
+  const cwd = l.activationOrder
+    .map((id) => l.tabs[l.groups.find((g) => g.id === id)!.activeTabId].path)
     .find((p) => sourceCaps(p).shell) ?? "";
   useUi.getState().showBottomPanel("terminal");
   await useTerminals.getState().create(cwd, shell);
