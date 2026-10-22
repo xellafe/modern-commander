@@ -9,8 +9,9 @@ use crate::vfs::provider::{Caps, Connector, Provider, Purpose, Stat};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 /// Apre una sessione verso il server di `conn`. Senza password: `AUTH_REQUIRED` se il server ne chiede una.
 pub trait ProviderFactory: Send + Sync {
@@ -58,7 +59,19 @@ struct Shared {
     dir: Result<PathBuf, AppError>,
     creds: Arc<dyn Secrets>,
     live: Mutex<HashMap<String, Live>>,
+    /// Sessioni dei trasferimenti libere, per connessione, con l'istante in cui sono tornate.
+    pool: Mutex<HashMap<String, Vec<Idle>>>,
+    /// Cresce a ogni `disconnect`: una sessione prestata prima non torna nella riserva.
+    epoch: AtomicU64,
+    idle_ttl: Duration,
 }
+
+/// Sessione di trasferimento libera e l'istante in cui è tornata.
+type Idle = (Arc<dyn Provider>, Instant);
+
+/// Sessioni dei trasferimenti tenute libere per connessione, e per quanto.
+const IDLE_MAX: usize = 2;
+const IDLE_TTL: Duration = Duration::from_secs(60);
 
 impl Shared {
     fn dir(&self) -> Result<&Path, AppError> {
@@ -101,6 +114,35 @@ impl Shared {
         Ok(session)
     }
 
+    /// Una sessione libera della connessione, la più recente; quelle scadute si chiudono.
+    fn take_idle(&self, id: &str) -> Option<Arc<dyn Provider>> {
+        let (p, _expired) = {
+            let mut pool = lock(&self.pool);
+            let idle = pool.get_mut(id)?;
+            let expired: Vec<_> = idle.extract_if(.., |(_, t)| t.elapsed() >= self.idle_ttl).collect();
+            (idle.pop().map(|(p, _)| p), expired)
+        };
+        p
+    }
+
+    /// Rimette `p` tra le libere, se nel frattempo la connessione non è stata chiusa; oltre `IDLE_MAX` si chiude la
+    /// più vecchia.
+    fn give_back(&self, id: &str, p: Arc<dyn Provider>, epoch: u64) {
+        let _old = {
+            let mut pool = lock(&self.pool);
+            if self.epoch.load(Ordering::SeqCst) != epoch {
+                vec![(p, Instant::now())]
+            } else {
+                let idle = pool.entry(id.to_owned()).or_default();
+                idle.push((p, Instant::now()));
+                let mut old: Vec<_> = idle.extract_if(.., |(_, t)| t.elapsed() >= self.idle_ttl).collect();
+                let extra = idle.len().saturating_sub(IDLE_MAX);
+                old.extend(idle.drain(..extra));
+                old
+            }
+        };
+    }
+
     /// Toglie `s` dalla cache se c'è ancora: una sessione nuova aperta nel frattempo resta.
     fn evict(&self, id: &str, s: &Arc<Session>) {
         let _old = lock(&self.live)
@@ -123,7 +165,15 @@ impl Sessions {
         dir: Result<PathBuf, AppError>,
         creds: Arc<dyn Secrets>,
     ) -> Self {
-        Self(Arc::new(Shared { factories, dir, creds, live: Mutex::default() }))
+        Self(Arc::new(Shared {
+            factories,
+            dir,
+            creds,
+            live: Mutex::default(),
+            pool: Mutex::default(),
+            epoch: AtomicU64::new(0),
+            idle_ttl: IDLE_TTL,
+        }))
     }
 
     /// Senza password usa quella salvata; con `remember` salva quella data, solo se la connessione riesce. Se poi il
@@ -147,8 +197,14 @@ impl Sessions {
     }
 
     /// Le sessioni dei trasferimenti in corso restano finché il trasferimento le usa.
+    /// Chiude anche le sessioni libere dei trasferimenti; quelle in prestito si chiudono quando tornano.
     pub fn disconnect(&self, id: &str) {
         let _old = lock(&self.0.live).remove(id);
+        let _idle = {
+            let mut pool = lock(&self.0.pool);
+            self.0.epoch.fetch_add(1, Ordering::SeqCst);
+            pool.remove(id)
+        };
     }
 
     pub fn list(&self) -> Result<Vec<ConnectionView>, AppError> {
@@ -193,11 +249,124 @@ impl Sessions {
 impl Connector for Sessions {
     fn provider(&self, scheme: Scheme, id: &str, purpose: Purpose) -> Result<Arc<dyn Provider>, AppError> {
         if purpose == Purpose::Transfer {
+            // Lo schema si verifica anche quando c'è una sessione libera.
             let (conn, password) = self.0.login(scheme, id)?;
-            return self.0.open(&conn, password.as_deref());
+            let epoch = self.0.epoch.load(Ordering::SeqCst);
+            let p = match self.0.take_idle(id) {
+                Some(p) => p,
+                None => self.0.open(&conn, password.as_deref())?,
+            };
+            let fell = Arc::new(AtomicBool::new(false));
+            return Ok(Arc::new(Lent { shared: self.0.clone(), id: id.to_owned(), epoch, p: Some(p), fell }));
         }
         let session = self.0.browse(scheme, id)?;
         Ok(Arc::new(Watched { shared: self.0.clone(), scheme, id: id.to_owned(), cur: Mutex::new(session) }))
+    }
+}
+
+/// Sessione di trasferimento in prestito, sempre a un solo utilizzatore: lasciandola cadere torna tra le libere della
+/// connessione, a meno che una chiamata o uno stream abbia dato `CONNECTION_FAILED` o `TIMEOUT` (allora si chiude,
+/// su un altro thread per i provider che lo richiedono). Così una coda non apre una connessione per ogni operazione.
+struct Lent {
+    shared: Arc<Shared>,
+    id: String,
+    epoch: u64,
+    p: Option<Arc<dyn Provider>>,
+    fell: Arc<AtomicBool>,
+}
+
+impl Lent {
+    fn p(&self) -> &dyn Provider {
+        self.p.as_deref().expect("presente fino al Drop")
+    }
+
+    fn seen<T>(&self, r: Result<T, AppError>) -> Result<T, AppError> {
+        if let Err(e) = &r
+            && dropped(e)
+        {
+            self.fell.store(true, Ordering::SeqCst);
+        }
+        r
+    }
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        if let Some(p) = self.p.take()
+            && !self.fell.load(Ordering::SeqCst)
+        {
+            self.shared.give_back(&self.id, p, self.epoch);
+        }
+    }
+}
+
+/// Stream di una sessione in prestito: una caduta a metà la esclude dal riuso.
+struct Seen<S> {
+    inner: S,
+    fell: Arc<AtomicBool>,
+}
+
+impl<S> Seen<S> {
+    fn seen<T>(&self, r: std::io::Result<T>) -> std::io::Result<T> {
+        if let Err(e) = &r
+            && e.get_ref().and_then(|x| x.downcast_ref::<AppError>()).is_none_or(dropped)
+        {
+            self.fell.store(true, Ordering::SeqCst);
+        }
+        r
+    }
+}
+
+impl<S: Read> Read for Seen<S> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let r = self.inner.read(buf);
+        self.seen(r)
+    }
+}
+
+impl<S: Write> Write for Seen<S> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let r = self.inner.write(buf);
+        self.seen(r)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let r = self.inner.flush();
+        self.seen(r)
+    }
+}
+
+impl Provider for Lent {
+    fn caps(&self) -> Caps {
+        self.p().caps()
+    }
+    fn stat(&self, path: &str) -> Result<Stat, AppError> {
+        self.seen(self.p().stat(path))
+    }
+    fn list(&self, path: &str) -> Result<Vec<Stat>, AppError> {
+        self.seen(self.p().list(path))
+    }
+    fn read_at(&self, path: &str, offset: u64, len: u32) -> Result<Vec<u8>, AppError> {
+        self.seen(self.p().read_at(path, offset, len))
+    }
+    fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
+        let inner = self.seen(self.p().reader(path))?;
+        Ok(Box::new(Seen { inner, fell: self.fell.clone() }))
+    }
+    fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {
+        let inner = self.seen(self.p().writer(path, create_new))?;
+        Ok(Box::new(Seen { inner, fell: self.fell.clone() }))
+    }
+    fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError> {
+        self.seen(self.p().rename(from, to, replace))
+    }
+    fn delete(&self, path: &str, is_dir: bool) -> Result<(), AppError> {
+        self.seen(self.p().delete(path, is_dir))
+    }
+    fn mkdir(&self, path: &str) -> Result<(), AppError> {
+        self.seen(self.p().mkdir(path))
+    }
+    fn set_meta(&self, path: &str, modified_ms: Option<i64>, mode: Option<u32>) -> Result<(), AppError> {
+        self.seen(self.p().set_meta(path, modified_ms, mode))
     }
 }
 
@@ -283,6 +452,8 @@ mod tests {
     struct Fake {
         opened: Mutex<Vec<Arc<MemProvider>>>,
         offline: bool,
+        /// Gli stream di lettura cadono dopo tanti byte.
+        fail_reads: Option<u64>,
     }
 
     impl Fake {
@@ -306,7 +477,9 @@ mod tests {
             match password {
                 None => Err(AppError::new(ErrorCode::AuthRequired, None)),
                 Some("pw") => {
-                    let m = Arc::new(MemProvider::new());
+                    let mut m = MemProvider::new();
+                    m.fail_read_after = self.fail_reads;
+                    let m = Arc::new(m);
                     m.offline.store(self.offline, Ordering::SeqCst);
                     self.opened.lock().unwrap().push(m.clone());
                     Ok(m)
@@ -406,5 +579,77 @@ mod tests {
         assert_eq!(p.delete("/x", false).unwrap_err().code, ErrorCode::Timeout);
         s.provider(Scheme::Sftp, &id, Purpose::Browse).unwrap().list("/").unwrap();
         assert_eq!(fake.opens(), 3);
+    }
+
+    fn transfer(s: &Sessions, id: &str) -> Arc<dyn Provider> {
+        s.provider(Scheme::Sftp, id, Purpose::Transfer).unwrap()
+    }
+
+    #[test]
+    fn transfer_sessions_are_lent_one_at_a_time_and_reused() {
+        let fake = Arc::new(Fake::default());
+        let (_dir, _creds, s, id) = setup(fake.clone());
+        s.connect(&id, Some("pw".into()), false).unwrap();
+        assert_eq!(fake.opens(), 1);
+        // In sequenza: una sessione sola, riusata.
+        for _ in 0..3 {
+            transfer(&s, &id).list("/").unwrap();
+        }
+        assert_eq!(fake.opens(), 2);
+        // Insieme (scrittura del temporaneo e lettura della sorgente sullo stesso server): due sessioni diverse.
+        let (a, b) = (transfer(&s, &id), transfer(&s, &id));
+        assert_eq!(fake.opens(), 3);
+        a.mkdir("/a").unwrap();
+        assert_eq!(b.stat("/a").unwrap_err().code, ErrorCode::NotFound, "b non è la sessione di a");
+        drop((a, b));
+        // Al massimo due libere: la terza in contemporanea si apre.
+        let (_a, _b, _c) = (transfer(&s, &id), transfer(&s, &id), transfer(&s, &id));
+        assert_eq!(fake.opens(), 4);
+        // Lo schema si controlla anche con sessioni libere.
+        assert_eq!(s.provider(Scheme::Ftp, &id, Purpose::Transfer).err().unwrap().code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn a_fallen_transfer_session_is_not_reused() {
+        let fake = Arc::new(Fake { fail_reads: Some(1), ..Fake::default() });
+        let (_dir, _creds, s, id) = setup(fake.clone());
+        s.connect(&id, Some("pw".into()), false).unwrap();
+        let p = transfer(&s, &id);
+        p.list("/").unwrap();
+        drop(p);
+        fake.drop_all();
+        assert_eq!(transfer(&s, &id).list("/").unwrap_err().code, ErrorCode::ConnectionFailed);
+        // La sessione caduta si è chiusa: la prossima è nuova.
+        assert_eq!(fake.opens(), 2);
+        let p = transfer(&s, &id);
+        assert_eq!(fake.opens(), 3);
+        // Anche una caduta a metà di uno stream la esclude.
+        p.writer("/f", true).unwrap().write_all(b"abc").unwrap();
+        let mut buf = Vec::new();
+        assert!(p.reader("/f").unwrap().read_to_end(&mut buf).is_err());
+        drop(p);
+        transfer(&s, &id);
+        assert_eq!(fake.opens(), 4);
+    }
+
+    #[test]
+    fn idle_transfer_sessions_expire_and_close_on_disconnect() {
+        let fake = Arc::new(Fake::default());
+        let (_dir, _creds, s, id) = setup(fake.clone());
+        s.connect(&id, Some("pw".into()), true).unwrap();
+        drop(transfer(&s, &id));
+        // `disconnect` chiude le libere, e una sessione prestata prima non torna tra le libere.
+        s.disconnect(&id);
+        let lent = transfer(&s, &id);
+        assert_eq!(fake.opens(), 3);
+        s.disconnect(&id);
+        drop(lent);
+        drop(transfer(&s, &id));
+        assert_eq!(fake.opens(), 4);
+        // Scadute: si riapre.
+        let mut s = s;
+        Arc::get_mut(&mut s.0).unwrap().idle_ttl = Duration::ZERO;
+        drop(transfer(&s, &id));
+        assert_eq!(fake.opens(), 5);
     }
 }
