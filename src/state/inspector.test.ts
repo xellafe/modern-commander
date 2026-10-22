@@ -186,6 +186,20 @@ test("markdown is rendered without raw html; image, pdf, video read nothing", as
   expect(readChunk).not.toHaveBeenCalled();
 });
 
+test("remote file: metadata and text preview only, no media or archive", async () => {
+  for (const name of ["a.png", "a.pdf", "a.mp4", "a.zip", "a.7z"]) {
+    set(`sftp://h/${name}`);
+    await sleep(DEBOUNCE_MS + 10);
+    expect(state()).toMatchObject({ info: INFO, preview: { kind: "none" } });
+  }
+  expect(readChunk).not.toHaveBeenCalled();
+  expect(listArchive).not.toHaveBeenCalled();
+  readChunk.mockResolvedValue(enc("ciao"));
+  set("sftp://h/a.txt");
+  await sleep(DEBOUNCE_MS + 10);
+  expect(state().preview).toMatchObject({ kind: "text", text: "ciao" });
+});
+
 test("folder: size arrives, but not if the target changed meanwhile", async () => {
   const size: DirSize = { bytes: 5, files: 2, dirs: 1, skipped: 0 };
   let done!: (s: DirSize) => void;

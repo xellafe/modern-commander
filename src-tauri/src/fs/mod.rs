@@ -119,21 +119,52 @@ pub async fn read_file(vfs: State<'_, Arc<Vfs>>, path: String, max: u64) -> Resu
     Ok(Response::new(bytes))
 }
 
-/// Salvataggio dell'editor (vedi `content::write_text_file`); restituisce il `FileInfo` dopo la scrittura.
-/// `allow_unsafe` (scrittura diretta dove il server non permette quella sicura) vale solo sul remoto, dove il
-/// salvataggio non c'è ancora: lì `UNSUPPORTED`.
+/// Salvataggio dell'editor (vedi `content::write_text_file`); restituisce il `FileInfo` dopo la scrittura. Sul
+/// remoto (`content::remote_write_text_file`) conta anche `expected_size`, e `allow_unsafe` permette la scrittura
+/// diretta dove il server non accetta quella sicura.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn write_text_file(
+    vfs: State<'_, Arc<Vfs>>,
     path: String,
     text: String,
     encoding: String,
     bom: bool,
     expected_modified_ms: Option<i64>,
+    expected_size: Option<u64>,
     allow_unsafe: bool,
 ) -> Result<content::FileInfo, AppError> {
-    let _ = allow_unsafe;
-    let path = local_only(&path)?;
-    blocking(move || content::write_text_file(&path, &text, &encoding, bom, expected_modified_ms)).await?
+    match Loc::parse(&path)? {
+        Loc::Local(p) => blocking(move || content::write_text_file(&p, &text, &encoding, bom, expected_modified_ms)).await?,
+        loc => {
+            let vfs = vfs.inner().clone();
+            blocking(move || {
+                content::remote_write_text_file(&vfs, &loc, &text, &encoding, bom, expected_modified_ms, expected_size, allow_unsafe)
+            })
+            .await?
+        }
+    }
+}
+
+/// Scarica un file remoto nella cartella temporanea dell'app (vedi `net::temp::fetch_in`) e ne restituisce il
+/// percorso locale; `on_progress` riceve i byte scaricati. Si annulla con `cancel_request(request_id)` (errore
+/// `CANCELLED`, senza file parziali).
+#[tauri::command]
+pub async fn fetch_temp(
+    vfs: State<'_, Arc<Vfs>>,
+    requests: State<'_, Requests>,
+    request_id: u64,
+    path: String,
+    on_progress: Channel<u64>,
+) -> Result<PathBuf, AppError> {
+    let (loc, vfs) = (Loc::parse(&path)?, vfs.inner().clone());
+    let guard = requests.register(request_id);
+    blocking(move || {
+        crate::net::temp::fetch_in(&vfs, &loc, &crate::net::temp::dir(), guard.flag(), &mut |n| {
+            let _ = on_progress.send(n);
+        })
+    })
+    .await?
 }
 
 /// Etichetta della codifica ANSI di sistema (code page `GetACP`) nel formato di `TextDecoder`.

@@ -111,6 +111,17 @@ test("cm_Edit with the external editor option opens that program and no tab", as
   useSettings.setState({ useExternalEditor: false });
 });
 
+test("cm_Edit on a remote tab opens the internal editor even with the external editor option", async () => {
+  useSettings.setState({ externalEditor: "code.exe", useExternalEditor: true });
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/x");
+  setCursor("a.txt");
+  await executeCommand("cm_Edit");
+  expect(api.openWith).not.toHaveBeenCalled();
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "sftp://w/x/a.txt", mode: "editor" });
+  useSettings.setState({ useExternalEditor: false });
+});
+
 test("cm_Properties uses the marked rows, or the current folder on '..'", async () => {
   vi.mocked(api.showProperties).mockResolvedValue();
   mark("a.txt", "b.txt");

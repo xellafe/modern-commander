@@ -256,12 +256,13 @@ const DEFS: [string, Command["run"]][] = [
     const l = useLayout.getState();
     if (f) l.openFileTab(l.activeGroupId, { path: f.path, mode: "viewer" });
   }],
-  // F4: editor interno in una scheda, oppure (impostazione) il programma esterno come nella fase 1.
+  // F4: editor interno in una scheda, oppure (impostazione) il programma esterno come nella fase 1. Sul remoto sempre
+  // l'interno: l'esterno richiederebbe download, sorveglianza della copia e ricaricamento.
   ["cm_Edit", () => {
     const f = cursorFile();
     if (!f) return;
     if (!sourceCaps(f.path).write) return useTabViews.getState().showNotice(f.tabId, { code: "READ_ONLY_SOURCE" });
-    if (useSettings.getState().useExternalEditor) return editFile(f.tabId, f.path);
+    if (useSettings.getState().useExternalEditor && !isRemote(f.path)) return editFile(f.tabId, f.path);
     const l = useLayout.getState();
     l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor" });
   }],

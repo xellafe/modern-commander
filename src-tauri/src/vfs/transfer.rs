@@ -26,6 +26,26 @@ pub fn copy(
     confirm_unsafe: &mut dyn FnMut(&Loc) -> bool,
     progress: &mut dyn FnMut(u64) -> bool,
 ) -> Result<(), AppError> {
+    write(vfs, dst, replace, confirm_unsafe, progress, || {
+        let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
+        // La data prima di aprire la sorgente: in FTP uno stream aperto tiene occupata la connessione.
+        let modified = sp.stat(&spath)?.modified_ms;
+        // Lo stream tiene da sé il prestito della sessione: `sp` può cadere qui.
+        Ok((sp.reader(&spath)?, modified, spath))
+    })
+}
+
+/// La sequenza di `copy` (temporaneo e rinomina, o scrittura diretta confermata) con una sorgente qualsiasi: `open`
+/// dà lo stream, la data da riportare su `dst` e il nome per gli errori di lettura. Si chiama solo dopo la decisione
+/// sulla scrittura diretta, e prima di aprire il writer diretto. La usa anche il salvataggio dell'editor sul remoto.
+pub fn write<R: Read>(
+    vfs: &Vfs,
+    dst: &Loc,
+    replace: bool,
+    confirm_unsafe: &mut dyn FnMut(&Loc) -> bool,
+    progress: &mut dyn FnMut(u64) -> bool,
+    open: impl FnOnce() -> Result<(R, Option<i64>, String), AppError>,
+) -> Result<(), AppError> {
     // Un nome remoto che Windows non accetta non si rinomina in silenzio: errore per quell'elemento.
     if let Loc::Local(p) = dst
         && p.file_name().is_some_and(|n| invalid_windows_name(&n.to_string_lossy()))
@@ -55,10 +75,7 @@ pub fn copy(
     // sorgente non si apre.
     let mut direct_created = false;
     let r = (|| {
-        let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
-        // La data prima di aprire la sorgente: in FTP uno stream aperto tiene occupata la connessione.
-        let modified = sp.stat(&spath)?.modified_ms;
-        let mut reader = sp.reader(&spath)?;
+        let (mut reader, modified, spath) = open()?;
         let (target, w) = match safe {
             Some(w) => (tmp.as_str(), w),
             None => (dpath.as_str(), dp.writer(&dpath, !replace)?),

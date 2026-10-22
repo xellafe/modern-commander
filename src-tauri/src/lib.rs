@@ -43,6 +43,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // I download temporanei lasciati da un'esecuzione chiusa male; il disco può essere lento.
+            std::thread::spawn(net::temp::cleanup_stale);
             if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
                 elevation::set_owner_window(hwnd);
             }
@@ -76,6 +78,7 @@ pub fn run() {
             fs::read_chunk,
             fs::read_file,
             fs::write_text_file,
+            fs::fetch_temp,
             fs::ansi_encoding,
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
@@ -112,9 +115,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Nessun processo orfano: i terminali aperti si fermano con l'app.
+            // Nessun processo orfano: i terminali aperti si fermano con l'app. I download temporanei si eliminano.
             if let tauri::RunEvent::Exit = event {
                 app.state::<terminal::Terminals>().kill_all();
+                net::temp::cleanup_own();
             }
         });
 }

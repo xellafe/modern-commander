@@ -7,6 +7,7 @@ pub mod http_auth;
 pub mod http_index;
 pub mod sessions;
 pub mod sftp;
+pub mod temp;
 pub mod tls;
 pub mod trust;
 

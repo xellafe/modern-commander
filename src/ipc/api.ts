@@ -132,6 +132,8 @@ export const readFile = async (path: string, max: number) =>
 /**
  * Salva il testo dell'editor senza mai scrivere sul posto (`<file>.mcpart` poi sostituzione). Con una data
  * attesa `CHANGED_ON_DISK` se il file è cambiato; `null` sovrascrive. `UNMAPPABLE_CHARS` se la codifica non basta.
+ * Solo sul remoto: conta anche `expectedSize`, e senza `allowUnsafe` un server che non permette la scrittura
+ * sicura dà `UNSAFE_WRITE` (file intatto).
  */
 export const writeTextFile = (
   path: string,
@@ -140,7 +142,18 @@ export const writeTextFile = (
   bom: boolean,
   expectedModifiedMs: number | null,
   allowUnsafe = false,
-) => invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs, allowUnsafe });
+  expectedSize: number | null = null,
+) => invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs, expectedSize, allowUnsafe });
+
+/**
+ * Scarica un file remoto nella cartella temporanea dell'app e restituisce il percorso locale; `onProgress` riceve
+ * i byte scaricati. `cancelRequest(requestId)` annulla (errore `CANCELLED`, senza file parziali).
+ */
+export const fetchTemp = (requestId: number, path: string, onProgress: (bytes: number) => void) => {
+  const channel = new Channel<number>();
+  channel.onmessage = onProgress;
+  return invoke<string>("fetch_temp", { requestId, path, onProgress: channel });
+};
 
 /** Carattere di ogni virtual key nel layout di tastiera attivo (`MapVirtualKeyW`); null se il tasto non ne ha. */
 export const keyLabels = (vks: number[]) => invoke<(string | null)[]>("key_labels", { vks });

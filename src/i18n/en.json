@@ -123,7 +123,9 @@
     "shellPreview": "Showing the shell preview instead: the browser cannot display this format.",
     "unsupportedMedia": "This file cannot be played here.",
     "unsupportedPdf": "This PDF cannot be opened. Use Text or Hex to see the file.",
-    "openExternal": "Open with default program"
+    "openExternal": "Open with default program",
+    "downloading": "Downloading {{size}} · Esc cancels",
+    "downloadAndOpen": "Download and open"
   },
   "inspector": {
     "title": "Inspector",
@@ -158,7 +160,9 @@
     "overwrite": "Overwrite",
     "saveUtf8": "Save as UTF-8",
     "readOnly": "Open read-only: this file looks binary or cannot be decoded without losing data, so saving could corrupt it. Press F3 in the file list to see it as hex.",
-    "tooLarge": "This file is too large to edit (over {{size}}). Press F3 in the file list to view it."
+    "tooLarge": "This file is too large to edit (over {{size}}). Press F3 in the file list to view it.",
+    "unreliableMtimeTitle": "Confirm save",
+    "unreliableMtime": "This server does not give precise modification dates: it cannot be checked whether “{{name}}” was changed by someone else after you opened it. Save?"
   },
   "hotlist": {
     "title": "Directory hotlist",

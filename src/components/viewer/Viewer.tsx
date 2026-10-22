@@ -2,11 +2,11 @@ import { WrapText } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { closeTab } from "../../commands/navigation";
-import { ansiEncoding, fileInfo, readChunk } from "../../ipc/api";
+import { ansiEncoding, cancelRequest, fetchTemp, fileInfo, nextRequestId, readChunk } from "../../ipc/api";
 import type { AppError } from "../../ipc/types";
 import { ENCODINGS } from "../../lib/encoding";
 import { formatSize } from "../../lib/format";
-import { folderName } from "../../lib/paths";
+import { folderName, isRemote } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
 import { alignTop, initialViewerState, nativeMode, useViewers, type ViewerMode } from "../../state/viewers";
 import { HexPane } from "./HexPane";
@@ -27,6 +27,9 @@ const SAMPLE = 65536;
 const toAppError = (e: unknown): AppError =>
   e && typeof e === "object" && "code" in e ? (e as AppError) : { code: "IO", path: null, detail: null };
 
+/** Viste che la WebView carica da un file locale: sul remoto prima si scarica il file. */
+const NEEDS_LOCAL: ViewerMode[] = ["image", "pdf", "video", "audio"];
+
 /** F3: viewer a blocchi di una scheda di file. Lo stato (modalità, codifica, posizione) sta in `useViewers`. */
 export function Viewer({ tabId, path }: { tabId: string; path: string }) {
   const { t, i18n } = useTranslation();
@@ -40,23 +43,77 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
   // Avanzamento delle scansioni del pannello (null se non ce ne sono); `slow`: durano da più di SCAN_DELAY.
   const [busy, setBusy] = useState<number | null>(null);
   const [slow, setSlow] = useState(false);
+  // File remoto: la copia locale (immagini, PDF, media, server senza Range), da cui si legge tutto; il download in
+  // corso (byte arrivati) e il suo id per l'annullamento.
+  const [copy, setCopy] = useState(() => useViewers.getState().states[tabId]?.localCopy ?? null);
+  const src = copy ?? path;
+  const [download, setDownload] = useState<number | null>(null);
+  const downloadId = useRef<number | null>(null);
 
   // Apertura: dimensione e un campione; se la scheda ha già uno stato (ritorno alla scheda) non si ricalcola.
   useEffect(() => {
     let live = true;
     (async () => {
-      const info = await fileInfo(path);
+      const info = await fileInfo(src);
       if (!useViewers.getState().states[tabId]) {
-        const [sample, ansi] = await Promise.all([readChunk(path, 0, SAMPLE), ansiEncoding()]);
+        const [sample, ansi] = await Promise.all([readChunk(src, 0, SAMPLE), ansiEncoding()]);
         if (!live) return; // scheda chiusa o cambiata durante la lettura: lo stato non deve rinascere
-        useViewers.getState().set(tabId, initialViewerState(name, sample, ansi, info.size <= SAMPLE));
+        useViewers.getState().set(tabId, { ...initialViewerState(name, sample, ansi, info.size <= SAMPLE), ...(copy && { localCopy: copy }) });
       }
       if (live) setSize(info.size);
     })().catch((e) => live && setError(toAppError(e)));
     return () => {
       live = false;
     };
-  }, [tabId, path]);
+  }, [tabId, src]);
+
+  /**
+   * Scarica il file remoto nella cartella temporanea; null se annullato (Esc, `cancelRequest(id)`) o fallito (errore
+   * mostrato). Solo l'ultimo download aggiorna l'avanzamento.
+   */
+  async function fetchCopy(id: number): Promise<string | null> {
+    downloadId.current = id;
+    setDownload(0);
+    try {
+      return await fetchTemp(id, path, (n) => downloadId.current === id && setDownload(n));
+    } catch (e) {
+      if (downloadId.current === id && toAppError(e).code !== "CANCELLED") setError(toAppError(e));
+      return null;
+    } finally {
+      if (downloadId.current === id) {
+        downloadId.current = null;
+        setDownload(null);
+      }
+    }
+  }
+
+  const keepCopy = (local: string) => {
+    useViewers.getState().set(tabId, { localCopy: local }); // senza stato (Range non supportato) lo crea l'apertura
+    setCopy(local);
+  };
+
+  // Immagini, PDF e media sul remoto: prima il download, poi la vista nativa sulla copia. Annullato, si resta
+  // sull'esadecimale, che legge a blocchi dal server.
+  const needsCopy = !!state && isRemote(path) && !copy && NEEDS_LOCAL.includes(state.mode);
+  useEffect(() => {
+    if (!needsCopy) return;
+    let live = true;
+    const id = nextRequestId();
+    void fetchCopy(id).then((local) => live && (local ? keepCopy(local) : patch({ mode: "hex" })));
+    return () => {
+      live = false;
+      void cancelRequest(id).catch(() => {});
+    };
+  }, [needsCopy]);
+
+  // Server senza richieste Range: si apre la copia scaricata. Il download si annulla con Esc o chiudendo la scheda.
+  async function downloadAndOpen() {
+    const local = await fetchCopy(nextRequestId());
+    if (!local) return;
+    setError(null);
+    keepCopy(local);
+  }
+  useEffect(() => () => void (downloadId.current !== null && cancelRequest(downloadId.current).catch(() => {})), []);
 
   // L'indicatore compare dopo SCAN_DELAY di scansione continua; con `null` il timer si azzera.
   const scanning = busy !== null;
@@ -83,6 +140,12 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
 
   // Come il Lister di TC. I tasti non gestiti salgono a useKeyboard (Tab, Ctrl+Tab, Ctrl+W).
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape" && downloadId.current !== null) {
+      void cancelRequest(downloadId.current).catch(() => {}); // prima si ferma il download, poi si chiude
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.target !== e.currentTarget || !state || e.altKey || e.metaKey) return;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const p = pane.current;
@@ -162,24 +225,34 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
           {(state.mode === "text" || state.mode === "hex") && <span className="mc-viewer-pos">{slow && busy !== null ? t("viewer.scanning", { percent: Math.floor(busy * 100) }) : t("viewer.position", { percent })}</span>}
         </div>
       )}
-      {error ? (
+      {download !== null ? (
+        <div className="mc-viewer-note">{t("viewer.downloading", { size: formatSize(download, i18n.language) })}</div>
+      ) : error ? (
         <div className="mc-viewer-note" role="alert">
           {t(`errors.${error.code}`)}
           {error.path && <span>{error.path}</span>}
+          {error.code === "RANGE_UNSUPPORTED" && !copy && (
+            <button
+              onClick={() => {
+                refocus(); // il pulsante sparisce: Esc deve arrivare al viewer
+                void downloadAndOpen();
+              }}
+            >{t("viewer.downloadAndOpen")}</button>
+          )}
         </div>
-      ) : state && size !== null ? (
+      ) : needsCopy ? null : state && size !== null ? (
         state.mode === "text" && !state.wrap ? (
-          <LinesPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} left={state.left} encoding={state.encoding} onBusy={setBusy} onError={(e) => setError(toAppError(e))} />
+          <LinesPane ref={pane} tabId={tabId} path={src} size={size} top={state.top} left={state.left} encoding={state.encoding} onBusy={setBusy} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "text" ? (
-          <TextPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} encoding={state.encoding} wrap={state.wrap} onError={(e) => setError(toAppError(e))} />
+          <TextPane ref={pane} tabId={tabId} path={src} size={size} top={state.top} encoding={state.encoding} wrap={state.wrap} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "hex" ? (
-          <HexPane ref={pane} tabId={tabId} path={path} size={size} top={state.top} onError={(e) => setError(toAppError(e))} />
+          <HexPane ref={pane} tabId={tabId} path={src} size={size} top={state.top} onError={(e) => setError(toAppError(e))} />
         ) : state.mode === "image" ? (
-          <ImagePane ref={pane} path={path} />
+          <ImagePane ref={pane} path={src} />
         ) : state.mode === "pdf" ? (
-          <PdfPane ref={pane} path={path} />
+          <PdfPane ref={pane} path={src} />
         ) : (
-          <MediaPane path={path} kind={state.mode} autoPlay={false} />
+          <MediaPane path={src} kind={state.mode} autoPlay={false} />
         )
       ) : null}
     </div>

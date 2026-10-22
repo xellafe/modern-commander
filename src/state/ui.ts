@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ConflictPolicy, Connection } from "../ipc/types";
-import type { SaveOptions } from "./editors";
+import type { SaveErrorCode, SaveOptions } from "./editors";
 
 export type SidebarView = "explorer" | "search" | "git" | "favorites";
 
@@ -38,10 +38,11 @@ export type DialogRequest =
   /** Chiusura di una scheda editor con modifiche non salvate. */
   | { kind: "unsaved"; tabId: string }
   /**
-   * Salvataggio rifiutato per un file cambiato su disco o per caratteri che la codifica non rappresenta.
-   * `opts`: le opzioni del tentativo fallito, a cui il dialogo aggiunge la correzione scelta.
+   * Salvataggio rifiutato (file cambiato su disco, caratteri che la codifica non rappresenta, server senza
+   * scrittura sicura) o da confermare (date del server poco affidabili). `opts`: le opzioni del tentativo, a cui
+   * il dialogo aggiunge la correzione scelta.
    */
-  | { kind: "saveError"; tabId: string; code: "CHANGED_ON_DISK" | "UNMAPPABLE_CHARS"; opts: SaveOptions }
+  | { kind: "saveError"; tabId: string; code: SaveErrorCode; opts: SaveOptions }
   /** Chiusura della finestra con `count` operazioni non finite e `dirty` file non salvati. */
   | { kind: "exit"; count: number; dirty: number }
   /** Gestore delle connessioni (Ctrl+F); `draft`: connessione nuova già compilata da un indirizzo scritto a mano. */
