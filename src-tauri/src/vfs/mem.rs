@@ -35,6 +35,8 @@ pub struct MemProvider {
     pub precise_mtime: bool,
     /// `true`: `list` e `delete` danno `CONNECTION_FAILED`, come una sessione caduta.
     pub offline: AtomicBool,
+    /// `true`: `list` e `delete` danno `TIMEOUT`, come una sessione bloccata (VPN caduta).
+    pub stalled: AtomicBool,
 }
 
 /// Le connessioni per id.
@@ -97,15 +99,18 @@ impl Write for MemWriter {
 
 impl MemProvider {
     fn online(&self, path: &str) -> Result<(), AppError> {
-        match self.offline.load(Ordering::SeqCst) {
-            true => Err(err(ErrorCode::ConnectionFailed, path)),
+        if self.offline.load(Ordering::SeqCst) {
+            return Err(err(ErrorCode::ConnectionFailed, path));
+        }
+        match self.stalled.load(Ordering::SeqCst) {
+            true => Err(err(ErrorCode::Timeout, path)),
             false => Ok(()),
         }
     }
 
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false) }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false) }
     }
 
     /// Crea la cartella e quelle sopra che mancano.

@@ -2,20 +2,24 @@
 //!
 //! `ssh2::Session`, `Sftp` e `File` sono `Send + Sync` e si sincronizzano da soli (un mutex sulla sessione): le
 //! operazioni sulla stessa sessione si mettono in fila, i trasferimenti hanno comunque una sessione loro.
-//! ponytail: niente `posix-rename@openssh.com`. `ssh2` 0.9 non espone l'handle SFTP di libssh2, quindi non si può
-//! né sapere se il server ha l'estensione né chiamarla: `atomic_replace` è sempre `false` e la sovrascrittura passa
-//! dal fallback confermato. Si aggiunge con una chiamata FFI a `libssh2_sftp_posix_rename_ex` se serve.
-//! ponytail: `ssh2` su Windows fa `from_utf8(..).unwrap()` sui nomi letti dalla cartella: un nome remoto non UTF-8
-//! fa andare in panico l'elenco (e con `panic = "abort"` chiude l'app). Va sostituito con un `readdir` via FFI.
+//! `posix-rename@openssh.com` e l'elenco delle cartelle passano da un canale SFTP grezzo: vedi `raw`.
+//!
+//! Nomi remoti non rappresentabili: l'elenco li mostra con la decodifica lossy (U+FFFD), e ogni operazione su un
+//! percorso con U+FFFD dà `INVALID_NAME` senza inviare nulla (il nome vero non si ricostruisce).
+//! ponytail: `ssh2` su Windows cambia `\` in `/` nei percorsi, quindi un nome remoto con `\` non si raggiunge: anche
+//! quei percorsi danno `INVALID_NAME` (altrimenti, per esempio, si eliminerebbe `a/b` al posto di `a\b`). Si
+//! sblocca spostando tutte le operazioni sul canale grezzo.
 
 use super::connections::Connection;
 use super::sessions::ProviderFactory;
 use super::trust::{self, Trust};
+use raw::RawSftp;
 use crate::error::{AppError, ErrorCode};
 use crate::fs::hash::sha256;
 use crate::vfs::provider::{Caps, Provider, Stat};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
+use libssh2_sys as sys;
 use ssh2::{FileStat, KeyboardInteractivePrompt, OpenFlags, OpenType, Prompt, RenameFlags, Session, Sftp};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -23,52 +27,38 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+mod raw;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Attesa massima di una risposta dopo il collegamento: con la VPN caduta si ha `TIMEOUT`, non un'attesa infinita.
 const IO_TIMEOUT_MS: u32 = 30_000;
-
-// Stati SFTP (`SSH_FX_*`) ed errori di libssh2 (`LIBSSH2_ERROR_*`): `ssh2` non riesporta le costanti di `libssh2-sys`.
-const FX_NO_SUCH_FILE: i32 = 2;
-const FX_PERMISSION_DENIED: i32 = 3;
-const FX_NO_CONNECTION: i32 = 6;
-const FX_CONNECTION_LOST: i32 = 7;
-const FX_NO_SUCH_PATH: i32 = 10;
-const FX_FILE_ALREADY_EXISTS: i32 = 11;
-const FX_WRITE_PROTECT: i32 = 12;
-const FX_NO_SPACE_ON_FILESYSTEM: i32 = 14;
-const FX_QUOTA_EXCEEDED: i32 = 15;
-const BANNER_RECV: i32 = -2;
-const BANNER_SEND: i32 = -3;
-const SOCKET_SEND: i32 = -7;
-const SESSION_TIMEOUT: i32 = -9;
-const SOCKET_DISCONNECT: i32 = -13;
-const PASSWORD_EXPIRED: i32 = -15;
-const AUTHENTICATION_FAILED: i32 = -18;
-const CHANNEL_CLOSED: i32 = -26;
-const CHANNEL_EOF_SENT: i32 = -27;
-const SOCKET_TIMEOUT: i32 = -30;
-const SOCKET_RECV: i32 = -43;
-const BAD_SOCKET: i32 = -45;
 
 /// Lo stato di una risposta SFTP; quelli generici (`SSH_FX_FAILURE`, per esempio un file che c'è già in SFTP v3)
 /// danno `IO`.
 pub fn map_sftp_error(code: i32) -> ErrorCode {
     match code {
-        FX_NO_SUCH_FILE | FX_NO_SUCH_PATH => ErrorCode::NotFound,
-        FX_PERMISSION_DENIED | FX_WRITE_PROTECT => ErrorCode::AccessDenied,
-        FX_FILE_ALREADY_EXISTS => ErrorCode::AlreadyExists,
-        FX_NO_SPACE_ON_FILESYSTEM | FX_QUOTA_EXCEEDED => ErrorCode::DiskFull,
-        FX_NO_CONNECTION | FX_CONNECTION_LOST => ErrorCode::ConnectionFailed,
+        sys::LIBSSH2_FX_NO_SUCH_FILE | sys::LIBSSH2_FX_NO_SUCH_PATH => ErrorCode::NotFound,
+        sys::LIBSSH2_FX_PERMISSION_DENIED | sys::LIBSSH2_FX_WRITE_PROTECT => ErrorCode::AccessDenied,
+        sys::LIBSSH2_FX_FILE_ALREADY_EXISTS => ErrorCode::AlreadyExists,
+        sys::LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM | sys::LIBSSH2_FX_QUOTA_EXCEEDED => ErrorCode::DiskFull,
+        sys::LIBSSH2_FX_NO_CONNECTION | sys::LIBSSH2_FX_CONNECTION_LOST => ErrorCode::ConnectionFailed,
+        sys::LIBSSH2_FX_OP_UNSUPPORTED => ErrorCode::Unsupported,
         _ => ErrorCode::Io,
     }
 }
 
 fn map_session_error(code: i32) -> ErrorCode {
     match code {
-        SESSION_TIMEOUT | SOCKET_TIMEOUT => ErrorCode::Timeout,
-        BANNER_RECV | BANNER_SEND | SOCKET_SEND | SOCKET_DISCONNECT | CHANNEL_CLOSED | CHANNEL_EOF_SENT | SOCKET_RECV
-        | BAD_SOCKET => ErrorCode::ConnectionFailed,
-        AUTHENTICATION_FAILED | PASSWORD_EXPIRED => ErrorCode::AuthFailed,
+        sys::LIBSSH2_ERROR_TIMEOUT | sys::LIBSSH2_ERROR_SOCKET_TIMEOUT => ErrorCode::Timeout,
+        sys::LIBSSH2_ERROR_BANNER_RECV
+        | sys::LIBSSH2_ERROR_BANNER_SEND
+        | sys::LIBSSH2_ERROR_SOCKET_SEND
+        | sys::LIBSSH2_ERROR_SOCKET_DISCONNECT
+        | sys::LIBSSH2_ERROR_CHANNEL_CLOSED
+        | sys::LIBSSH2_ERROR_CHANNEL_EOF_SENT
+        | sys::LIBSSH2_ERROR_SOCKET_RECV
+        | sys::LIBSSH2_ERROR_BAD_SOCKET => ErrorCode::ConnectionFailed,
+        sys::LIBSSH2_ERROR_AUTHENTICATION_FAILED | sys::LIBSSH2_ERROR_PASSWORD_EXPIRED => ErrorCode::AuthFailed,
         _ => ErrorCode::Io,
     }
 }
@@ -176,7 +166,11 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>) -> 
     }
     sess.set_timeout(IO_TIMEOUT_MS);
     let sftp = sess.sftp().map_err(err)?;
-    Ok(SftpProvider { sess, sftp })
+    let raw = RawSftp::new(&sess).map_err(|code| AppError::new(code, None))?;
+    // Una volta per sessione: `rename(p, p)` non cambia nulla anche se `p` esiste, e senza l'estensione libssh2
+    // risponde `UNSUPPORTED` senza inviare nulla. Ogni altro esito (di solito `NOT_FOUND`) vuol dire che c'è.
+    let atomic = raw.posix_rename(PROBE, PROBE) != Err(ErrorCode::Unsupported);
+    Ok(SftpProvider { sess, sftp, raw, atomic })
 }
 
 pub struct SftpFactory;
@@ -187,9 +181,15 @@ impl ProviderFactory for SftpFactory {
     }
 }
 
+/// Percorso della prova di `posix-rename` (rinominato su sé stesso).
+const PROBE: &str = "/.mc-posix-rename-probe";
+
 pub(crate) struct SftpProvider {
     sess: Session,
     sftp: Sftp,
+    raw: RawSftp,
+    /// Il server ha `posix-rename@openssh.com`.
+    atomic: bool,
 }
 
 /// Lettura o scrittura di un file remoto; gli errori portano l'`AppError` dentro `io::Error::other`.
@@ -223,6 +223,14 @@ fn join(dir: &str, name: &str) -> String {
     format!("{}/{name}", dir.trim_end_matches('/'))
 }
 
+/// Un percorso che non si può inviare così com'è (vedi il commento del modulo) dà `INVALID_NAME`.
+fn checked(path: &str) -> Result<&Path, AppError> {
+    match path.contains(['\u{FFFD}', '\\']) {
+        true => Err(AppError::new(ErrorCode::InvalidName, Some(Path::new(path)))),
+        false => Ok(Path::new(path)),
+    }
+}
+
 impl SftpProvider {
     fn err<'a>(&self, path: &'a str) -> impl Fn(ssh2::Error) -> AppError + 'a {
         move |e| app_error(&e, Some(path))
@@ -240,9 +248,10 @@ impl SftpProvider {
     }
 
     /// Da `lstat`: un collegamento si risolve con `stat`. A cartella è una cartella con `dir_link`; a file è il file
-    /// a cui punta. Un collegamento rotto resta un file (la sua copia dà `NOT_FOUND`).
+    /// a cui punta. Un collegamento rotto, o con un nome che non si può inviare, resta un file (la sua copia dà
+    /// `NOT_FOUND` o `INVALID_NAME`).
     fn to_stat(&self, name: String, path: &str, l: FileStat) -> Stat {
-        let (t, link) = match l.file_type().is_symlink() {
+        let (t, link) = match l.file_type().is_symlink() && checked(path).is_ok() {
             true => self.sftp.stat(Path::new(path)).map_or((l, false), |t| (t, true)),
             false => (l, false),
         };
@@ -260,20 +269,21 @@ impl SftpProvider {
 
 impl Provider for SftpProvider {
     fn caps(&self) -> Caps {
-        Caps { writable: true, atomic_replace: false, precise_mtime: true, ranged_read: true }
+        Caps { writable: true, atomic_replace: self.atomic, precise_mtime: true, ranged_read: true }
     }
 
     fn stat(&self, path: &str) -> Result<Stat, AppError> {
-        let l = self.sftp.lstat(Path::new(path)).map_err(self.err(path))?;
+        let l = self.sftp.lstat(checked(path)?).map_err(self.err(path))?;
         Ok(self.to_stat(name_of(path), path, l))
     }
 
     fn list(&self, path: &str) -> Result<Vec<Stat>, AppError> {
-        let entries = self.sftp.readdir(Path::new(path)).map_err(self.err(path))?;
+        checked(path)?;
+        let entries = self.raw.readdir(path).map_err(|code| AppError::new(code, Some(Path::new(path))))?;
         Ok(entries
             .into_iter()
-            .map(|(p, l)| {
-                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            .map(|(bytes, l)| {
+                let name = String::from_utf8_lossy(&bytes).into_owned();
                 let full = join(path, &name);
                 self.to_stat(name, &full, l)
             })
@@ -281,7 +291,7 @@ impl Provider for SftpProvider {
     }
 
     fn read_at(&self, path: &str, offset: u64, len: u32) -> Result<Vec<u8>, AppError> {
-        let mut file = self.sftp.open(Path::new(path)).map_err(self.err(path))?;
+        let mut file = self.sftp.open(checked(path)?).map_err(self.err(path))?;
         // Il seek di libssh2 è locale: nessun pacchetto verso il server.
         file.seek(SeekFrom::Start(offset)).map_err(|e| file_error(&self.sess, e, path))?;
         let mut buf = Vec::with_capacity(len as usize);
@@ -290,31 +300,36 @@ impl Provider for SftpProvider {
     }
 
     fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
-        let file = self.sftp.open(Path::new(path)).map_err(self.err(path))?;
+        let file = self.sftp.open(checked(path)?).map_err(self.err(path))?;
         Ok(Box::new(Stream { file, sess: self.sess.clone(), path: path.to_owned() }))
     }
 
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {
         let flags = OpenFlags::WRITE | if create_new { OpenFlags::EXCLUSIVE } else { OpenFlags::TRUNCATE };
-        let file = self.sftp.open_mode(Path::new(path), flags, 0o644, OpenType::File).map_err(self.exists_err(path))?;
+        let file = self.sftp.open_mode(checked(path)?, flags, 0o644, OpenType::File).map_err(self.exists_err(path))?;
         Ok(Box::new(Stream { file, sess: self.sess.clone(), path: path.to_owned() }))
     }
 
-    /// Senza `posix-rename` non si sostituisce mai: una destinazione esistente dà `ALREADY_EXISTS` e resta intatta,
-    /// anche con `replace` (chi chiama, visto `atomic_replace = false`, passa dal fallback confermato).
-    fn rename(&self, from: &str, to: &str, _replace: bool) -> Result<(), AppError> {
+    /// Con `replace` e `posix-rename` sostituisce in un colpo solo. Altrimenti non sostituisce mai: una destinazione
+    /// esistente dà `ALREADY_EXISTS` e resta intatta (la `rename` di SFTP v3 non ha flag di sovrascrittura; chi
+    /// chiama, visto `atomic_replace = false`, passa dal fallback confermato).
+    fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError> {
+        let (f, t) = (checked(from)?, checked(to)?);
         if from == to {
             return Ok(());
         }
-        if self.sftp.lstat(Path::new(to)).is_ok() {
-            return Err(AppError::new(ErrorCode::AlreadyExists, Some(Path::new(to))));
+        if replace && self.atomic {
+            return self.raw.posix_rename(from, to).map_err(|code| AppError::new(code, Some(f)));
         }
-        self.sftp.rename(Path::new(from), Path::new(to), Some(RenameFlags::empty())).map_err(self.err(from))
+        if self.sftp.lstat(t).is_ok() {
+            return Err(AppError::new(ErrorCode::AlreadyExists, Some(t)));
+        }
+        self.sftp.rename(f, t, Some(RenameFlags::empty())).map_err(self.err(from))
     }
 
     /// Un collegamento a cartella si toglie con `unlink`: mai `rmdir` né ricorsione nella cartella a cui punta.
     fn delete(&self, path: &str, is_dir: bool) -> Result<(), AppError> {
-        let p = Path::new(path);
+        let p = checked(path)?;
         let link = is_dir && self.sftp.lstat(p).map_err(self.err(path))?.file_type().is_symlink();
         match is_dir && !link {
             true => self.sftp.rmdir(p),
@@ -324,7 +339,7 @@ impl Provider for SftpProvider {
     }
 
     fn mkdir(&self, path: &str) -> Result<(), AppError> {
-        self.sftp.mkdir(Path::new(path), 0o755).map_err(self.exists_err(path))
+        self.sftp.mkdir(checked(path)?, 0o755).map_err(self.exists_err(path))
     }
 
     /// SFTP imposta insieme accesso e modifica: l'accesso prende la stessa data.
@@ -334,7 +349,7 @@ impl Provider for SftpProvider {
         }
         let secs = modified_ms.map(|ms| ms.div_euclid(1000).max(0) as u64);
         let stat = FileStat { size: None, uid: None, gid: None, perm: mode, atime: secs, mtime: secs };
-        self.sftp.setstat(Path::new(path), stat).map_err(self.err(path))
+        self.sftp.setstat(checked(path)?, stat).map_err(self.err(path))
     }
 }
 
@@ -346,14 +361,25 @@ mod tests {
 
     #[test]
     fn sftp_status_mapping() {
-        assert_eq!(map_sftp_error(FX_NO_SUCH_FILE), ErrorCode::NotFound);
-        assert_eq!(map_sftp_error(FX_PERMISSION_DENIED), ErrorCode::AccessDenied);
-        assert_eq!(map_sftp_error(4), ErrorCode::Io); // SSH_FX_FAILURE
-        assert_eq!(map_sftp_error(FX_FILE_ALREADY_EXISTS), ErrorCode::AlreadyExists);
-        assert_eq!(map_sftp_error(FX_CONNECTION_LOST), ErrorCode::ConnectionFailed);
-        assert_eq!(map_session_error(SESSION_TIMEOUT), ErrorCode::Timeout);
-        assert_eq!(map_session_error(SOCKET_RECV), ErrorCode::ConnectionFailed);
-        assert_eq!(map_session_error(AUTHENTICATION_FAILED), ErrorCode::AuthFailed);
+        assert_eq!(map_sftp_error(sys::LIBSSH2_FX_NO_SUCH_FILE), ErrorCode::NotFound);
+        assert_eq!(map_sftp_error(sys::LIBSSH2_FX_PERMISSION_DENIED), ErrorCode::AccessDenied);
+        assert_eq!(map_sftp_error(sys::LIBSSH2_FX_FAILURE), ErrorCode::Io);
+        assert_eq!(map_sftp_error(sys::LIBSSH2_FX_FILE_ALREADY_EXISTS), ErrorCode::AlreadyExists);
+        assert_eq!(map_sftp_error(sys::LIBSSH2_FX_CONNECTION_LOST), ErrorCode::ConnectionFailed);
+        assert_eq!(map_sftp_error(sys::LIBSSH2_FX_OP_UNSUPPORTED), ErrorCode::Unsupported);
+        assert_eq!(map_session_error(sys::LIBSSH2_ERROR_TIMEOUT), ErrorCode::Timeout);
+        assert_eq!(map_session_error(sys::LIBSSH2_ERROR_SOCKET_RECV), ErrorCode::ConnectionFailed);
+        assert_eq!(map_session_error(sys::LIBSSH2_ERROR_AUTHENTICATION_FAILED), ErrorCode::AuthFailed);
+    }
+
+    #[test]
+    fn unrepresentable_names_are_never_sent() {
+        // Un nome Latin-1 si mostra con U+FFFD; qualunque operazione su quel percorso dà `INVALID_NAME`.
+        let name = String::from_utf8_lossy(b"caf\xe9.txt").into_owned();
+        assert_eq!(name, "caf\u{FFFD}.txt");
+        assert_eq!(checked(&join("/d", &name)).unwrap_err().code, ErrorCode::InvalidName);
+        assert_eq!(checked("/d/a\\b").unwrap_err().code, ErrorCode::InvalidName);
+        assert_eq!(checked("/d/caf\u{e9}.txt").unwrap(), Path::new("/d/caf\u{e9}.txt"));
     }
 
     #[test]
@@ -422,16 +448,54 @@ mod tests {
         let names: Vec<String> = p.list(&base).unwrap().into_iter().map(|s| s.name).collect();
         assert_eq!(names, ["a.txt"]);
 
-        // Rinomina: una destinazione esistente non si tocca, anche con `replace`.
+        // Rinomina: senza `replace` una destinazione esistente non si tocca; con `replace` la sostituisce solo
+        // `posix-rename` (OpenSSH ce l'ha), altrimenti resta intatta.
         p.writer(&b, true).unwrap().write_all(b"b").unwrap();
         assert_eq!(p.rename(&a, &b, false).unwrap_err().code, ErrorCode::AlreadyExists);
-        assert_eq!(p.rename(&a, &b, true).unwrap_err().code, ErrorCode::AlreadyExists);
         assert_eq!(p.read_at(&b, 0, 10).unwrap(), b"b");
+        let c = join(&base, "c.txt");
+        p.writer(&c, true).unwrap().write_all(b"c").unwrap();
+        if p.caps().atomic_replace {
+            p.rename(&c, &b, true).unwrap();
+            assert_eq!(p.read_at(&b, 0, 10).unwrap(), b"c");
+            assert_eq!(p.stat(&c).unwrap_err().code, ErrorCode::NotFound);
+        } else {
+            assert_eq!(p.rename(&c, &b, true).unwrap_err().code, ErrorCode::AlreadyExists);
+            assert_eq!(p.read_at(&b, 0, 10).unwrap(), b"b");
+            p.delete(&c, false).unwrap();
+        }
         p.delete(&b, false).unwrap();
         p.rename(&a, &b, false).unwrap();
         assert_eq!(p.stat(&a).unwrap_err().code, ErrorCode::NotFound);
         assert_eq!(p.read_at(&b, 0, 10).unwrap(), b"0123456789");
 
+        // Collegamenti: a cartella (`dir_link`, si elimina il collegamento e non la cartella) e a file (il file a cui
+        // punta). L'ordine degli argomenti di `SSH_FXP_SYMLINK` è invertito in OpenSSH: vale l'ordine che riesce
+        // (l'altro proverebbe a creare il collegamento sopra il bersaglio, che esiste).
+        let sub = join(&base, "sub");
+        p.mkdir(&sub).unwrap();
+        let link = |target: &str, at: &str| {
+            let (t, a) = (Path::new(target), Path::new(at));
+            assert!(p.sftp.symlink(t, a).is_ok() || p.sftp.symlink(a, t).is_ok(), "symlink {at}");
+        };
+        let dl = join(&base, "dl");
+        let fl = join(&base, "fl");
+        link(&sub, &dl);
+        link(&b, &fl);
+        let s = p.stat(&dl).unwrap();
+        assert_eq!((s.is_dir, s.dir_link), (true, true));
+        let s = p.stat(&fl).unwrap();
+        assert_eq!((s.is_dir, s.dir_link, s.size), (false, false, 10));
+        let mut listed: Vec<(String, bool, bool)> = p.list(&base).unwrap().into_iter().map(|s| (s.name, s.is_dir, s.dir_link)).collect();
+        listed.sort();
+        let expected = [("b.txt", false, false), ("dl", true, true), ("fl", false, false), ("sub", true, false)];
+        assert_eq!(listed, expected.map(|(n, d, l)| (n.to_owned(), d, l)));
+        p.delete(&dl, true).unwrap();
+        assert!(p.stat(&sub).unwrap().is_dir);
+        p.delete(&fl, false).unwrap();
+        assert_eq!(p.read_at(&b, 0, 10).unwrap(), b"0123456789");
+
+        p.delete(&sub, true).unwrap();
         p.delete(&b, false).unwrap();
         p.delete(&base, true).unwrap();
         assert_eq!(p.list(&base).unwrap_err().code, ErrorCode::NotFound);

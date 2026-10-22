@@ -17,7 +17,7 @@ pub trait ProviderFactory: Send + Sync {
     fn open(&self, conn: &Connection, password: Option<&str>) -> Result<Arc<dyn Provider>, AppError>;
 }
 
-/// Sessione di navigazione in cache. `used`: ha già risposto almeno una volta senza `CONNECTION_FAILED`, quindi
+/// Sessione di navigazione in cache. `used`: ha già risposto almeno una volta senza cadere (vedi `dropped`), quindi
 /// una sua caduta è "vecchia" e vale la pena riaprire e riprovare.
 struct Session {
     p: Arc<dyn Provider>,
@@ -37,6 +37,12 @@ struct Live {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Sessione caduta, o bloccata: dopo un `TIMEOUT` lo stato del trasporto SSH può essere incoerente, quindi la
+/// sessione non si riusa.
+fn dropped(e: &AppError) -> bool {
+    matches!(e.code, ErrorCode::ConnectionFailed | ErrorCode::Timeout)
 }
 
 fn not_found() -> AppError {
@@ -195,9 +201,9 @@ impl Connector for Sessions {
     }
 }
 
-/// Sessione di navigazione che sopravvive alle cadute. Una chiamata che dà `CONNECTION_FAILED` toglie la sessione
-/// dalla cache; se la sessione aveva già risposto (caduta "vecchia") e l'operazione è idempotente (`stat`, `list`,
-/// `read_at`, `reader`), si riapre e si riprova una volta. Le altre restituiscono l'errore e la richiesta successiva
+/// Sessione di navigazione che sopravvive alle cadute. Una chiamata che dà `CONNECTION_FAILED` o `TIMEOUT` toglie la
+/// sessione dalla cache; se la sessione aveva già risposto (caduta "vecchia") e l'operazione è idempotente (`stat`,
+/// `list`, `read_at`, `reader`), si riapre e si riprova una volta. Le altre restituiscono l'errore e la richiesta successiva
 /// riconnette. Una sessione appena aperta che fallisce non si riapre: il server è giù, inutile aspettare due volte.
 /// ponytail: gli errori a metà degli stream di `reader`/`writer` non si guardano.
 struct Watched {
@@ -211,8 +217,8 @@ impl Watched {
     fn call<T>(&self, idempotent: bool, f: impl Fn(&dyn Provider) -> Result<T, AppError>) -> Result<T, AppError> {
         let s = lock(&self.cur).clone();
         let r = self.attempt(&s, &f);
-        let dropped = matches!(&r, Err(e) if e.code == ErrorCode::ConnectionFailed);
-        if !dropped || !idempotent || !s.used.load(Ordering::SeqCst) {
+        let fell = matches!(&r, Err(e) if dropped(e));
+        if !fell || !idempotent || !s.used.load(Ordering::SeqCst) {
             return r;
         }
         let fresh = self.shared.browse(self.scheme, &self.id)?;
@@ -223,7 +229,7 @@ impl Watched {
     fn attempt<T>(&self, s: &Arc<Session>, f: &impl Fn(&dyn Provider) -> Result<T, AppError>) -> Result<T, AppError> {
         let r = f(&*s.p);
         match &r {
-            Err(e) if e.code == ErrorCode::ConnectionFailed => self.shared.evict(&self.id, s),
+            Err(e) if dropped(e) => self.shared.evict(&self.id, s),
             _ => s.used.store(true, Ordering::SeqCst),
         }
         r
@@ -271,7 +277,7 @@ mod tests {
     use crate::vfs::mem::MemProvider;
 
     /// Server finto che chiede la password `pw`. `offline`: le sessioni nascono cadute; `drop_all` fa cadere quelle
-    /// aperte (`list` e `delete` danno `CONNECTION_FAILED`).
+    /// aperte (`list` e `delete` danno `CONNECTION_FAILED`), `stall_all` le blocca (`TIMEOUT`).
     #[derive(Default)]
     struct Fake {
         opened: Mutex<Vec<Arc<MemProvider>>>,
@@ -285,6 +291,11 @@ mod tests {
         fn drop_all(&self) {
             for m in self.opened.lock().unwrap().iter() {
                 m.offline.store(true, Ordering::SeqCst);
+            }
+        }
+        fn stall_all(&self) {
+            for m in self.opened.lock().unwrap().iter() {
+                m.stalled.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -375,6 +386,23 @@ mod tests {
         fake.drop_all();
         assert_eq!(p.delete("/x", false).unwrap_err().code, ErrorCode::ConnectionFailed);
         assert_eq!(fake.opens(), 2);
+        s.provider(Scheme::Sftp, &id, Purpose::Browse).unwrap().list("/").unwrap();
+        assert_eq!(fake.opens(), 3);
+    }
+
+    #[test]
+    fn a_timed_out_session_is_not_reused() {
+        let fake = Arc::new(Fake::default());
+        let (_dir, _creds, s, id) = setup(fake.clone());
+        s.connect(&id, Some("pw".into()), false).unwrap();
+        let p = s.provider(Scheme::Sftp, &id, Purpose::Browse).unwrap();
+        p.list("/").unwrap();
+        // Come una caduta: la lettura riapre e riprova; un'eliminazione restituisce l'errore e non riusa la sessione.
+        fake.stall_all();
+        p.list("/").unwrap();
+        assert_eq!(fake.opens(), 2);
+        fake.stall_all();
+        assert_eq!(p.delete("/x", false).unwrap_err().code, ErrorCode::Timeout);
         s.provider(Scheme::Sftp, &id, Purpose::Browse).unwrap().list("/").unwrap();
         assert_eq!(fake.opens(), 3);
     }
