@@ -20,8 +20,11 @@ use tauri::{Emitter, Manager};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Un protocollo senza factory dà `UNSUPPORTED`.
-    let factories: HashMap<vfs::loc::Scheme, Arc<dyn net::sessions::ProviderFactory>> =
-        HashMap::from([(vfs::loc::Scheme::Sftp, Arc::new(net::sftp::SftpFactory) as _)]);
+    let factories: HashMap<vfs::loc::Scheme, Arc<dyn net::sessions::ProviderFactory>> = HashMap::from([
+        (vfs::loc::Scheme::Sftp, Arc::new(net::sftp::SftpFactory) as _),
+        (vfs::loc::Scheme::Ftp, Arc::new(net::ftp::FtpFactory { tls: false }) as _),
+        (vfs::loc::Scheme::Ftps, Arc::new(net::ftp::FtpFactory { tls: true }) as _),
+    ]);
     let sessions = Arc::new(net::sessions::Sessions::new(factories));
     tauri::Builder::default()
         .manage(fs::watch::Watchers::default())

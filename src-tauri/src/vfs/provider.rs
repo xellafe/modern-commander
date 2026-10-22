@@ -39,7 +39,8 @@ pub trait Provider: Send + Sync {
     /// Fino a `len` byte da `offset`: più corto solo a fine file.
     fn read_at(&self, path: &str, offset: u64, len: u32) -> Result<Vec<u8>, AppError>;
     fn reader(&self, path: &str) -> Result<Box<dyn std::io::Read + Send>, AppError>;
-    /// Con `create_new` fallisce (`ALREADY_EXISTS`) se il file c'è; senza, lo crea o lo tronca.
+    /// Con `create_new` fallisce (`ALREADY_EXISTS`) se il file c'è; senza, lo crea o lo tronca. `flush` alla fine
+    /// conclude la scrittura e ne dà l'esito (in FTP la risposta finale del server); dopo non si scrive più.
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn std::io::Write + Send>, AppError>;
     /// Senza `replace` una destinazione esistente dà `ALREADY_EXISTS`.
     fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError>;

@@ -56,8 +56,9 @@ pub fn copy(
     let mut direct_created = false;
     let r = (|| {
         let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
-        let mut reader = sp.reader(&spath)?;
+        // La data prima di aprire la sorgente: in FTP uno stream aperto tiene occupata la connessione.
         let modified = sp.stat(&spath)?.modified_ms;
+        let mut reader = sp.reader(&spath)?;
         let (target, w) = match safe {
             Some(w) => (tmp.as_str(), w),
             None => (dpath.as_str(), dp.writer(&dpath, !replace)?),

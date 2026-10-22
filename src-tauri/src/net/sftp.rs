@@ -30,9 +30,9 @@ use std::time::Duration;
 
 mod raw;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Attesa massima di una risposta dopo il collegamento: con la VPN caduta si ha `TIMEOUT`, non un'attesa infinita.
-const IO_TIMEOUT_MS: u32 = 30_000;
+pub(crate) const IO_TIMEOUT_MS: u32 = 30_000;
 
 /// Lo stato di una risposta SFTP; quelli generici (`SSH_FX_FAILURE`, per esempio un file che c'è già in SFTP v3)
 /// danno `IO`.
@@ -134,7 +134,7 @@ impl KeyboardInteractivePrompt for Answer<'_> {
     }
 }
 
-fn tcp(host: &str, port: u16) -> Result<TcpStream, AppError> {
+pub(crate) fn tcp(host: &str, port: u16) -> Result<TcpStream, AppError> {
     let fail = |code, e: io::Error| AppError { detail: Some(e.to_string()), ..AppError::new(code, None) };
     let addrs = (host, port).to_socket_addrs().map_err(|e| fail(ErrorCode::ConnectionFailed, e))?;
     let mut last = io::Error::from(io::ErrorKind::AddrNotAvailable);
@@ -223,7 +223,7 @@ impl Drop for SftpProvider {
 /// Lascia cadere `v` su un thread a parte. Con la rete bloccata (VPN caduta) libssh2 crede ancora la connessione
 /// viva e ogni chiusura di canale aspetta il timeout (30 s per canale, poi la sessione): chi lascia cadere il provider,
 /// spesso il thread di una richiesta dopo un `TIMEOUT`, non deve aspettare. Se il thread non parte, si chiude qui.
-fn drop_in_background<T: Send + 'static>(v: T) {
+pub(crate) fn drop_in_background<T: Send + 'static>(v: T) {
     let _ = std::thread::Builder::new().name("sftp-close".into()).spawn(move || drop(v));
 }
 

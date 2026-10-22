@@ -2,8 +2,10 @@
 
 pub mod connections;
 pub mod credentials;
+pub mod ftp;
 pub mod sessions;
 pub mod sftp;
+pub mod tls;
 pub mod trust;
 
 use crate::error::AppError;
