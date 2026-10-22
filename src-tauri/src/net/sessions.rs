@@ -526,12 +526,12 @@ mod tests {
         let (_dir, _creds, s, id) = setup(Arc::default());
         let sites = crate::net::winscp::from_ini(include_str!("fixtures/winscp.ini"));
         let views = s.import(sites).unwrap();
-        // Dei 9 siti della fixture 3 si saltano (WebDAV, S3, senza host).
-        assert_eq!(views.len(), 6);
+        // Dei 10 siti della fixture 3 si saltano (WebDAV, S3, senza host).
+        assert_eq!(views.len(), 7);
         assert!(views.iter().all(|v| !v.has_password && !v.conn.id.is_empty() && v.conn.id != id));
         // Un nome già in uso si importa lo stesso, con un id nuovo.
         let again = s.import(crate::net::winscp::from_ini(include_str!("fixtures/winscp.ini"))).unwrap();
-        assert_eq!(s.list().unwrap().len(), 1 + 6 + again.len());
+        assert_eq!(s.list().unwrap().len(), 1 + 7 + again.len());
         assert_ne!(views[0].conn.id, again[0].conn.id);
     }
 

@@ -7,7 +7,7 @@ use crate::vfs::loc::Scheme;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD, REG_ROUTINE_FLAGS, REG_VALUE_TYPE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
     RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
@@ -31,16 +31,23 @@ pub struct ImportCandidate {
 /// Le uniche chiavi di un sito che si leggono: la password (e ogni altra) non si guarda nemmeno.
 const KEYS: [&str; 6] = ["FSProtocol", "Ftps", "PortNumber", "HostName", "UserName", "RemoteDirectory"];
 
+/// Inverso del `MungeStr` di WinSCP: `%XX` in byte, UTF-8, senza il BOM che i testi non ASCII hanno davanti.
+fn unmunge(s: &str) -> String {
+    percent_decode(s).trim_start_matches('\u{feff}').to_owned()
+}
+
 /// Sito come lo dà WinSCP: nome ancora percent-encoded e valori in testo, da `.ini` o dal registro.
 fn build(raw_name: &str, get: impl Fn(&str) -> Option<String>) -> Option<ImportCandidate> {
     // I nomi non ASCII hanno davanti il BOM UTF-8 (`%EF%BB%BF`); la `/` separa le cartelle.
-    let name = percent_decode(raw_name).trim_start_matches('\u{feff}').to_owned();
+    let name = unmunge(raw_name);
     if name == "Default Settings" {
         return None;
     }
+    // Anche i valori sono "munged" come i nomi (`THierarchicalStorage::ReadString` fa `UnMungeStr`).
+    let text = |k: &str| get(k).map(|v| unmunge(&v)).unwrap_or_default();
     let num = |k: &str| get(k).and_then(|v| v.trim().parse::<u32>().ok());
-    let mut host = get("HostName").unwrap_or_default().trim().to_owned();
-    let mut user = get("UserName").unwrap_or_default();
+    let mut host = text("HostName").trim().to_owned();
+    let mut user = text("UserName");
     // WinSCP accetta `utente@host` nel solo nome host (`SetHostName` divide all'ultima `@`).
     if user.is_empty()
         && let Some((u, h)) = host.clone().rsplit_once('@')
@@ -61,7 +68,7 @@ fn build(raw_name: &str, get: impl Fn(&str) -> Option<String>) -> Option<ImportC
     };
     let skipped = skipped.or(host.is_empty().then_some("nohost"));
     let port = num("PortNumber").and_then(|p| u16::try_from(p).ok()).filter(|&p| p > 0).unwrap_or(default_port);
-    let dir = get("RemoteDirectory").unwrap_or_default();
+    let dir = text("RemoteDirectory");
     Some(ImportCandidate {
         name: name.replace('/', " / "),
         scheme,
@@ -165,10 +172,14 @@ pub fn from_registry() -> Result<Vec<ImportCandidate>, AppError> {
         match e {
             ERROR_NO_MORE_ITEMS => break,
             ERROR_SUCCESS => {}
-            _ => continue,
+            // Nome troppo lungo per il buffer: quel sito si salta.
+            ERROR_MORE_DATA => continue,
+            // Un errore che non passa non deve far girare il ciclo all'infinito.
+            _ => break,
         }
         let raw = String::from_utf16_lossy(&buf[..len as usize]);
-        if let Some(site) = open_key(sessions.0, &raw)? {
+        // Un sito illeggibile si salta, come uno che non si enumera.
+        if let Ok(Some(site)) = open_key(sessions.0, &raw) {
             out.extend(build(&raw, |k| reg_value(&site, k)));
         }
     }
@@ -230,13 +241,15 @@ mod tests {
         let skipped = |c: ImportCandidate, why: &str| ImportCandidate { skipped: Some(why.into()), ..c };
         let want = vec![
             site("Web Prod", Some(Scheme::Sftp), "sftp.example.org", 2222, "deploy", "/var/www", false),
-            site("Backup SCP", Some(Scheme::Sftp), "scp.example.org", 22, "backup", "/", false),
+            site("Backup SCP", Some(Scheme::Sftp), "scp.example.org", 22, "DOM\\backup", "/my dir/caffè", false),
             site("Legacy FTP", Some(Scheme::Ftps), "ftp.example.org", 21, "ftpuser", "/pub", false),
             site("Banca FTPS", Some(Scheme::Ftps), "ftps.example.org", 990, "bank", "/", true),
             site("Clienti / Acme", Some(Scheme::Sftp), "acme.example.org", 22, "acme", "/data/acme", false),
             site("Caffè Mario", Some(Scheme::Sftp), "caffe.example.org", 22, "mario", "/", false),
             skipped(site("Intranet DAV", None, "dav.example.org", 443, "dav", "/", false), "webdav"),
             skipped(site("Archivio S3", None, "s3.example.org", 0, "", "/", false), "s3"),
+            // Un `%` senza due cifre esadecimali (qui in fondo) resta com'è, senza errori.
+            site("100% sicuro%2", Some(Scheme::Sftp), "pct.example.org", 22, "", "/", false),
             skipped(site("Vuoto", Some(Scheme::Sftp), "", 22, "nessuno", "/", false), "nohost"),
         ];
         assert_eq!(got, want);
