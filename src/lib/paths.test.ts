@@ -7,10 +7,10 @@ test("joinPath handles roots and UNC", () => {
   expect(joinPath("\\\\srv\\share", "x")).toBe("\\\\srv\\share\\x");
 });
 
-test("rootPath climbs to the drive or the UNC share", () => {
+test("rootPath climbs to the drive or the UNC server", () => {
   expect(rootPath("C:\\a\\b")).toBe("C:\\");
   expect(rootPath("C:\\")).toBe("C:\\");
-  expect(rootPath("\\\\srv\\share\\a\\b")).toBe("\\\\srv\\share");
+  expect(rootPath("\\\\srv\\share\\a\\b")).toBe("\\\\srv");
   expect(rootPath(DRIVES)).toBe(DRIVES);
 });
 
@@ -21,7 +21,8 @@ test("pathCrumbs lists every ancestor, root first", () => {
     { label: "mc", path: "D:\\Generale\\mc" },
   ]);
   expect(pathCrumbs("\\\\srv\\share\\x")).toEqual([
-    { label: "\\\\srv\\share", path: "\\\\srv\\share" },
+    { label: "\\\\srv", path: "\\\\srv" },
+    { label: "share", path: "\\\\srv\\share" },
     { label: "x", path: "\\\\srv\\share\\x" },
   ]);
 });

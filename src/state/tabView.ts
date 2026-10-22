@@ -58,7 +58,7 @@ export function parentPath(path: string): string | null {
   const p = path.replace(/\\+$/, "");
   if (p.startsWith("\\\\")) {
     const parts = p.slice(2).split("\\");
-    return parts.length <= 2 ? null : `\\\\${parts.slice(0, -1).join("\\")}`;
+    return parts.length <= 1 ? null : `\\\\${parts.slice(0, -1).join("\\")}`;
   }
   const i = p.lastIndexOf("\\");
   if (i < 0) return null; // radice dell'unità ("C:")

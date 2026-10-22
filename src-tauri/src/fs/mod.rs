@@ -7,6 +7,7 @@ pub mod hash;
 pub mod lines;
 pub mod listing;
 pub mod scan;
+pub mod shares;
 pub mod size;
 pub mod source;
 pub mod watch;
@@ -54,7 +55,10 @@ async fn on_remote<T: Send + 'static>(
 #[tauri::command]
 pub async fn list_dir(vfs: State<'_, Arc<Vfs>>, path: String) -> Result<Vec<listing::Entry>, AppError> {
     match Loc::parse(&path)? {
-        Loc::Local(p) => blocking(move || listing::list_dir(&p)).await?,
+        Loc::Local(p) => match shares::is_server_root(&p) {
+            Some(server) => blocking(move || shares::list_shares(&server)).await?,
+            None => blocking(move || listing::list_dir(&p)).await?,
+        },
         loc => on_remote(&vfs, loc, |p, path| Ok(p.list(path)?.into_iter().map(listing::Entry::from).collect())).await,
     }
 }

@@ -21,7 +21,7 @@ export function rootPath(path: string): string {
   return p;
 }
 
-/** Segmenti del breadcrumb, dalla radice (`C:` o `\\server\share`) alla cartella corrente. */
+/** Segmenti del breadcrumb, dalla radice (`C:` o `\\server`) alla cartella corrente. */
 export function pathCrumbs(path: string): { label: string; path: string }[] {
   const chain: string[] = [];
   for (let p: string | null = path; p !== null; p = parentPath(p)) chain.unshift(p);
