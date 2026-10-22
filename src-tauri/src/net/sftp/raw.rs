@@ -67,9 +67,12 @@ impl RawSftp {
         Ok(Self { sess: sess.clone(), sftp })
     }
 
-    /// Ultimo stato SFTP del canale. Da chiamare con il lock preso.
-    fn errno(&self) -> c_ulong {
-        // SAFETY: canale aperto; chi chiama tiene il lock.
+    /// Ultimo stato SFTP del canale.
+    ///
+    /// # Safety
+    /// Chi chiama tiene il lock della sessione (`Session::raw()`).
+    unsafe fn errno(&self) -> c_ulong {
+        // SAFETY: canale aperto; il lock lo garantisce chi chiama.
         unsafe { sys::libssh2_sftp_last_error(self.sftp) }
     }
 
@@ -81,7 +84,8 @@ impl RawSftp {
         let rc = unsafe {
             libssh2_sftp_posix_rename_ex(self.sftp, f.as_ptr(), f.as_bytes().len(), t.as_ptr(), t.as_bytes().len())
         };
-        if rc == 0 { Ok(()) } else { Err(code(rc, self.errno())) }
+        // SAFETY: `_s` tiene il lock.
+        if rc == 0 { Ok(()) } else { Err(code(rc, unsafe { self.errno() })) }
     }
 
     /// Le voci di `path` senza `.` e `..`: nome in byte e attributi (come `lstat`). L'handle si chiude sempre.
@@ -95,16 +99,18 @@ impl RawSftp {
         if h.is_null() {
             // SAFETY: lock preso.
             let rc = unsafe { sys::libssh2_session_last_errno(&mut *s) };
-            return Err(code(rc, self.errno()));
+            return Err(code(rc, unsafe { self.errno() }));
         }
-        let r = self.entries(h);
+        // SAFETY: lock preso e `h` aperto.
+        let r = unsafe { self.entries(h) };
         // SAFETY: `h` aperto sopra e chiuso una volta sola, con il lock ancora preso.
         unsafe { sys::libssh2_sftp_close_handle(h) };
         r
     }
 
-    /// Da chiamare con il lock preso e `h` aperto.
-    fn entries(&self, h: *mut sys::LIBSSH2_SFTP_HANDLE) -> Result<Vec<(Vec<u8>, FileStat)>, ErrorCode> {
+    /// # Safety
+    /// Chi chiama tiene il lock della sessione (`Session::raw()`) e `h` è un handle di cartella aperto.
+    unsafe fn entries(&self, h: *mut sys::LIBSSH2_SFTP_HANDLE) -> Result<Vec<(Vec<u8>, FileStat)>, ErrorCode> {
         let mut out = Vec::new();
         let mut buf = vec![0u8; 1024];
         loop {
@@ -124,7 +130,8 @@ impl RawSftp {
                         out.push((name.to_vec(), FileStat::from_raw(&attrs)));
                     }
                 }
-                n => return Err(code(n, self.errno())),
+                // SAFETY: il lock lo tiene chi chiama.
+                n => return Err(code(n, unsafe { self.errno() })),
             }
         }
     }

@@ -22,6 +22,7 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 use libssh2_sys as sys;
 use ssh2::{FileStat, KeyboardInteractivePrompt, OpenFlags, OpenType, Prompt, RenameFlags, Session, Sftp};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::mem::ManuallyDrop;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
@@ -113,12 +114,23 @@ fn auth_plan(methods: &str, has_password: bool) -> Result<Auth, ErrorCode> {
     }
 }
 
-/// Risponde con la password a ogni domanda di keyboard-interactive. Niente `Debug`: contiene la password.
-struct Answer<'a>(&'a str);
+/// Keyboard-interactive: la password va solo alla prima richiesta con una sola domanda nascosta (la password).
+/// Ogni altra (codice OTP, verifica, più domande) riceve risposte vuote, quindi il server rifiuta: `AUTH_FAILED`.
+/// Niente `Debug`: contiene la password.
+struct Answer<'a> {
+    password: &'a str,
+    answered: bool,
+}
 
 impl KeyboardInteractivePrompt for Answer<'_> {
     fn prompt<'b>(&mut self, _: &str, _: &str, prompts: &[Prompt<'b>]) -> Vec<String> {
-        vec![self.0.to_owned(); prompts.len()]
+        match prompts {
+            [p] if !p.echo && !self.answered => {
+                self.answered = true;
+                vec![self.password.to_owned()]
+            }
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -160,16 +172,21 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>) -> 
         let pw = password.unwrap_or_default();
         match plan {
             Auth::Password => sess.userauth_password(&conn.user, pw),
-            Auth::KeyboardInteractive => sess.userauth_keyboard_interactive(&conn.user, &mut Answer(pw)),
+            Auth::KeyboardInteractive => {
+                sess.userauth_keyboard_interactive(&conn.user, &mut Answer { password: pw, answered: false })
+            }
         }
         .map_err(err)?;
     }
     sess.set_timeout(IO_TIMEOUT_MS);
     let sftp = sess.sftp().map_err(err)?;
+    // Senza il secondo canale (server con un solo sottosistema per connessione) non si elenca in sicurezza: `ssh2`
+    // va in panico sui nomi non UTF-8. La connessione fallisce con l'errore del canale.
     let raw = RawSftp::new(&sess).map_err(|code| AppError::new(code, None))?;
     // Una volta per sessione: `rename(p, p)` non cambia nulla anche se `p` esiste, e senza l'estensione libssh2
     // risponde `UNSUPPORTED` senza inviare nulla. Ogni altro esito (di solito `NOT_FOUND`) vuol dire che c'è.
     let atomic = raw.posix_rename(PROBE, PROBE) != Err(ErrorCode::Unsupported);
+    let (sess, sftp, raw) = (ManuallyDrop::new(sess), ManuallyDrop::new(sftp), ManuallyDrop::new(raw));
     Ok(SftpProvider { sess, sftp, raw, atomic })
 }
 
@@ -184,12 +201,30 @@ impl ProviderFactory for SftpFactory {
 /// Percorso della prova di `posix-rename` (rinominato su sé stesso).
 const PROBE: &str = "/.mc-posix-rename-probe";
 
+/// Sessione e canali si chiudono in `Drop`, su un altro thread: vedi `drop_in_background`.
 pub(crate) struct SftpProvider {
-    sess: Session,
-    sftp: Sftp,
-    raw: RawSftp,
+    sess: ManuallyDrop<Session>,
+    sftp: ManuallyDrop<Sftp>,
+    raw: ManuallyDrop<RawSftp>,
     /// Il server ha `posix-rename@openssh.com`.
     atomic: bool,
+}
+
+impl Drop for SftpProvider {
+    fn drop(&mut self) {
+        // SAFETY: ogni campo si prende una volta sola, qui, e dopo `drop` non si usa più.
+        let parts = unsafe {
+            (ManuallyDrop::take(&mut self.raw), ManuallyDrop::take(&mut self.sftp), ManuallyDrop::take(&mut self.sess))
+        };
+        drop_in_background(parts);
+    }
+}
+
+/// Lascia cadere `v` su un thread a parte. Con la rete bloccata (VPN caduta) libssh2 crede ancora la connessione
+/// viva e ogni chiusura di canale aspetta il timeout (30 s per canale, poi la sessione): chi lascia cadere il provider,
+/// spesso il thread di una richiesta dopo un `TIMEOUT`, non deve aspettare. Se il thread non parte, si chiude qui.
+fn drop_in_background<T: Send + 'static>(v: T) {
+    let _ = std::thread::Builder::new().name("sftp-close".into()).spawn(move || drop(v));
 }
 
 /// Lettura o scrittura di un file remoto; gli errori portano l'`AppError` dentro `io::Error::other`.
@@ -301,13 +336,17 @@ impl Provider for SftpProvider {
 
     fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
         let file = self.sftp.open(checked(path)?).map_err(self.err(path))?;
-        Ok(Box::new(Stream { file, sess: self.sess.clone(), path: path.to_owned() }))
+        Ok(Box::new(Stream { file, sess: Session::clone(&self.sess), path: path.to_owned() }))
     }
 
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {
         let flags = OpenFlags::WRITE | if create_new { OpenFlags::EXCLUSIVE } else { OpenFlags::TRUNCATE };
-        let file = self.sftp.open_mode(checked(path)?, flags, 0o644, OpenType::File).map_err(self.exists_err(path))?;
-        Ok(Box::new(Stream { file, sess: self.sess.clone(), path: path.to_owned() }))
+        // Solo con `create_new` un `SSH_FX_FAILURE` su un percorso esistente vuol dire "esiste già".
+        let file = self.sftp.open_mode(checked(path)?, flags, 0o644, OpenType::File).map_err(|e| match create_new {
+            true => self.exists_err(path)(e),
+            false => app_error(&e, Some(path)),
+        })?;
+        Ok(Box::new(Stream { file, sess: Session::clone(&self.sess), path: path.to_owned() }))
     }
 
     /// Con `replace` e `posix-rename` sostituisce in un colpo solo. Altrimenti non sostituisce mai: una destinazione
@@ -388,6 +427,42 @@ mod tests {
         assert_eq!(auth_plan("publickey,password", true), Ok(Auth::Password));
         assert_eq!(auth_plan("publickey,keyboard-interactive", true), Ok(Auth::KeyboardInteractive));
         assert_eq!(auth_plan("publickey", true), Err(ErrorCode::AuthFailed));
+    }
+
+    #[test]
+    fn keyboard_interactive_sends_the_password_once_to_a_single_hidden_prompt() {
+        let ask = |a: &mut Answer, prompts: &[(&'static str, bool)]| {
+            let prompts: Vec<Prompt> = prompts.iter().map(|&(t, echo)| Prompt { text: t.into(), echo }).collect();
+            a.prompt("", "", &prompts)
+        };
+        let mut a = Answer { password: "pw", answered: false };
+        assert!(ask(&mut a, &[("Nome:", true)]).is_empty());
+        assert!(ask(&mut a, &[("Password:", false), ("Codice:", false)]).is_empty());
+        assert!(ask(&mut a, &[]).is_empty());
+        assert!(ask(&mut a, &[("Password:", false)]) == ["pw"]);
+        // Una seconda domanda nascosta (per esempio un codice OTP) non riceve la password.
+        assert!(ask(&mut a, &[("Codice di verifica:", false)]).is_empty());
+    }
+
+    #[test]
+    fn closing_happens_off_the_calling_thread() {
+        use std::sync::mpsc::{Sender, channel};
+        use std::time::Duration;
+        // Chiusura lenta che aspetta il via del test: eseguita sul thread del chiamante, il via arriverebbe tardi.
+        struct Slow(std::sync::mpsc::Receiver<()>, Sender<(std::thread::ThreadId, bool)>);
+        impl Drop for Slow {
+            fn drop(&mut self) {
+                let go = self.0.recv_timeout(Duration::from_secs(2)).is_ok();
+                self.1.send((std::thread::current().id(), go)).unwrap();
+            }
+        }
+        let (go_tx, go_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        drop_in_background(Slow(go_rx, done_tx));
+        go_tx.send(()).unwrap();
+        let (id, go) = done_rx.recv().unwrap();
+        assert!(go);
+        assert_ne!(id, std::thread::current().id());
     }
 
     #[test]
