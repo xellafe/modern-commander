@@ -39,6 +39,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 rustls-platform-verifier = "0.7.1"
 chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
 log = { version = "0.4.34", features = ["release_max_level_debug"] }
+ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-provider"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

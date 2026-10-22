@@ -24,6 +24,8 @@ pub fn run() {
         (vfs::loc::Scheme::Sftp, Arc::new(net::sftp::SftpFactory) as _),
         (vfs::loc::Scheme::Ftp, Arc::new(net::ftp::FtpFactory { tls: false }) as _),
         (vfs::loc::Scheme::Ftps, Arc::new(net::ftp::FtpFactory { tls: true }) as _),
+        (vfs::loc::Scheme::Http, Arc::new(net::http_index::HttpFactory { tls: false }) as _),
+        (vfs::loc::Scheme::Https, Arc::new(net::http_index::HttpFactory { tls: true }) as _),
     ]);
     let sessions = Arc::new(net::sessions::Sessions::new(factories));
     tauri::Builder::default()

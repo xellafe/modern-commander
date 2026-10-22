@@ -3,6 +3,8 @@
 pub mod connections;
 pub mod credentials;
 pub mod ftp;
+pub mod http_auth;
+pub mod http_index;
 pub mod sessions;
 pub mod sftp;
 pub mod tls;
