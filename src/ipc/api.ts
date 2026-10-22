@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ArchiveListing, ColumnHit, ColumnProgress, Connection, ConnectionView, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
+import type { ArchiveListing, ColumnHit, ColumnProgress, Connection, ConnectionView, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, ImportCandidate, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -269,6 +269,12 @@ export const listConnections = () => invoke<ConnectionView[]>("list_connections"
  */
 export const saveConnection = (conn: Connection, password: string | null, remember: boolean) =>
   invoke<ConnectionView>("save_connection", { conn, password, remember });
+
+/** I siti salvati di WinSCP (da `WinSCP.ini` o dal registro), senza password. Non salva niente. */
+export const winscpCandidates = () => invoke<ImportCandidate[]>("winscp_candidates");
+
+/** Importa i siti scelti come connessioni nuove, senza password. */
+export const importConnections = (items: ImportCandidate[]) => invoke<ConnectionView[]>("import_connections", { items });
 
 /** Elimina anche la password e l'impronta della connessione. */
 export const deleteConnection = (id: string) => invoke<void>("delete_connection", { id });

@@ -10,6 +10,7 @@ pub mod sftp;
 pub mod temp;
 pub mod tls;
 pub mod trust;
+pub mod winscp;
 
 use crate::error::AppError;
 use crate::fs::blocking;
@@ -17,6 +18,7 @@ use connections::{Connection, ConnectionView};
 use sessions::Sessions;
 use std::sync::Arc;
 use tauri::State;
+use winscp::ImportCandidate;
 
 type Net<'a> = State<'a, Arc<Sessions>>;
 
@@ -35,6 +37,18 @@ pub async fn save_connection(
 ) -> Result<ConnectionView, AppError> {
     let s = net.inner().clone();
     blocking(move || s.save(conn, password, remember)).await?
+}
+
+/// I siti salvati di WinSCP, per l'anteprima (non si salva niente).
+#[tauri::command]
+pub async fn winscp_candidates() -> Result<Vec<ImportCandidate>, AppError> {
+    blocking(winscp::from_system).await?
+}
+
+#[tauri::command]
+pub async fn import_connections(net: Net<'_>, items: Vec<ImportCandidate>) -> Result<Vec<ConnectionView>, AppError> {
+    let s = net.inner().clone();
+    blocking(move || s.import(items)).await?
 }
 
 #[tauri::command]

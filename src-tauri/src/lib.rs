@@ -105,6 +105,8 @@ pub fn run() {
             terminal::term_kill,
             net::list_connections,
             net::save_connection,
+            net::winscp_candidates,
+            net::import_connections,
             net::delete_connection,
             net::forget_password,
             net::connect,

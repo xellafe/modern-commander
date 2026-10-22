@@ -57,3 +57,7 @@
 .mc-target .mc-muted { margin-left: auto; }
 .mc-conn-tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .mc-target svg { align-self: center; flex: none; }
+.mc-import .mc-target > span, .mc-import .mc-target > em { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-import .mc-target > input { flex: none; }
+.mc-import .mc-target > em { flex-basis: 100%; }
+.mc-import label.mc-target[aria-disabled="true"] { opacity: 0.55; }

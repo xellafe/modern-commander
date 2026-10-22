@@ -527,6 +527,17 @@
     "accept": "Accetta",
     "keyChangedTitle": "Impronta del server cambiata",
     "keyChanged": "La chiave del server di «{{name}}» è diversa da quella accettata ({{fingerprint}}). Può essere una reinstallazione del server oppure un tentativo di intercettazione: la connessione è bloccata. Se il cambio è atteso, apri le connessioni (Ctrl+F), seleziona «{{name}}» e usa «Dimentica impronta»; al prossimo collegamento ti verrà chiesta quella nuova.",
+    "import": "Importa da WinSCP…",
+    "importTitle": "Importa da WinSCP",
+    "importAction": "Importa",
+    "importNone": "Nessun sito di WinSCP trovato.",
+    "importHint": "Le password non si importano mai: te le chiederà la connessione.",
+    "importSkipped": {
+      "webdav": "WebDAV non è supportato",
+      "s3": "S3 non è supportato",
+      "nohost": "senza indirizzo del server",
+      "unknown": "protocollo non supportato"
+    },
     "notRemembered": "Connessione riuscita, ma la password non è stata ricordata."
   }
 }

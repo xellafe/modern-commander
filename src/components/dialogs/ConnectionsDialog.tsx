@@ -1,7 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { forgetHost, forgetPassword } from "../../ipc/api";
-import type { AppError, Connection, ConnectionView, Scheme } from "../../ipc/types";
+import { forgetHost, forgetPassword, importConnections, winscpCandidates } from "../../ipc/api";
+import type { AppError, Connection, ConnectionView, ImportCandidate, Scheme } from "../../ipc/types";
 import { defaultPort, startLocation, useConnections } from "../../state/connections";
 import { activeTab, useLayout } from "../../state/layout";
 import { useTabViews } from "../../state/tabViews";
@@ -36,6 +36,8 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
   const [form, setForm] = useState<Draft | null>(req.draft ? blank(req.draft) : null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Anteprima dell'importazione da WinSCP: i siti letti e quelli spuntati (per posizione).
+  const [imp, setImp] = useState<{ items: ImportCandidate[]; checked: Set<number> } | null>(null);
   const close = useUi.getState().closeDialog;
   const sel: ConnectionView | undefined = list.find((c) => c.id === selId) ?? list[0];
 
@@ -76,6 +78,61 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
     e.preventDefault();
     select(list[next].id);
   };
+
+  if (imp) {
+    const toggle = (i: number) => {
+      const checked = new Set(imp.checked);
+      if (!checked.delete(i)) checked.add(i);
+      setImp({ ...imp, checked });
+    };
+    const firstFree = imp.items.findIndex((c) => !c.skipped);
+    const doImport = () => {
+      if (!imp.checked.size) return;
+      const chosen = imp.items.filter((_, i) => imp.checked.has(i));
+      run(async () => {
+        try {
+          const views = await importConnections(chosen);
+          setImp(null);
+          if (views[0]) select(views[0].id);
+        } finally {
+          await useConnections.getState().load();
+        }
+      });
+    };
+    return (
+      <Dialog
+        key="import"
+        title={t("connections.importTitle")}
+        onCancel={() => setImp(null)}
+        onConfirm={doImport}
+        actions={<>
+          <button className="primary" aria-disabled={!imp.checked.size || undefined} onClick={doImport}>{t("connections.importAction")}</button>
+          <button onClick={() => setImp(null)}>{t("ops.cancel")}</button>
+        </>}
+      >
+        {imp.items.length ? (
+          <div className="mc-targets mc-import">
+            <div className="mc-target mc-muted"><span />
+              <span>{t("connections.name")}</span><span>{t("connections.scheme")}</span><span>{t("connections.host")}</span><span>{t("connections.user")}</span>
+            </div>
+            {imp.items.map((c, i) => (
+              <label key={i} className="mc-target" aria-disabled={!!c.skipped || undefined}>
+                <input type="checkbox" checked={imp.checked.has(i)} disabled={!!c.skipped} data-autofocus={i === firstFree || undefined}
+                  onChange={() => toggle(i)} />
+                <span title={c.name}>{c.name}</span>
+                <span>{c.scheme ? t(`connections.schemes.${c.scheme}`) : "-"}</span>
+                <span title={c.host}>{c.host}</span>
+                <span title={c.user}>{c.user}</span>
+                {c.skipped && <em className="mc-muted">{t(`connections.importSkipped.${c.skipped}`, { defaultValue: t("connections.importSkipped.unknown") })}</em>}
+              </label>
+            ))}
+          </div>
+        ) : <p className="mc-muted">{t("connections.importNone")}</p>}
+        <p className="mc-muted">{t("connections.importHint")}</p>
+        {error && <div className="mc-field-error" role="alert">{error}</div>}
+      </Dialog>
+    );
+  }
 
   if (form) {
     const set = (patch: Partial<Draft>) => setForm({ ...form, ...patch });
@@ -184,6 +241,10 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
       ) : <p className="mc-muted">{t("connections.empty")}</p>}
       <div className="mc-conn-tools">
         {tool("connections.new", true, () => setForm(blank({})))}
+        {tool("connections.import", true, () => run(async () => {
+          const items = await winscpCandidates();
+          setImp({ items, checked: new Set(items.flatMap((c, i) => (c.skipped ? [] : [i]))) });
+        }))}
         {tool("connections.edit", !!sel, () => setForm({ ...sel!, password: "" }))}
         {tool("connections.duplicate", !!sel, () => setForm({ ...sel!, id: "", name: t("connections.copyOf", { name: sel!.name }), password: "" }))}
         {tool(confirmDelete ? "connections.confirmDelete" : "connections.delete", !!sel, remove, confirmDelete ? "danger" : undefined)}

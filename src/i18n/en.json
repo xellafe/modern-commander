@@ -527,6 +527,17 @@
     "accept": "Accept",
     "keyChangedTitle": "Server fingerprint changed",
     "keyChanged": "The server key of “{{name}}” differs from the accepted one ({{fingerprint}}). It may be a server reinstall or an interception attempt: the connection is blocked. If the change is expected, open Connections (Ctrl+F), select “{{name}}” and use “Forget fingerprint”; the next connection will ask for the new one.",
+    "import": "Import from WinSCP…",
+    "importTitle": "Import from WinSCP",
+    "importAction": "Import",
+    "importNone": "No WinSCP sites found.",
+    "importHint": "Passwords are never imported: you will be asked for them when connecting.",
+    "importSkipped": {
+      "webdav": "WebDAV is not supported",
+      "s3": "S3 is not supported",
+      "nohost": "no server address",
+      "unknown": "unsupported protocol"
+    },
     "notRemembered": "Connected, but the password was not remembered."
   }
 }

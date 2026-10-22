@@ -270,3 +270,17 @@ export interface Connection {
 export interface ConnectionView extends Connection {
   hasPassword: boolean;
 }
+
+/** Sito di WinSCP nell'anteprima dell'importazione; la password non c'è mai. */
+export interface ImportCandidate {
+  name: string;
+  /** Vuoto per i siti che non si importano. */
+  scheme: Scheme | null;
+  host: string;
+  port: number;
+  user: string;
+  startDir: string;
+  ftpsImplicit: boolean;
+  /** Codice del motivo (`webdav`, `s3`, `nohost`, `unknown`): il testo sta nelle traduzioni. */
+  skipped: string | null;
+}

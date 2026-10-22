@@ -3,6 +3,7 @@
 use super::connections::{self, Connection, ConnectionView};
 use super::credentials::Secrets;
 use super::trust;
+use super::winscp::ImportCandidate;
 use crate::error::{AppError, ErrorCode};
 use crate::vfs::loc::Scheme;
 use crate::vfs::provider::{Caps, Connector, Provider, Purpose, Stat};
@@ -214,6 +215,17 @@ impl Sessions {
         let view = connections::save(self.0.dir()?, &*self.0.creds, conn, password, remember)?;
         self.disconnect(&view.conn.id);
         Ok(view)
+    }
+
+    /// Importa i siti scelti come connessioni nuove (id nuovi, anche con un nome già in uso), senza password; quelli
+    /// da saltare non si salvano. Un errore interrompe: i già salvati restano.
+    pub fn import(&self, items: Vec<ImportCandidate>) -> Result<Vec<ConnectionView>, AppError> {
+        let dir = self.0.dir()?;
+        items
+            .into_iter()
+            .filter_map(ImportCandidate::into_connection)
+            .map(|c| connections::save(dir, &*self.0.creds, c, None, false))
+            .collect()
     }
 
     pub fn delete(&self, id: &str) -> Result<(), AppError> {
@@ -507,6 +519,20 @@ mod tests {
 
     fn code<T: std::fmt::Debug>(r: Result<T, AppError>) -> ErrorCode {
         r.unwrap_err().code
+    }
+
+    #[test]
+    fn import_saves_new_connections_without_password_and_skips_the_rest() {
+        let (_dir, _creds, s, id) = setup(Arc::default());
+        let sites = crate::net::winscp::from_ini(include_str!("fixtures/winscp.ini"));
+        let views = s.import(sites).unwrap();
+        // Dei 9 siti della fixture 3 si saltano (WebDAV, S3, senza host).
+        assert_eq!(views.len(), 6);
+        assert!(views.iter().all(|v| !v.has_password && !v.conn.id.is_empty() && v.conn.id != id));
+        // Un nome già in uso si importa lo stesso, con un id nuovo.
+        let again = s.import(crate::net::winscp::from_ini(include_str!("fixtures/winscp.ini"))).unwrap();
+        assert_eq!(s.list().unwrap().len(), 1 + 6 + again.len());
+        assert_ne!(views[0].conn.id, again[0].conn.id);
     }
 
     // Niente `assert_eq!` sulle password: in caso di errore finirebbero nell'output dei test.

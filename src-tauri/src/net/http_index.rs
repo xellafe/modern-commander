@@ -60,7 +60,7 @@ fn hex_val(b: u8) -> Option<u8> {
 }
 
 /// `%XX` in byte, poi UTF-8 (U+FFFD dove non lo è). Un `%` senza due cifre esadecimali resta com'è.
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
