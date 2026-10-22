@@ -1,5 +1,6 @@
 //! Coda delle operazioni. Un thread scheduler avvia i job nell'ordine della coda, al massimo un
-//! job alla volta per volume; ogni job avviato gira in un proprio thread worker (`runner`).
+//! job alla volta per volume (per connessione sul remoto); ogni job avviato gira in un proprio thread
+//! worker (`runner`).
 //!
 //! Stati finali: `Done` anche se alcuni elementi sono stati saltati dopo un errore (gli errori
 //! restano in `JobView.errors`); `Cancelled` se annullato dall'utente; `Failed` solo per un errore
@@ -8,13 +9,15 @@
 
 use super::exec::Executor;
 use super::model::{ConflictPolicy, Decision, JobKind, JobSpec, Meta};
+use super::plan::norm;
 use super::runner;
 use crate::error::{AppError, ErrorCode};
-use crate::paths::{normalize_lexical, same_path, volume_key};
+use crate::paths::{normalize_lexical, same_path};
+use crate::vfs::loc::Loc;
+use crate::vfs::router::Vfs;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -53,6 +56,7 @@ pub struct JobView {
     pub current: Option<String>,
     /// Media mobile sugli ultimi 2 s.
     pub speed_bps: u64,
+    /// Chiavi di scheduling (`Loc::volume_key`): unità o condivisione in locale, connessione sul remoto.
     pub volumes: Vec<String>,
     /// Cartella di destinazione di Copy/Move (per la barra di stato); `None` per le altre operazioni.
     pub dest: Option<String>,
@@ -80,12 +84,17 @@ pub enum Prompt {
     /// `can_delete_permanently`: il Cestino ha rifiutato l'elemento (`NO_RECYCLE_BIN`, oppure
     /// `INVALID_NAME` con detail `recycle_bin_unsupported_name`).
     Error { prompt_id: u64, job_id: JobId, error: AppError, can_elevate: bool, can_delete_permanently: bool },
+    /// Il server non permette la scrittura sicura (temporaneo e rinomina) su `path`: si scrive direttamente
+    /// solo se l'utente conferma.
+    UnsafeWrite { prompt_id: u64, job_id: JobId, path: String },
 }
 
 impl Prompt {
     pub fn prompt_id(&self) -> u64 {
         match self {
-            Prompt::Conflict { prompt_id, .. } | Prompt::Error { prompt_id, .. } => *prompt_id,
+            Prompt::Conflict { prompt_id, .. } | Prompt::Error { prompt_id, .. } | Prompt::UnsafeWrite { prompt_id, .. } => {
+                *prompt_id
+            }
         }
     }
 }
@@ -102,6 +111,9 @@ pub enum PromptReply {
     /// grande"...); con `apply_to_all` la politica vale per i conflitti successivi. Non `Ask`.
     ConflictPolicy { policy: ConflictPolicy, apply_to_all: bool },
     Error { action: ErrorAction, apply_to_all: bool },
+    /// `proceed = false` salta l'elemento (`UNSAFE_WRITE` tra gli errori del job); con `apply_to_all` la
+    /// risposta vale per il resto del job.
+    UnsafeWrite { proceed: bool, apply_to_all: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +178,7 @@ struct Inner {
     cv: Condvar,
     exec: Arc<dyn Executor>,
     elevate: Elevate,
+    vfs: Arc<Vfs>,
     sink: Sink,
 }
 
@@ -174,9 +187,9 @@ pub struct Queue(Arc<Inner>);
 
 impl Queue {
     // ponytail: lo scheduler non termina mai (nessuno shutdown all'uscita dell'app, per ora).
-    pub fn new(exec: Arc<dyn Executor>, elevate: Elevate, sink: Sink) -> Self {
+    pub fn new(exec: Arc<dyn Executor>, elevate: Elevate, vfs: Arc<Vfs>, sink: Sink) -> Self {
         let state = State { jobs: Vec::new(), next_id: 0, next_prompt: 0 };
-        let q = Queue(Arc::new(Inner { state: Mutex::new(state), cv: Condvar::new(), exec, elevate, sink }));
+        let q = Queue(Arc::new(Inner { state: Mutex::new(state), cv: Condvar::new(), exec, elevate, vfs, sink }));
         let s = q.clone();
         std::thread::spawn(move || s.schedule());
         q
@@ -232,7 +245,7 @@ impl Queue {
         std::thread::spawn(move || {
             // Un panico non deve lasciare il job `Running` con i volumi occupati per sempre.
             // (Con `panic = "abort"` del profilo release l'app termina comunque.)
-            let end = catch_unwind(AssertUnwindSafe(|| runner::run(&h, h.q.0.exec.clone(), &spec))).unwrap_or_else(|_| {
+            let end = catch_unwind(AssertUnwindSafe(|| runner::run(&h, h.q.0.exec.clone(), &h.q.0.vfs, &spec))).unwrap_or_else(|_| {
                 let e = AppError { detail: Some("internal_panic".into()), ..AppError::new(ErrorCode::Io, None) };
                 h.update(|v| v.errors.push(e));
                 JobState::Failed
@@ -242,8 +255,7 @@ impl Queue {
     }
 
     pub fn enqueue(&self, spec: JobSpec) -> JobId {
-        let mut volumes: Vec<String> =
-            spec.sources.iter().chain(spec.dest.iter()).map(|p| volume_key(&normalize_lexical(p))).collect();
+        let mut volumes: Vec<String> = spec.sources.iter().chain(spec.dest.iter()).map(|l| norm(l).volume_key()).collect();
         volumes.sort();
         volumes.dedup();
         let mut st = self.lock();
@@ -261,7 +273,7 @@ impl Queue {
             speed_bps: 0,
             volumes,
             dest: match spec.kind {
-                JobKind::Copy | JobKind::Move => spec.dest.as_ref().map(|d| d.to_string_lossy().into_owned()),
+                JobKind::Copy | JobKind::Move => spec.dest.as_ref().map(Loc::to_string),
                 _ => None,
             },
             errors: Vec::new(),
@@ -351,11 +363,12 @@ impl Queue {
             .ok_or_else(invalid)?;
         let valid = match (&job.view.prompt, &reply) {
             (Some(Prompt::Conflict { dst, .. }), PromptReply::Conflict { decision: Decision::Rename(new), .. }) => {
-                valid_rename(new, Path::new(dst))
+                Loc::parse(dst).is_ok_and(|dst| valid_rename(new, &dst))
             }
             (Some(Prompt::Conflict { .. }), PromptReply::Conflict { .. }) => true,
             (Some(Prompt::Conflict { .. }), PromptReply::ConflictPolicy { policy, .. }) => *policy != ConflictPolicy::Ask,
             (Some(Prompt::Error { .. }), PromptReply::Error { .. }) => true,
+            (Some(Prompt::UnsafeWrite { .. }), PromptReply::UnsafeWrite { .. }) => true,
             _ => false,
         };
         if !valid {
@@ -377,13 +390,20 @@ impl Queue {
 }
 
 /// Nome nuovo scelto dall'utente: assoluto, nella stessa cartella di `dst` e diverso da `dst`.
-fn valid_rename(new: &Path, dst: &Path) -> bool {
-    let (n, d) = (normalize_lexical(new), normalize_lexical(dst));
-    let same_parent = match (n.parent(), d.parent()) {
-        (Some(a), Some(b)) => same_path(a, b),
+fn valid_rename(new: &Loc, dst: &Loc) -> bool {
+    match (new, dst) {
+        (Loc::Local(new), Loc::Local(dst)) => {
+            let (n, d) = (normalize_lexical(new), normalize_lexical(dst));
+            let same_parent = match (n.parent(), d.parent()) {
+                (Some(a), Some(b)) => same_path(a, b),
+                _ => false,
+            };
+            new.is_absolute() && n.file_name().is_some() && same_parent && !same_path(&n, &d)
+        }
+        // Remoto: già pulito (`Loc::parse`); la stessa cartella vuol dire anche la stessa connessione.
+        (Loc::Remote { .. }, Loc::Remote { .. }) => new.file_name().is_some() && new.parent() == dst.parent() && new != dst,
         _ => false,
-    };
-    new.is_absolute() && n.file_name().is_some() && same_parent && !same_path(&n, &d)
+    }
 }
 
 /// Lato worker di un job avviato.
@@ -538,6 +558,10 @@ mod tests {
     use crate::ops::conflict::next_free_name;
     use crate::ops::exec::LocalExecutor;
     use crate::ops::model::ConflictPolicy;
+    use crate::vfs::loc::Loc;
+    use crate::vfs::mem::{self, MemProvider};
+    use crate::vfs::provider::Provider;
+    use crate::vfs::router::Vfs;
     use serde_json::json;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -672,15 +696,34 @@ mod tests {
     }
 
     fn queue_elevated(exec: Arc<dyn Executor>, elevate: Elevate) -> (Queue, mpsc::Receiver<Event>) {
+        queue_with(exec, elevate, mem::vfs(&[]))
+    }
+
+    fn queue_with(exec: Arc<dyn Executor>, elevate: Elevate, vfs: Vfs) -> (Queue, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel();
         let sink: Sink = Arc::new(move |e| {
             let _ = tx.send(e);
         });
-        (Queue::new(exec, elevate, sink), rx)
+        (Queue::new(exec, elevate, Arc::new(vfs), sink), rx)
+    }
+
+    /// Coda con le connessioni in memoria date; il locale passa per `LocalExecutor`.
+    fn queue_remote(conns: &[(&str, &Arc<MemProvider>)]) -> (Queue, mpsc::Receiver<Event>) {
+        queue_with(Arc::new(LocalExecutor), Arc::new(|| panic!("helper elevato non previsto")), mem::vfs(conns))
     }
 
     fn spec(kind: JobKind, sources: Vec<PathBuf>, dest: Option<&Path>, policy: ConflictPolicy) -> JobSpec {
-        JobSpec { kind, sources, dest: dest.map(Path::to_path_buf), filter: None, policy }
+        let sources = sources.into_iter().map(Loc::Local).collect();
+        JobSpec { kind, sources, dest: dest.map(|d| Loc::Local(d.to_path_buf())), filter: None, policy }
+    }
+
+    fn rspec(kind: JobKind, sources: &[&str], dest: Option<Loc>, policy: ConflictPolicy) -> JobSpec {
+        let sources = sources.iter().map(|s| Loc::parse(s).unwrap()).collect();
+        JobSpec { kind, sources, dest, filter: None, policy }
+    }
+
+    fn loc(s: &str) -> Loc {
+        Loc::parse(s).unwrap()
     }
 
     fn next_prompt(rx: &mpsc::Receiver<Event>) -> Prompt {
@@ -839,13 +882,13 @@ mod tests {
         assert_eq!(suggested_name.as_str(), new.to_str().unwrap());
         // Un nome nuovo relativo, in un'altra cartella o uguale a dst è rifiutato; il prompt resta.
         for bad in [PathBuf::from("a (2)"), d.path().join("altro").join("a (2)"), a.clone()] {
-            let r = q.reply(p.prompt_id(), PromptReply::Conflict { decision: Decision::Rename(bad.clone()), apply_to_all: false });
+            let r = q.reply(p.prompt_id(), PromptReply::Conflict { decision: Decision::Rename(Loc::Local(bad.clone())), apply_to_all: false });
             assert_eq!(r.unwrap_err().code, ErrorCode::InvalidRequest, "{bad:?}");
         }
         let r = q.reply(p.prompt_id(), PromptReply::ConflictPolicy { policy: ConflictPolicy::Ask, apply_to_all: false });
         assert_eq!(r.unwrap_err().code, ErrorCode::InvalidRequest);
         assert_eq!(q.list()[0].prompt.as_ref(), Some(&p));
-        reply_conflict(&q, &p, Decision::Rename(new.clone()), false);
+        reply_conflict(&q, &p, Decision::Rename(Loc::Local(new.clone())), false);
         let v = finish(&rx, id);
         assert_eq!((v.state, v.files_done, v.files_total), (Done, 4, 4));
         assert_eq!(std::fs::read(new.join("x.txt")).unwrap(), b"x");
@@ -1326,7 +1369,7 @@ mod tests {
                    "canElevate": true, "canDeletePermanently": false})
         );
         let r: PromptReply = serde_json::from_value(json!({"type": "conflict", "decision": {"type": "rename", "path": "x"}, "applyToAll": true})).unwrap();
-        assert_eq!(r, PromptReply::Conflict { decision: Decision::Rename("x".into()), apply_to_all: true });
+        assert_eq!(r, PromptReply::Conflict { decision: Decision::Rename(Loc::Local("x".into())), apply_to_all: true });
         let r: PromptReply = serde_json::from_value(json!({"type": "error", "action": {"type": "deletePermanent"}, "applyToAll": false})).unwrap();
         assert_eq!(r, PromptReply::Error { action: ErrorAction::DeletePermanent, apply_to_all: false });
         let r: PromptReply = serde_json::from_value(
@@ -1353,5 +1396,105 @@ mod tests {
         assert_eq!(v["speedBps"], json!(0));
         assert_eq!(v["prompt"], json!(null));
         assert_eq!(serde_json::to_value(ErrorCode::Unsupported).unwrap(), json!("UNSUPPORTED"));
+        let u = Prompt::UnsafeWrite { prompt_id: 1, job_id: 2, path: "sftp://m/f".into() };
+        assert_eq!(serde_json::to_value(&u).unwrap(), json!({"type": "unsafeWrite", "promptId": 1, "jobId": 2, "path": "sftp://m/f"}));
+        let r: PromptReply = serde_json::from_value(json!({"type": "unsafeWrite", "proceed": true, "applyToAll": false})).unwrap();
+        assert_eq!(r, PromptReply::UnsafeWrite { proceed: true, apply_to_all: false });
+    }
+
+    #[test]
+    fn download_invalid_windows_name_is_per_item() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/logs/a:b.log", b"x");
+        m.add_file("/logs/ok.log", b"ok");
+        let d = tempfile::tempdir().unwrap();
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let id = q.enqueue(rspec(JobKind::Copy, &["sftp://m/logs"], Some(Loc::Local(d.path().into())), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let Prompt::Error { error, can_elevate, .. } = &p else { panic!("{p:?}") };
+        assert_eq!(error.code, ErrorCode::InvalidName);
+        assert!(error.path.as_deref().is_some_and(|p| p.ends_with("a:b.log")), "{error:?}");
+        assert!(!can_elevate, "l'elevazione vale solo per il locale");
+        reply_error(&q, &p, ErrorAction::Skip, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Done, vec![ErrorCode::InvalidName]));
+        let logs = d.path().join("logs");
+        assert_eq!(std::fs::read(logs.join("ok.log")).unwrap(), b"ok");
+        assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn remote_dir_links_are_skipped() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/app/x.log", b"x");
+        m.add_dir_link("/app/current");
+        let d = tempfile::tempdir().unwrap();
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let id = q.enqueue(rspec(JobKind::Copy, &["sftp://m/app"], Some(Loc::Local(d.path().into())), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let Prompt::Error { error, .. } = &p else { panic!("{p:?}") };
+        let got = (error.code, error.path.as_deref(), error.detail.as_deref());
+        assert_eq!(got, (ErrorCode::Unsupported, Some("sftp://m/app/current"), Some("reparse_point")));
+        reply_error(&q, &p, ErrorAction::Skip, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 1));
+        assert_eq!(std::fs::read(d.path().join("app").join("x.log")).unwrap(), b"x");
+        assert!(!exists(&d.path().join("app").join("current")));
+    }
+
+    #[test]
+    fn jobs_on_same_connection_run_one_at_a_time() {
+        let (m, n) = (Arc::new(MemProvider::new()), Arc::new(MemProvider::new()));
+        m.add_file("/a.txt", b"nuovo");
+        m.add_file("/d/a.txt", b"vecchio");
+        let (q, rx) = queue_remote(&[("m", &m), ("n", &n)]);
+        // Il conflitto tiene il primo job in attesa, con la connessione occupata.
+        let first = q.enqueue(rspec(JobKind::Copy, &["sftp://m/a.txt"], Some(loc("sftp://m/d")), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        assert!(matches!(p, Prompt::Conflict { .. }), "{p:?}");
+        let second = q.enqueue(rspec(JobKind::Mkdir, &["sftp://m/x"], None, ConflictPolicy::Ask));
+        let third = q.enqueue(rspec(JobKind::Mkdir, &["sftp://n/y"], None, ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, third).state, Done);
+        let view = |id| q.list().into_iter().find(|j| j.id == id).unwrap();
+        assert_eq!(view(second).state, Queued);
+        assert_eq!(view(first).volumes, ["sftp://m"]);
+        reply_conflict(&q, &p, Decision::Overwrite, false);
+        assert_eq!(finish(&rx, first).state, Done);
+        assert_eq!(finish(&rx, second).state, Done);
+        assert_eq!(m.data("/d/a.txt").unwrap(), b"nuovo");
+        assert!(m.stat("/x").unwrap().is_dir && n.stat("/y").unwrap().is_dir);
+    }
+
+    #[test]
+    fn unsafe_write_is_asked_once_per_job_with_apply_to_all() {
+        let mut m = MemProvider::new();
+        m.atomic_replace = false;
+        let m = Arc::new(m);
+        for f in ["1", "2"] {
+            m.add_file(&format!("/s/{f}"), b"nuovo");
+            m.add_file(&format!("/d/{f}"), b"vecchio");
+        }
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let sources = ["sftp://m/s/1", "sftp://m/s/2"];
+        let job = |q: &Queue| q.enqueue(rspec(JobKind::Copy, &sources, Some(loc("sftp://m/d")), ConflictPolicy::Overwrite));
+        let id = job(&q);
+        let p = next_prompt(&rx);
+        let Prompt::UnsafeWrite { job_id, path, .. } = &p else { panic!("{p:?}") };
+        assert_eq!((*job_id, path.as_str()), (id, "sftp://m/d/1"));
+        q.reply(p.prompt_id(), PromptReply::UnsafeWrite { proceed: true, apply_to_all: true }).unwrap();
+        let v = finish(&rx, id); // nessun secondo prompt
+        assert_eq!((v.state, v.errors.len()), (Done, 0));
+        assert_eq!((m.data("/d/1").unwrap(), m.data("/d/2").unwrap()), (b"nuovo".to_vec(), b"nuovo".to_vec()));
+
+        // "Annulla" lascia la destinazione com'era e la segna tra gli errori del job.
+        m.add_file("/d/1", b"vecchio");
+        m.add_file("/d/2", b"vecchio");
+        let id = job(&q);
+        let p = next_prompt(&rx);
+        assert!(q.reply(p.prompt_id(), PromptReply::Error { action: ErrorAction::Skip, apply_to_all: false }).is_err());
+        q.reply(p.prompt_id(), PromptReply::UnsafeWrite { proceed: false, apply_to_all: true }).unwrap();
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Done, vec![ErrorCode::UnsafeWrite; 2]));
+        assert_eq!((m.data("/d/1").unwrap(), m.data("/d/2").unwrap()), (b"vecchio".to_vec(), b"vecchio".to_vec()));
     }
 }

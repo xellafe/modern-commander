@@ -5,7 +5,7 @@ import { useUi } from "../../state/ui";
 import { ConflictDialog } from "./ConflictDialog";
 import { CopyMoveDialog } from "./CopyMoveDialog";
 import { DeleteConfirm } from "./DeleteConfirm";
-import { ErrorDialog } from "./ErrorDialog";
+import { ErrorDialog, UnsafeWriteDialog } from "./ErrorDialog";
 import { ExitConfirm } from "./ExitConfirm";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
@@ -82,7 +82,9 @@ export function DialogHost() {
     case "saveError": return <SaveErrorDialog req={dialog} />;
   }
   if (!prompt) return null;
-  return prompt.type === "conflict"
-    ? <ConflictDialog key={prompt.promptId} prompt={prompt} />
-    : <ErrorDialog key={prompt.promptId} prompt={prompt} />;
+  switch (prompt.type) {
+    case "conflict": return <ConflictDialog key={prompt.promptId} prompt={prompt} />;
+    case "unsafeWrite": return <UnsafeWriteDialog key={prompt.promptId} prompt={prompt} />;
+    default: return <ErrorDialog key={prompt.promptId} prompt={prompt} />;
+  }
 }

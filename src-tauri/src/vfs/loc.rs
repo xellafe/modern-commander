@@ -154,6 +154,11 @@ impl Loc {
     pub fn is_remote(&self) -> bool {
         matches!(self, Loc::Remote { .. })
     }
+
+    /// Errore su questa posizione: `path` è la sua forma testuale.
+    pub fn error(&self, code: ErrorCode) -> AppError {
+        AppError::new(code, Some(Path::new(&self.to_string())))
+    }
 }
 
 impl fmt::Display for Loc {

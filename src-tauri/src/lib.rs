@@ -53,7 +53,8 @@ pub fn run() {
                     Event::Prompt(p) => handle.emit("job-prompt", p),
                 };
             });
-            app.manage(Queue::new(Arc::new(ops::exec::LocalExecutor), Arc::new(elevation::shared), sink));
+            let vfs = app.state::<Arc<vfs::router::Vfs>>().inner().clone();
+            app.manage(Queue::new(Arc::new(ops::exec::LocalExecutor), Arc::new(elevation::shared), vfs, sink));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use crate::vfs::loc::Loc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -28,13 +28,13 @@ pub enum ConflictPolicy {
 /// Per Copy/Move `dest` è la cartella di destinazione, salvo con un solo file come sorgente e una
 /// `dest` che non è una cartella esistente né termina con `\`: allora è il nome del file da creare
 /// (`plan::file_target`, regola di TC). Per Rename il nuovo percorso completo; per Mkdir il
-/// percorso da creare è `sources[0]`.
+/// percorso da creare è `sources[0]`. Sorgenti e destinazione sono posizioni, locali o remote (stringhe nel JSON).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSpec {
     pub kind: JobKind,
-    pub sources: Vec<PathBuf>,
-    pub dest: Option<PathBuf>,
+    pub sources: Vec<Loc>,
+    pub dest: Option<Loc>,
     /// Maschera TC applicata ai soli file.
     pub filter: Option<String>,
     pub policy: ConflictPolicy,
@@ -44,8 +44,8 @@ pub struct JobSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileItem {
-    pub src: PathBuf,
-    pub dst: Option<PathBuf>,
+    pub src: Loc,
+    pub dst: Option<Loc>,
     pub is_dir: bool,
     pub size: u64,
     /// Cartella vera il cui contenuto non è nell'elenco: si elenca durante l'esecuzione, se serve
@@ -80,7 +80,7 @@ pub struct Meta {
 pub enum Decision {
     Overwrite,
     Skip,
-    Rename(PathBuf),
+    Rename(Loc),
     Cancel,
 }
 
@@ -93,7 +93,7 @@ mod tests {
     fn serde_shapes() {
         let spec = JobSpec {
             kind: JobKind::Delete { permanent: true },
-            sources: vec![PathBuf::from(r"C:\a")],
+            sources: vec![Loc::Local(r"C:\a".into())],
             dest: None,
             filter: None,
             policy: ConflictPolicy::OverwriteIfNewer,
@@ -106,13 +106,13 @@ mod tests {
         );
         assert_eq!(serde_json::from_value::<JobSpec>(v).unwrap(), spec);
 
-        let r = Decision::Rename(PathBuf::from(r"C:\f (2).txt"));
+        let r = Decision::Rename(Loc::Local(r"C:\f (2).txt".into()));
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v, json!({"type": "rename", "path": r"C:\f (2).txt"}));
         assert_eq!(serde_json::from_value::<Decision>(v).unwrap(), r);
         assert_eq!(serde_json::to_value(Decision::Skip).unwrap(), json!({"type": "skip"}));
 
-        let item = FileItem { src: PathBuf::from("a"), dst: None, is_dir: true, size: 0, unlisted: false };
+        let item = FileItem { src: Loc::Local("a".into()), dst: None, is_dir: true, size: 0, unlisted: false };
         assert_eq!(
             serde_json::to_value(&item).unwrap(),
             json!({"src": "a", "dst": null, "isDir": true, "size": 0, "unlisted": false})

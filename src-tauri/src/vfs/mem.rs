@@ -3,6 +3,7 @@
 
 use super::loc::Scheme;
 use super::provider::{Caps, Connector, Provider, Purpose, Stat};
+use super::router::Vfs;
 use crate::error::{AppError, ErrorCode};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
@@ -12,6 +13,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 struct Node {
     dir: bool,
+    /// Collegamento a cartella (`Stat.dir_link`): si elenca come cartella, senza contenuto.
+    link: bool,
     data: Vec<u8>,
     modified_ms: Option<i64>,
     mode: Option<u32>,
@@ -37,6 +40,11 @@ impl Connector for MemConnector {
         let p = self.0.get(conn).ok_or_else(|| AppError::new(ErrorCode::NotFound, None))?;
         Ok(p.clone())
     }
+}
+
+/// `Vfs` con le connessioni date per id (nessuna: ogni posizione remota dà `NOT_FOUND`).
+pub fn vfs(conns: &[(&str, &Arc<MemProvider>)]) -> Vfs {
+    Vfs::new(Arc::new(MemConnector(conns.iter().map(|(id, p)| (id.to_string(), Arc::clone(p))).collect())))
 }
 
 fn parent(path: &str) -> &str {
@@ -105,6 +113,12 @@ impl MemProvider {
         self.nodes.lock().unwrap().insert(path.to_owned(), node);
     }
 
+    /// Crea un collegamento a cartella (come `current -> releases/...`).
+    pub fn add_dir_link(&self, path: &str) {
+        self.add_dir(parent(path));
+        self.nodes.lock().unwrap().insert(path.to_owned(), Node { dir: true, link: true, ..Node::default() });
+    }
+
     /// Contenuto di un file, per le verifiche dei test.
     pub fn data(&self, path: &str) -> Option<Vec<u8>> {
         self.nodes.lock().unwrap().get(path).filter(|n| !n.dir).map(|n| n.data.clone())
@@ -142,7 +156,7 @@ impl Provider for MemProvider {
         let nodes = self.nodes.lock().unwrap();
         let n = nodes.get(path).ok_or_else(|| err(ErrorCode::NotFound, path))?;
         let name = path.rsplit('/').next().unwrap_or_default().to_owned();
-        Ok(Stat { name, is_dir: n.dir, dir_link: false, size: n.data.len() as u64, modified_ms: n.modified_ms, mode: n.mode })
+        Ok(Stat { name, is_dir: n.dir, dir_link: n.link, size: n.data.len() as u64, modified_ms: n.modified_ms, mode: n.mode })
     }
 
     fn list(&self, path: &str) -> Result<Vec<Stat>, AppError> {

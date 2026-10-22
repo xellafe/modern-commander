@@ -9,6 +9,8 @@ use super::model::{JobKind, JobSpec, ListEntry};
 use super::plan::file_target;
 use crate::error::AppError;
 use crate::paths::{is_within, normalize_lexical, to_extended};
+use crate::vfs::loc::Loc;
+use crate::vfs::router::Vfs;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -62,13 +64,14 @@ fn final_path(dir: &Path) -> Option<PathBuf> {
 /// Radici di un job, normalizzate: la cartella padre di ogni sorgente; `dest` se è la cartella di
 /// destinazione di Copy/Move, altrimenti (nome di file, `file_target`, o Rename) la sua cartella padre.
 /// Una radice non è mai l'elemento su cui si opera: risolverla seguirebbe un collegamento.
-pub(crate) fn job_roots(spec: &JobSpec) -> Vec<PathBuf> {
+/// Solo le posizioni locali: l'helper elevato non tocca mai il remoto.
+pub(crate) fn job_roots(spec: &JobSpec, vfs: &Vfs) -> Vec<PathBuf> {
     let parent = |p: &Path| normalize_lexical(p).parent().map(Path::to_path_buf);
-    let dest_dir = spec.dest.as_deref().and_then(|d| match spec.kind {
-        JobKind::Copy | JobKind::Move if !file_target(spec) => Some(normalize_lexical(d)),
+    let dest_dir = spec.dest.as_ref().and_then(Loc::as_local).and_then(|d| match spec.kind {
+        JobKind::Copy | JobKind::Move if !file_target(spec, vfs) => Some(normalize_lexical(d)),
         _ => parent(d),
     });
-    spec.sources.iter().filter_map(|s| parent(s)).chain(dest_dir).collect()
+    spec.sources.iter().filter_map(Loc::as_local).filter_map(parent).chain(dest_dir).collect()
 }
 
 /// Esecutore elevato di un job: ogni percorso che sta sotto l'àncora di una radice (la più lunga)
@@ -235,7 +238,21 @@ mod tests {
     }
 
     fn spec(kind: JobKind, src: PathBuf, dest: PathBuf) -> JobSpec {
-        JobSpec { kind, sources: vec![src], dest: Some(dest), filter: None, policy: ConflictPolicy::Ask }
+        JobSpec { kind, sources: vec![Loc::Local(src)], dest: Some(Loc::Local(dest)), filter: None, policy: ConflictPolicy::Ask }
+    }
+
+    fn job_roots(spec: &JobSpec) -> Vec<PathBuf> {
+        super::job_roots(spec, &crate::vfs::mem::vfs(&[]))
+    }
+
+    #[test]
+    fn remote_locations_are_never_roots() {
+        let d = tempfile::tempdir().unwrap();
+        let remote = Loc::parse("sftp://m/a/b").unwrap();
+        let up = JobSpec { sources: vec![Loc::Local(d.path().join("f"))], dest: Some(remote.clone()), ..spec(JobKind::Copy, d.path().into(), d.path().into()) };
+        assert_eq!(job_roots(&up), [normalize_lexical(d.path())]);
+        let down = JobSpec { sources: vec![remote], dest: Some(Loc::Local(d.path().into())), ..up };
+        assert_eq!(job_roots(&down), [normalize_lexical(d.path())]);
     }
 
     /// Una destinazione che è un symlink a file non diventa una radice: la mappatura non lo segue.

@@ -105,6 +105,19 @@ pub fn has_trailing_dot_or_space(p: &Path) -> bool {
     })
 }
 
+/// Nome che Windows non accetta come componente (come `nameError` nel frontend, più i nomi riservati):
+/// vuoto, con `< > : " / \ | ? *` o caratteri di controllo, `CON`/`PRN`/`AUX`/`NUL`/`COM1-9`/`LPT1-9` anche
+/// con estensione, oppure finito con un punto o uno spazio. Serve per i nomi che arrivano da un server remoto.
+pub fn invalid_windows_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end_matches(' ').to_ascii_uppercase();
+    let numbered = stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && matches!(stem.as_bytes()[3], b'1'..=b'9');
+    name.is_empty()
+        || name.ends_with(['.', ' '])
+        || name.chars().any(|c| c < ' ' || r#"<>:"/\|?*"#.contains(c))
+        || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || numbered
+}
+
 /// Chiave del volume (`C:` oppure `\\SERVER\SHARE`) in maiuscolo; stringa vuota senza prefisso.
 pub fn volume_key(p: &Path) -> String {
     match p.components().next() {
@@ -162,6 +175,16 @@ mod tests {
         assert_eq!(volume_key(Path::new(r"c:\x")), "C:");
         assert_eq!(volume_key(Path::new(r"\\Srv\Share\x")), r"\\SRV\SHARE");
         assert_eq!(volume_key(Path::new(r"rel\x")), "");
+    }
+
+    #[test]
+    fn windows_names() {
+        for bad in ["a:b.log", "x?", "a\\b", "a/b", "..", ".", "fine.", "fine ", "", "con", "NUL.txt", "Com1.log", "lpt9", "aux .x", "a\u{1}"] {
+            assert!(invalid_windows_name(bad), "{bad:?}");
+        }
+        for ok in ["ok.log", ".bashrc", "console", "com0", "COM10", "è%20#1.log", "a b"] {
+            assert!(!invalid_windows_name(ok), "{ok:?}");
+        }
     }
 
     #[test]
