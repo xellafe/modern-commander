@@ -78,10 +78,11 @@ pub(crate) fn save(
     password: Option<String>,
     remember: bool,
 ) -> Result<ConnectionView, AppError> {
+    let is_new = conn.id.is_empty();
     {
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut all = load(dir)?;
-        if conn.id.is_empty() {
+        if is_new {
             conn.id = uuid::Uuid::new_v4().to_string();
             all.push(conn.clone());
         } else {
@@ -93,8 +94,20 @@ pub(crate) fn save(
         }
         store(dir, &all)?;
     }
-    if remember && let Some(pw) = &password {
-        creds.store(&conn.id, &conn.user, pw)?;
+    if remember
+        && let Some(pw) = &password
+        && let Err(e) = creds.store(&conn.id, &conn.user, pw)
+    {
+        // Una connessione nuova senza la sua password non resta: il frontend non ne ha ricevuto l'id e riprovando
+        // creerebbe un doppione. Una modifica resta salvata (riprovando si riscrive la stessa).
+        if is_new {
+            let _guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            if let Ok(mut all) = load(dir) {
+                all.retain(|c| c.id != conn.id);
+                let _ = store(dir, &all);
+            }
+        }
+        return Err(e);
     }
     Ok(view(creds, conn))
 }
@@ -164,7 +177,32 @@ mod tests {
         trust::accept_in(d, "ssh", "other.org", 22, "SHA256:a").unwrap();
         delete(d, &creds, &view.conn.id).unwrap();
         assert!(list(d, &creds).unwrap().is_empty());
-        assert_eq!(creds.load(&view.conn.id).unwrap(), None);
+        assert!(creds.load(&view.conn.id).unwrap().is_none());
         assert_eq!(trust::check_in(d, "ssh", "other.org", 22, "SHA256:a").unwrap(), Trust::Unknown);
+    }
+
+    /// Credential Manager che rifiuta di salvare.
+    struct Refuses;
+
+    impl Secrets for Refuses {
+        fn store(&self, _: &str, _: &str, _: &str) -> Result<(), AppError> {
+            Err(AppError::new(ErrorCode::AccessDenied, None))
+        }
+        fn load(&self, _: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+        fn delete(&self, _: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn new_connection_is_not_kept_if_its_password_cannot_be_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let e = save(d, &Refuses, sample(Scheme::Sftp), Some("pw".into()), true).unwrap_err();
+        assert_eq!(e.code, ErrorCode::AccessDenied);
+        // Il frontend non ha ricevuto l'id: riprovando non deve nascere un doppione.
+        assert!(list(d, &Refuses).unwrap().is_empty());
     }
 }

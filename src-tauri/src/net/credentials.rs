@@ -140,11 +140,12 @@ mod tests {
     #[ignore = "tocca il Credential Manager vero"]
     fn credential_manager_roundtrip() {
         let id = format!("test-{}", uuid::Uuid::new_v4());
-        assert_eq!(load(&id).unwrap(), None);
+        // Niente `assert_eq!`: in caso di errore la password finirebbe nell'output del test.
+        assert!(load(&id).unwrap().is_none());
         store(&id, "utente", "pàss wörd").unwrap();
-        assert_eq!(load(&id).unwrap().as_deref(), Some("pàss wörd"));
+        assert!(load(&id).unwrap().as_deref() == Some("pàss wörd"));
         delete(&id).unwrap();
-        assert_eq!(load(&id).unwrap(), None);
+        assert!(load(&id).unwrap().is_none());
         // Eliminare una password che non c'è non è un errore.
         delete(&id).unwrap();
     }
