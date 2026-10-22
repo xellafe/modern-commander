@@ -14,9 +14,10 @@ use std::path::Path;
 const BLOCK: usize = 256 * 1024;
 
 /// Copia `src` su `dst`; senza `replace` una destinazione esistente dà `ALREADY_EXISTS`. `progress(byte)` dopo
-/// ogni blocco: con `false` si annulla (`CANCELLED`). Se la scrittura sicura non si può fare (il temporaneo è
-/// rifiutato con `ACCESS_DENIED`, oppure `dst` esiste e il server non rinomina sopra un file), si scrive
-/// direttamente su `dst` solo se `confirm_unsafe(dst)` lo permette; altrimenti `CANCELLED` e `dst` resta intatto.
+/// ogni blocco: con `false` si annulla (`CANCELLED`). Se la scrittura sicura sul remoto non si può fare (il
+/// temporaneo è rifiutato con `ACCESS_DENIED`, oppure `dst` esiste e il server non rinomina sopra un file), si
+/// scrive direttamente su `dst` solo se `confirm_unsafe(dst)` lo permette; altrimenti `CANCELLED` e `dst` resta
+/// intatto. Si decide (e si chiede) prima di aprire la sorgente: un canale dati FTP non resta fermo intanto.
 pub fn copy(
     vfs: &Vfs,
     src: &Loc,
@@ -31,37 +32,55 @@ pub fn copy(
     {
         return Err(dst.error(ErrorCode::InvalidName));
     }
-    let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
-    let mut reader = sp.reader(&spath)?;
-    let modified = sp.stat(&spath)?.modified_ms;
     let (dp, dpath) = vfs.endpoint(dst, Purpose::Transfer)?;
     let existing = dp.stat(&dpath).ok();
     // I permessi POSIX del file che si sostituisce; in locale non ci sono.
     let mode = existing.as_ref().filter(|_| dst.is_remote()).and_then(|s| s.mode);
-    if existing.is_none() || !replace || dp.caps().atomic_replace {
-        let tmp = format!("{dpath}.{}{PART_SUFFIX}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let tmp = format!("{dpath}.{}{PART_SUFFIX}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let safe = if existing.is_some() && replace && !dp.caps().atomic_replace {
+        None
+    } else {
         match dp.writer(&tmp, true) {
-            Ok(w) => {
-                let r = pump(&mut reader, w, &spath, &tmp, progress).and_then(|()| {
-                    let _ = dp.set_meta(&tmp, modified, mode);
-                    dp.rename(&tmp, &dpath, replace)
-                });
-                if r.is_err() {
-                    let _ = dp.delete(&tmp, false);
-                }
-                return r;
-            }
-            Err(e) if e.code == ErrorCode::AccessDenied => {}
+            Ok(w) => Some(w),
+            // Sul remoto la cartella può non essere scrivibile e il file sì; in locale resta un errore.
+            Err(e) if e.code == ErrorCode::AccessDenied && dst.is_remote() => None,
             Err(e) => return Err(e),
         }
-    }
-    if !confirm_unsafe(dst) {
+    };
+    let used_tmp = safe.is_some();
+    if !used_tmp && !confirm_unsafe(dst) {
         return Err(dst.error(ErrorCode::Cancelled));
     }
-    // ponytail: un annullamento o una connessione caduta qui lasciano `dst` incompleto; è il rischio che l'utente ha accettato.
-    pump(&mut reader, dp.writer(&dpath, !replace)?, &spath, &dpath, progress)?;
-    let _ = dp.set_meta(&dpath, modified, mode);
-    Ok(())
+    // ponytail: nella scrittura diretta un annullamento o una connessione caduta lasciano incompleto un file che
+    // c'era già; è il rischio che l'utente ha accettato.
+    let (target, w) = match safe {
+        Some(w) => (tmp.as_str(), w),
+        None => (dpath.as_str(), dp.writer(&dpath, !replace)?),
+    };
+    let r = send(vfs, src, w, target, progress).and_then(|modified| {
+        let _ = dp.set_meta(target, modified, mode);
+        if used_tmp { dp.rename(&tmp, &dpath, replace) } else { Ok(()) }
+    });
+    // Il temporaneo si elimina; nella scrittura diretta anche il file, se prima non c'era.
+    if r.is_err() && (used_tmp || existing.is_none()) {
+        let _ = dp.delete(target, false);
+    }
+    r
+}
+
+/// Apre la sorgente e la copia su `w`; restituisce la sua data di modifica.
+fn send(
+    vfs: &Vfs,
+    src: &Loc,
+    w: Box<dyn Write + Send>,
+    target: &str,
+    progress: &mut dyn FnMut(u64) -> bool,
+) -> Result<Option<i64>, AppError> {
+    let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
+    let mut reader = sp.reader(&spath)?;
+    let modified = sp.stat(&spath)?.modified_ms;
+    pump(&mut reader, w, &spath, target, progress)?;
+    Ok(modified)
 }
 
 /// Copia a blocchi; il writer si chiude prima di tornare (anche dopo un errore).
@@ -190,5 +209,19 @@ mod tests {
         let mut m = MemProvider::new();
         m.writable_dirs = Some(HashSet::new());
         unsafe_write_asks(m);
+    }
+
+    #[test]
+    fn unsafe_write_is_asked_before_opening_the_source() {
+        let mut m = MemProvider::new();
+        m.atomic_replace = false;
+        let m = Arc::new(m);
+        m.add_file("/d/f", b"vecchio");
+        let v = vfs(&[("m", &m)]);
+        // La sorgente non esiste: se si aprisse prima di chiedere, l'errore sarebbe `NOT_FOUND`.
+        let mut asked = 0;
+        let e = copy(&v, &loc("sftp://m/manca"), &loc("sftp://m/d/f"), true, &mut |_| { asked += 1; false }, &mut |_| true);
+        assert_eq!((e.unwrap_err().code, asked), (ErrorCode::Cancelled, 1));
+        assert_eq!(m.data("/d/f").unwrap(), b"vecchio");
     }
 }

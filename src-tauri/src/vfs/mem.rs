@@ -30,6 +30,8 @@ pub struct MemProvider {
     pub atomic_replace: bool,
     /// Se c'è, solo queste cartelle accettano nomi nuovi, rinomine ed eliminazioni; un file esistente si riscrive comunque.
     pub writable_dirs: Option<HashSet<String>>,
+    /// `false`: date al minuto, come un server FTP senza `MDTM`.
+    pub precise_mtime: bool,
 }
 
 /// Le connessioni per id.
@@ -93,7 +95,7 @@ impl Write for MemWriter {
 impl MemProvider {
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -149,7 +151,7 @@ fn dir_exists(nodes: &BTreeMap<String, Node>, path: &str) -> Result<(), AppError
 
 impl Provider for MemProvider {
     fn caps(&self) -> Caps {
-        Caps { writable: true, atomic_replace: self.atomic_replace, precise_mtime: true, ranged_read: true }
+        Caps { writable: true, atomic_replace: self.atomic_replace, precise_mtime: self.precise_mtime, ranged_read: true }
     }
 
     fn stat(&self, path: &str) -> Result<Stat, AppError> {

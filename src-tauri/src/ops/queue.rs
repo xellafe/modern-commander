@@ -1497,4 +1497,94 @@ mod tests {
         assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Done, vec![ErrorCode::UnsafeWrite; 2]));
         assert_eq!((m.data("/d/1").unwrap(), m.data("/d/2").unwrap()), (b"vecchio".to_vec(), b"vecchio".to_vec()));
     }
+
+    #[test]
+    fn move_between_providers_deletes_the_source_only_after_the_transfer() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/giu.txt", b"scaricato");
+        let mut n = MemProvider::new();
+        n.fail_read_after = Some(10);
+        let n = Arc::new(n);
+        n.add_file("/rotto.txt", &[7u8; 100]);
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("D")).unwrap();
+        let up = d.path().join("su.txt");
+        std::fs::write(&up, b"caricato").unwrap();
+        let (q, rx) = queue_remote(&[("m", &m), ("n", &n)]);
+        let local = || Some(Loc::Local(d.path().join("D")));
+        // Download: la copia locale va su disco, poi si elimina la sorgente remota.
+        let id = q.enqueue(rspec(JobKind::Move, &["sftp://m/giu.txt"], local(), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(std::fs::read(d.path().join("D").join("giu.txt")).unwrap(), b"scaricato");
+        assert_eq!(m.data("/giu.txt"), None);
+        // Upload.
+        m.add_dir("/su");
+        let upload = JobSpec { dest: Some(loc("sftp://m/su")), ..spec(JobKind::Move, vec![up.clone()], None, ConflictPolicy::Ask) };
+        let id = q.enqueue(upload);
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!(m.data("/su/su.txt").unwrap(), b"caricato");
+        assert!(!exists(&up));
+        // Connessione caduta a metà: la sorgente resta e la destinazione non c'è.
+        let id = q.enqueue(rspec(JobKind::Move, &["sftp://n/rotto.txt"], local(), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let Prompt::Error { error, .. } = &p else { panic!("{p:?}") };
+        assert_eq!(error.code, ErrorCode::ConnectionFailed);
+        reply_error(&q, &p, ErrorAction::Skip, false);
+        assert_eq!(finish(&rx, id).state, Done);
+        assert!(n.data("/rotto.txt").is_some());
+        let names: Vec<String> =
+            std::fs::read_dir(d.path().join("D")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert_eq!(names, ["giu.txt"]);
+    }
+
+    #[test]
+    fn same_connection_move_is_a_rename() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/a/x", b"x");
+        m.add_file("/a/s/y", b"y");
+        m.add_dir("/b");
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let id = q.enqueue(rspec(JobKind::Move, &["sftp://m/a"], Some(loc("sftp://m/b")), ConflictPolicy::Ask));
+        let v = finish(&rx, id);
+        // Un solo elemento: la cartella si rinomina in blocco, senza elencarla.
+        assert_eq!((v.state, v.files_total), (Done, 1));
+        assert_eq!((m.data("/b/a/x").unwrap(), m.data("/b/a/s/y").unwrap()), (b"x".to_vec(), b"y".to_vec()));
+        assert!(m.stat("/a").is_err());
+    }
+
+    #[test]
+    fn same_connection_move_over_a_file_without_atomic_rename_asks() {
+        let mut m = MemProvider::new();
+        m.atomic_replace = false;
+        let m = Arc::new(m);
+        m.add_file("/s/f", b"nuovo");
+        m.add_file("/d/f", b"vecchio");
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let id = q.enqueue(rspec(JobKind::Move, &["sftp://m/s/f"], Some(loc("sftp://m/d")), ConflictPolicy::Overwrite));
+        let p = next_prompt(&rx);
+        assert!(matches!(&p, Prompt::UnsafeWrite { path, .. } if path == "sftp://m/d/f"), "{p:?}");
+        q.reply(p.prompt_id(), PromptReply::UnsafeWrite { proceed: true, apply_to_all: false }).unwrap();
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!((m.data("/d/f").unwrap(), m.data("/s/f")), (b"nuovo".to_vec(), None));
+    }
+
+    #[test]
+    fn newer_policy_compares_imprecise_dates_at_minute_precision() {
+        let mut m = MemProvider::new();
+        m.precise_mtime = false;
+        let m = Arc::new(m);
+        let t = 1_700_000_040_000; // multiplo di 60 s
+        // a: stesso minuto della destinazione (resta), b: un minuto dopo (si sovrascrive).
+        for (f, src_ms) in [("a", t + 30_000), ("b", t + 70_000)] {
+            m.add_file(&format!("/s/{f}"), b"nuovo");
+            m.add_file(&format!("/d/{f}"), b"vecchio");
+            m.set_meta(&format!("/s/{f}"), Some(src_ms), None).unwrap();
+            m.set_meta(&format!("/d/{f}"), Some(t + 10_000), None).unwrap();
+        }
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let sources = ["sftp://m/s/a", "sftp://m/s/b"];
+        let id = q.enqueue(rspec(JobKind::Copy, &sources, Some(loc("sftp://m/d")), ConflictPolicy::OverwriteIfNewer));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!((m.data("/d/a").unwrap(), m.data("/d/b").unwrap()), (b"vecchio".to_vec(), b"nuovo".to_vec()));
+    }
 }

@@ -461,16 +461,19 @@ impl Runner<'_> {
     /// Decisione per una destinazione esistente. Una sovrascrittura (dalla politica, dall'utente
     /// o "per tutti") di un file su se stesso diventa un errore `SAME_FILE`.
     fn decide(&mut self, src: &Loc, dst: &Loc) -> Result<Decision, Fail> {
-        let (sm, dm) = (meta(self.vfs, src)?, meta(self.vfs, dst)?);
+        let (s, d) = (meta(self.vfs, src)?, meta(self.vfs, dst)?);
+        let (sm, dm) = (s.0, d.0);
+        // `resolve` confronta le date alla precisione che hanno; il prompt mostra quelle vere.
+        let cmp = comparable(s, d);
         let d = match self.conflict_all.clone() {
             Some(Decision::Rename(_)) => Decision::Rename(free_name(self.vfs, dst)),
             Some(d) => d,
-            None => match resolve(self.vfs, &self.policy, src, dst, &sm, &dm) {
+            None => match resolve(self.vfs, &self.policy, src, dst, &cmp.0, &cmp.1) {
                 Ok(Some(d)) => d,
-                Ok(None) => self.ask_conflict(src, dst, sm, dm)?,
+                Ok(None) => self.ask_conflict(src, dst, sm, dm, cmp)?,
                 // Stesso file con Ask: l'utente può ancora rinominare o saltare.
                 Err(e) if e.code == ErrorCode::SameFile && self.policy == ConflictPolicy::Ask => {
-                    self.ask_conflict(src, dst, sm, dm)?
+                    self.ask_conflict(src, dst, sm, dm, cmp)?
                 }
                 Err(e) => return Err(e.into()),
             },
@@ -482,7 +485,8 @@ impl Runner<'_> {
         }
     }
 
-    fn ask_conflict(&mut self, src: &Loc, dst: &Loc, src_meta: Meta, dst_meta: Meta) -> Result<Decision, Fail> {
+    /// `cmp`: i metadati per `resolve` (vedi `comparable`).
+    fn ask_conflict(&mut self, src: &Loc, dst: &Loc, src_meta: Meta, dst_meta: Meta, cmp: (Meta, Meta)) -> Result<Decision, Fail> {
         let job_id = self.h.job_id();
         let same = same_loc(src, dst);
         let suggested = free_name(self.vfs, dst);
@@ -509,7 +513,7 @@ impl Runner<'_> {
                     self.policy = policy.clone();
                 }
                 // `reply` rifiuta `Ask`: con le altre politiche `resolve` decide sempre.
-                Ok(resolve(self.vfs, &policy, src, dst, &src_meta, &dst_meta)?.unwrap_or(Decision::Skip))
+                Ok(resolve(self.vfs, &policy, src, dst, &cmp.0, &cmp.1)?.unwrap_or(Decision::Skip))
             }
             _ => Err(Fail::Stop),
         }
@@ -565,12 +569,17 @@ impl Runner<'_> {
     }
 
     /// Spostamento in blocco: `move_path` in locale, `Provider::rename` nella stessa connessione; tra
-    /// provider diversi `NOT_SAME_DEVICE`, e chi chiama ripiega su copia ed eliminazione.
+    /// provider diversi `NOT_SAME_DEVICE`, e chi chiama ripiega su copia ed eliminazione. Lo stesso se si
+    /// sovrascrive su un server che non rinomina sopra un file: la copia passa dall'avviso della scrittura
+    /// non sicura.
     fn move_path(&self, src: &Loc, dst: &Loc, overwrite: bool) -> Result<(), AppError> {
         match (src, dst) {
             (Loc::Local(s), Loc::Local(d)) => self.exec.move_path(s, d, overwrite),
             _ if src.is_remote() && src.volume_key() == dst.volume_key() => {
                 let ((p, from), (_, to)) = (self.remote(src)?, self.remote(dst)?);
+                if overwrite && !p.caps().atomic_replace {
+                    return Err(src.error(ErrorCode::NotSameDevice));
+                }
                 p.rename(&from, &to, overwrite)
             }
             _ => Err(src.error(ErrorCode::NotSameDevice)),
@@ -586,6 +595,7 @@ impl Runner<'_> {
 
     /// Copia di un file: tra due posizioni locali con l'esecutore, altrimenti con `transfer::copy`. Un
     /// "Annulla" sull'avviso della scrittura non sicura diventa `UNSAFE_WRITE`, che salta l'elemento.
+    /// Con `flush` una copia locale è su disco prima di tornare (il Move poi elimina la sorgente).
     fn copy_file(&mut self, src: &Loc, dst: &Loc, overwrite: bool, flush: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError> {
         if let (Loc::Local(s), Loc::Local(d)) = (src, dst) {
             return self.exec.copy_file(s, d, overwrite, flush, progress);
@@ -598,9 +608,14 @@ impl Runner<'_> {
             ok
         };
         match transfer::copy(vfs, src, dst, overwrite, &mut confirm, progress) {
-            Err(e) if declined && e.code == ErrorCode::Cancelled => Err(dst.error(ErrorCode::UnsafeWrite)),
-            r => r,
+            Err(e) if declined && e.code == ErrorCode::Cancelled => return Err(dst.error(ErrorCode::UnsafeWrite)),
+            r => r?,
         }
+        if flush && let Loc::Local(p) = dst {
+            let f = std::fs::OpenOptions::new().write(true).open(to_extended(p));
+            f.and_then(|f| f.sync_all()).map_err(|e| AppError::from_io(&e, p))?;
+        }
+        Ok(())
     }
 }
 
@@ -676,13 +691,53 @@ fn is_empty_dir(vfs: &Vfs, l: &Loc) -> bool {
     }
 }
 
-/// Sul remoto una data mancante vale 0.
-fn meta(vfs: &Vfs, l: &Loc) -> Result<Meta, AppError> {
+/// Metadati e precisione della data in ms: 1 in locale, 60 000 se il server non la dà precisa (FTP senza
+/// `MDTM`), `None` se manca (e nei metadati vale 0).
+fn meta(vfs: &Vfs, l: &Loc) -> Result<(Meta, Option<i64>), AppError> {
     match l {
         Loc::Local(p) => {
             let m = std::fs::symlink_metadata(to_extended(p)).map_err(|e| AppError::from_io(&e, p))?;
-            Ok(Meta { size: m.len(), modified_ms: (m.last_write_time() / 10_000) as i64 - FILETIME_UNIX_DIFF_MS })
+            Ok((Meta { size: m.len(), modified_ms: (m.last_write_time() / 10_000) as i64 - FILETIME_UNIX_DIFF_MS }, Some(1)))
         }
-        r => remote_stat(vfs, r).map(|s| Meta { size: s.size, modified_ms: s.modified_ms.unwrap_or(0) }),
+        r => {
+            let (p, path) = vfs.remote(r, Purpose::Transfer)?;
+            let s = p.stat(&path)?;
+            // ponytail: al minuto anche quando `LIST` dà solo l'anno (file vecchi); serve la precisione per file dal provider.
+            let step = s.modified_ms.map(|_| if p.caps().precise_mtime { 1 } else { 60_000 });
+            Ok((Meta { size: s.size, modified_ms: s.modified_ms.unwrap_or(0) }, step))
+        }
+    }
+}
+
+/// Metadati per la politica "più recente": con una data mancante le date sono uguali (una destinazione senza
+/// data non sembra più vecchia); se una è imprecisa si confrontano entrambe a quella precisione.
+fn comparable((mut a, pa): (Meta, Option<i64>), (mut b, pb): (Meta, Option<i64>)) -> (Meta, Meta) {
+    match pa.zip(pb).map(|(x, y)| x.max(y)) {
+        None => a.modified_ms = b.modified_ms,
+        Some(step) => {
+            for m in [&mut a, &mut b] {
+                m.modified_ms -= m.modified_ms.rem_euclid(step);
+            }
+        }
+    }
+    (a, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newer_policy_respects_date_precision() {
+        let m = |ms| Meta { size: 1, modified_ms: ms };
+        // Data mancante: uguali, qualunque sia l'altra.
+        assert_eq!(comparable((m(5_000), Some(1)), (m(0), None)), (m(0), m(0)));
+        assert_eq!(comparable((m(0), None), (m(5_000), Some(1))), (m(5_000), m(5_000)));
+        // Al minuto: 10:00:30 e 10:00:10 sono uguali, 10:01:10 no.
+        let t = 1_700_000_040_000; // multiplo di 60 s
+        assert_eq!(comparable((m(t + 30_000), Some(1)), (m(t + 10_000), Some(60_000))), (m(t), m(t)));
+        assert_eq!(comparable((m(t + 70_000), Some(1)), (m(t + 10_000), Some(60_000))), (m(t + 60_000), m(t)));
+        // Entrambe precise: invariate.
+        assert_eq!(comparable((m(3), Some(1)), (m(2), Some(1))), (m(3), m(2)));
     }
 }
