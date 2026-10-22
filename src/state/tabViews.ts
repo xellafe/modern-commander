@@ -3,7 +3,8 @@ import { listDir, listDrives, nearestExistingAncestor, unwatchDir, watchDir } fr
 import type { AppError, Drive, ErrorCode } from "../ipc/types";
 import { typeKey, visibleColumns } from "../lib/columns";
 import { quickFilterMask } from "../lib/mask";
-import { DRIVES, isRemote, sourceCaps } from "../lib/paths";
+import { DRIVES, isRemote, parseRemote, sourceCaps } from "../lib/paths";
+import { ensureConnected } from "./connections";
 import { setTabPath, useLayout } from "./layout";
 import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
@@ -74,12 +75,20 @@ const driveRow = (d: Drive): Row => ({
 
 interface Listing { path: string; entries: Row[]; error?: AppError }
 
-async function fetchListing(path: string): Promise<Listing> {
+// Errori che `ensureConnected` risolve chiedendo all'utente (impronta cambiata: solo l'avviso che spiega come sbloccarla).
+const RECONNECT: ErrorCode[] = ["AUTH_REQUIRED", "AUTH_FAILED", "HOST_KEY_UNKNOWN", "CERT_UNTRUSTED", "HOST_KEY_CHANGED"];
+
+async function fetchListing(path: string, retried = false): Promise<Listing> {
   if (path === DRIVES) return { path, entries: (await listDrives()).map(driveRow) };
   try {
     return { path, entries: await listDir(path) };
   } catch (e) {
     const err = e as AppError;
+    const remote = parseRemote(path);
+    // Password o impronta: una domanda all'utente e un solo nuovo tentativo.
+    if (remote && !retried && RECONNECT.includes(err?.code) && (await ensureConnected(remote.conn, err))) {
+      return fetchListing(path, true);
+    }
     // Sul remoto niente risalita: un errore di rete o una cartella sparita vanno solo in notifica.
     if ((err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") || isRemote(path)) throw e;
     // Cartella sparita o unità non pronta: si risale all'antenato esistente, altrimenti alle unità.

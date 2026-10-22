@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { registerConnectionCommands } from "./commands/connections";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
 import { LAYOUT_VKS, setLayoutLabels } from "./commands/keys";
@@ -12,6 +13,7 @@ import { registerShellCommands, suppressNativeContextMenu } from "./commands/she
 import { registerTerminalCommands } from "./commands/terminal";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
+import { useConnections } from "./state/connections";
 import { blockUnloadIfDirty } from "./state/editors";
 import { useHotlist } from "./state/hotlist";
 import { initJobs } from "./state/jobs";
@@ -33,6 +35,7 @@ registerShellCommands();
 registerSettingsCommands();
 registerPaletteCommands();
 registerTerminalCommands();
+registerConnectionCommands();
 window.addEventListener("contextmenu", (e) => suppressNativeContextMenu(e, import.meta.env.DEV));
 window.addEventListener("beforeunload", blockUnloadIfDirty);
 // Coda delle operazioni: eventi e stato attuale (dopo un ricaricamento anche i prompt in attesa).
@@ -47,6 +50,7 @@ async function bootstrap() {
     useSettings.getState().load().catch(() => {}), // se fallisce l'app parte con i valori di default
     useHotlist.getState().load(),
     useKeybindings.getState().load().catch(console.error), // se fallisce restano i tasti di fabbrica
+    useConnections.getState().load().catch(console.error), // nomi delle connessioni nelle schede remote; se fallisce, gli id
     keyLabels(LAYOUT_VKS).then(setLayoutLabels).catch(() => {}), // se fallisce restano le etichette americane
   ]);
   await initI18n(useSettings.getState().language);

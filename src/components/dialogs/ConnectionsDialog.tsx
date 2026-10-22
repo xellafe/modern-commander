@@ -1,0 +1,193 @@
+import { Globe, Server } from "lucide-react";
+import { useEffect, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
+import { forgetHost, forgetPassword } from "../../ipc/api";
+import type { AppError, Connection, ConnectionView, Scheme } from "../../ipc/types";
+import { defaultPort, startLocation, useConnections } from "../../state/connections";
+import { useUi, type DialogRequest } from "../../state/ui";
+import { openInActiveTab } from "../sidebar/FolderTree";
+import { Dialog } from "./Dialog";
+
+const SCHEMES: Scheme[] = ["sftp", "ftp", "ftps", "http", "https"];
+
+/** Connessione in modifica; la password scritta qui resta nello stato del dialogo e si salva con "ricorda". */
+type Draft = Connection & { password: string };
+
+const blank = (c: Partial<Connection>): Draft => ({
+  id: "", name: "", scheme: "sftp", host: "", port: 22, user: "", startDir: "/", ftpsImplicit: false, ...c, password: "",
+});
+
+export const ConnIcon = ({ scheme, size = 12 }: { scheme: Scheme; size?: number }) =>
+  scheme.startsWith("http") ? <Globe size={size} aria-hidden /> : <Server size={size} aria-hidden />;
+
+/** Ctrl+F: elenco delle connessioni salvate, con nuova, modifica, duplica, elimina e connetti. */
+export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind: "connections" }> }) {
+  const { t } = useTranslation();
+  const list = useConnections((s) => s.list);
+  const [selId, setSelId] = useState<string | null>(null);
+  // Da un indirizzo scritto a mano: si compila la connessione nuova e, salvata, si apre.
+  const [form, setForm] = useState<Draft | null>(req.draft ? blank(req.draft) : null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const close = useUi.getState().closeDialog;
+  const sel: ConnectionView | undefined = list.find((c) => c.id === selId) ?? list[0];
+
+  // `hasPassword` cambia anche fuori da qui (connessione con "Ricorda").
+  useEffect(() => {
+    useConnections.getState().load().catch(console.error);
+  }, []);
+
+  const run = (op: () => Promise<unknown>) => {
+    setError(null);
+    op().catch((e: AppError) => setError(t(`errors.${e?.code ?? "IO"}`)));
+  };
+  const select = (id: string) => {
+    setSelId(id);
+    setConfirmDelete(false);
+  };
+  const connectSel = () => {
+    if (!sel) return;
+    close();
+    openInActiveTab(startLocation(sel));
+  };
+  const remove = () => {
+    if (!sel) return;
+    if (!confirmDelete) return setConfirmDelete(true);
+    setConfirmDelete(false);
+    run(() => useConnections.getState().remove(sel.id));
+  };
+
+  // `aria-disabled`: con `disabled` il focus uscirebbe dalla finestra (vedi ConflictDialog).
+  const tool = (key: string, enabled: boolean, onClick: () => void, className?: string) => (
+    <button className={className} aria-disabled={!enabled || undefined} onClick={() => enabled && onClick()}>{t(key)}</button>
+  );
+
+  const onListKey = (e: KeyboardEvent) => {
+    const i = list.findIndex((c) => c.id === sel?.id);
+    const next = e.key === "ArrowDown" ? i + 1 : e.key === "ArrowUp" ? i - 1 : -1;
+    if (next < 0 || next >= list.length) return;
+    e.preventDefault();
+    select(list[next].id);
+  };
+
+  if (form) {
+    const set = (patch: Partial<Draft>) => setForm({ ...form, ...patch });
+    // Lo schema e FTPS implicito portano la porta di default, se non era stata cambiata.
+    const setScheme = (scheme: Scheme, ftpsImplicit: boolean) => set({
+      scheme, ftpsImplicit,
+      port: form.port === defaultPort(form.scheme, form.ftpsImplicit) ? defaultPort(scheme, ftpsImplicit) : form.port,
+    });
+    const portOk = Number.isInteger(form.port) && form.port > 0 && form.port < 65536;
+    const ok = !!form.host.trim() && portOk;
+    const saved = list.find((c) => c.id === form.id);
+    const save = () => {
+      if (!ok) return;
+      const { password, ...conn } = form;
+      const c = { ...conn, host: conn.host.trim(), name: conn.name.trim() || conn.host.trim() };
+      run(async () => {
+        const view = await useConnections.getState().save(c, password || null, !!password);
+        if (req.draft) {
+          close();
+          openInActiveTab(startLocation(view));
+        } else {
+          setForm(null);
+          select(view.id);
+        }
+      });
+    };
+    const cancel = () => (req.draft ? close() : setForm(null));
+
+    return (
+      <Dialog
+        key="form"
+        title={t(form.id ? "connections.editTitle" : "connections.newTitle")}
+        onCancel={cancel}
+        onConfirm={save}
+        actions={<>
+          <button className="primary" disabled={!ok} onClick={save}>{t(req.draft ? "connections.saveConnect" : "connections.save")}</button>
+          <button onClick={cancel}>{t("ops.cancel")}</button>
+        </>}
+      >
+        <label className="mc-field">
+          <span>{t("connections.name")}</span>
+          <input type="text" value={form.name} placeholder={form.host} spellCheck={false} onChange={(e) => set({ name: e.target.value })} />
+        </label>
+        <label className="mc-field">
+          <span>{t("connections.scheme")}</span>
+          <select value={form.scheme} onChange={(e) => setScheme(e.target.value as Scheme, false)}>
+            {SCHEMES.map((s) => <option key={s} value={s}>{t(`connections.schemes.${s}`)}</option>)}
+          </select>
+        </label>
+        {form.scheme === "ftps" && (
+          <label className="mc-check">
+            <input type="checkbox" checked={form.ftpsImplicit} onChange={(e) => setScheme("ftps", e.target.checked)} />
+            {t("connections.ftpsImplicit")}
+          </label>
+        )}
+        <label className="mc-field">
+          <span>{t("connections.host")}</span>
+          <input type="text" value={form.host} spellCheck={false} data-autofocus onChange={(e) => set({ host: e.target.value })} />
+        </label>
+        <label className="mc-field">
+          <span>{t("connections.port")}</span>
+          <input type="text" inputMode="numeric" value={String(form.port)} aria-invalid={!portOk}
+            onChange={(e) => set({ port: Number(e.target.value) })} />
+        </label>
+        <label className="mc-field">
+          <span>{t("connections.user")}</span>
+          <input type="text" value={form.user} spellCheck={false} placeholder={t("connections.anonymous")} onChange={(e) => set({ user: e.target.value })} />
+        </label>
+        <label className="mc-field">
+          <span>{t("connections.password")}</span>
+          <input type="password" value={form.password} autoComplete="off"
+            placeholder={saved?.hasPassword ? t("connections.passwordKept") : ""} onChange={(e) => set({ password: e.target.value })} />
+          <span className="mc-field-hint">{t("connections.passwordHint")}</span>
+        </label>
+        <label className="mc-field">
+          <span>{t("connections.startDir")}</span>
+          <input type="text" value={form.startDir} spellCheck={false} onChange={(e) => set({ startDir: e.target.value })} />
+        </label>
+        {error && <div className="mc-field-error" role="alert">{error}</div>}
+      </Dialog>
+    );
+  }
+
+  return (
+    <Dialog
+      key="list"
+      title={t("connections.title")}
+      onCancel={close}
+      onConfirm={connectSel}
+      actions={<>
+        <button className="primary" aria-disabled={!sel || undefined} onClick={connectSel}>{t("connections.connect")}</button>
+        <button onClick={close}>{t("connections.close")}</button>
+      </>}
+    >
+      {list.length ? (
+        <div className="mc-targets" role="listbox" aria-label={t("connections.title")} tabIndex={0} data-autofocus onKeyDown={onListKey}>
+          {list.map((c) => (
+            <div key={c.id} role="option" aria-selected={c.id === sel?.id} className={`mc-target${c.id === sel?.id ? " sel" : ""}`}
+              onClick={() => select(c.id)} onDoubleClick={connectSel}>
+              <ConnIcon scheme={c.scheme} />
+              <span>{c.name}</span>
+              <span className="mc-muted">{c.scheme}://{c.user ? `${c.user}@` : ""}{c.host}:{c.port}</span>
+            </div>
+          ))}
+        </div>
+      ) : <p className="mc-muted">{t("connections.empty")}</p>}
+      <div className="mc-conn-tools">
+        {tool("connections.new", true, () => setForm(blank({})))}
+        {tool("connections.edit", !!sel, () => setForm({ ...sel!, password: "" }))}
+        {tool("connections.duplicate", !!sel, () => setForm({ ...sel!, id: "", name: t("connections.copyOf", { name: sel!.name }), password: "" }))}
+        {tool(confirmDelete ? "connections.confirmDelete" : "connections.delete", !!sel, remove, confirmDelete ? "danger" : undefined)}
+        {tool("connections.forgetPassword", !!sel?.hasPassword, () => run(async () => {
+          await forgetPassword(sel!.id);
+          await useConnections.getState().load();
+        }))}
+        {/* FTP e HTTP in chiaro non hanno impronte. */}
+        {tool("connections.forgetHost", !!sel && sel.scheme !== "ftp" && sel.scheme !== "http", () => run(() => forgetHost(sel!.id)))}
+      </div>
+      {error && <div className="mc-field-error" role="alert">{error}</div>}
+    </Dialog>
+  );
+}

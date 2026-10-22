@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ConflictPolicy } from "../ipc/types";
+import type { ConflictPolicy, Connection } from "../ipc/types";
 import type { SaveOptions } from "./editors";
 
 export type SidebarView = "explorer" | "search" | "git" | "favorites";
@@ -43,7 +43,18 @@ export type DialogRequest =
    */
   | { kind: "saveError"; tabId: string; code: "CHANGED_ON_DISK" | "UNMAPPABLE_CHARS"; opts: SaveOptions }
   /** Chiusura della finestra con `count` operazioni non finite e `dirty` file non salvati. */
-  | { kind: "exit"; count: number; dirty: number };
+  | { kind: "exit"; count: number; dirty: number }
+  /** Gestore delle connessioni (Ctrl+F); `draft`: connessione nuova già compilata da un indirizzo scritto a mano. */
+  | { kind: "connections"; draft?: Partial<Connection> }
+  /**
+   * Richieste di `ensureConnected`: `done` chiude la finestra e risponde (null = Annulla). La password resta nello
+   * stato locale del dialogo e passa solo a `done`.
+   */
+  | { kind: "password"; id: string; failed: boolean; done: (r: { password: string; remember: boolean } | null) => void }
+  /** Impronta sconosciuta: chiave SSH oppure certificato TLS (`tls`). */
+  | { kind: "trust"; id: string; tls: boolean; fingerprint: string; done: (accept: boolean) => void }
+  /** Avviso con il solo OK; `title` e `text` sono chiavi i18n, `values` i loro parametri. */
+  | { kind: "message"; title: string; text: string; values?: Record<string, string> };
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 

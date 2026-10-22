@@ -34,7 +34,7 @@
 .mc-dialog button.primary { border-color: var(--mc-accent); }
 .mc-dialog button.danger { background: var(--mc-danger); border-color: var(--mc-danger); color: var(--mc-on-danger); }
 .mc-dialog button:disabled { opacity: 0.45; }
-.mc-dialog input[type="text"], .mc-dialog select {
+.mc-dialog input[type="text"], .mc-dialog input[type="password"], .mc-dialog select {
   box-sizing: border-box; width: 100%; padding: 3px 6px; font: inherit; color: var(--mc-text);
   background: var(--mc-bg); border: 1px solid var(--mc-border); border-radius: var(--mc-radius);
 }
@@ -54,3 +54,6 @@
 .mc-target.sel { background: var(--mc-selection); }
 .mc-target kbd { min-width: 12px; color: var(--mc-accent); font-family: var(--mc-font-mono); }
 .mc-dialog button[aria-disabled="true"] { opacity: 0.45; }
+.mc-target .mc-muted { margin-left: auto; }
+.mc-conn-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-target svg { align-self: center; flex: none; }

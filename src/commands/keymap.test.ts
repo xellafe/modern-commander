@@ -93,3 +93,7 @@ test('phase 2 commands are registered with the expected context and have a title
     expect(it.commands[id], id).toBeTruthy();
   }
 });
+
+test('Ctrl+F opens the connection manager', () => {
+  expect(DEFAULT_KEYMAP['Ctrl+F']).toBe('cm_FtpConnect');
+});

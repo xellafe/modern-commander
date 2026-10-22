@@ -270,3 +270,22 @@ test("remote tabs are not watched", async () => {
   await useTabViews.getState().load("t1", "sftp://w/");
   await vi.waitFor(() => expect(done).toEqual(["watch C:\\x", "unwatch"]));
 });
+
+test("remote listing asks the password and retries only once", async () => {
+  const { useUi } = await import("./ui");
+  useUi.setState({ dialog: null });
+  const off = useUi.subscribe(({ dialog: d }) => d?.kind === "password" && d.done({ password: "pw", remember: false }));
+  vi.mocked(api.connect).mockResolvedValue();
+  listDir.mockRejectedValue({ code: "AUTH_REQUIRED", path: null, detail: null });
+  await useTabViews.getState().load("t1", "sftp://c1/x");
+  off();
+  expect(api.connect).toHaveBeenCalledWith("c1", "pw", false);
+  expect(listDir).toHaveBeenCalledTimes(2);
+  expect(useTabViews.getState().notice?.code).toBe("AUTH_REQUIRED");
+
+  listDir.mockReset().mockRejectedValueOnce({ code: "AUTH_REQUIRED", path: null, detail: null }).mockResolvedValueOnce([f("a")]);
+  const off2 = useUi.subscribe(({ dialog: d }) => d?.kind === "password" && d.done({ password: "pw", remember: false }));
+  await useTabViews.getState().load("t1", "sftp://c1/x");
+  off2();
+  expect(useTabViews.getState().views.t1.rows.map((r) => r.name)).toContain("a");
+});

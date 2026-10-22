@@ -2,15 +2,18 @@ import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { folderName } from "../../lib/paths";
 import { useJobs } from "../../state/jobs";
-import { useUi } from "../../state/ui";
+import { useUi, type DialogRequest } from "../../state/ui";
 import { ConflictDialog } from "./ConflictDialog";
+import { ConnectionsDialog } from "./ConnectionsDialog";
 import { CopyMoveDialog } from "./CopyMoveDialog";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { ErrorDialog, UnsafeWriteDialog } from "./ErrorDialog";
 import { ExitConfirm } from "./ExitConfirm";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
+import { PasswordDialog } from "./PasswordDialog";
 import { SaveErrorDialog } from "./SaveErrorDialog";
+import { TrustDialog } from "./TrustDialog";
 import { UnsavedDialog } from "./UnsavedDialog";
 import { trapTab, useModalFocus } from "./focusTrap";
 import "./dialogs.css";
@@ -69,6 +72,17 @@ export function useWhat(paths: string[]): string {
     : t("ops.items", { count: paths.length });
 }
 
+/** Avviso con il solo OK. */
+function MessageDialog({ req }: { req: Extract<DialogRequest, { kind: "message" }> }) {
+  const { t } = useTranslation();
+  const close = useUi.getState().closeDialog;
+  return (
+    <Dialog title={t(req.title)} onCancel={close} actions={<button className="primary" onClick={close}>{t("ops.ok")}</button>}>
+      <p>{t(req.text, req.values)}</p>
+    </Dialog>
+  );
+}
+
 /** Una finestra alla volta: prima quella aperta da un comando, poi i prompt della coda (il più vecchio). */
 export function DialogHost() {
   const dialog = useUi((s) => s.dialog);
@@ -81,6 +95,10 @@ export function DialogHost() {
     case "exit": return <ExitConfirm req={dialog} />;
     case "unsaved": return <UnsavedDialog req={dialog} />;
     case "saveError": return <SaveErrorDialog req={dialog} />;
+    case "connections": return <ConnectionsDialog req={dialog} />;
+    case "password": return <PasswordDialog req={dialog} />;
+    case "trust": return <TrustDialog req={dialog} />;
+    case "message": return <MessageDialog req={dialog} />;
   }
   if (!prompt) return null;
   switch (prompt.type) {
