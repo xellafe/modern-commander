@@ -42,13 +42,24 @@ pub enum Loc {
     Remote { scheme: Scheme, conn: String, path: String },
 }
 
-fn invalid(s: &str) -> AppError {
-    AppError { code: ErrorCode::InvalidRequest, path: Some(s.to_owned()), detail: None }
+/// Senza eco dell'input: un URL incollato potrebbe contenere `utente:password@`.
+fn invalid() -> AppError {
+    AppError { code: ErrorCode::InvalidRequest, path: None, detail: None }
 }
 
-/// Riduce a un percorso POSIX assoluto: `/` doppi ridotti, nessun `/` finale.
+/// Riduce a un percorso POSIX assoluto: `/` doppi ridotti, nessun `/` finale, `.` tolti e `..`
+/// risolti a livello testuale (non oltre la radice).
 fn clean(p: &str) -> String {
-    let parts: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
+    let mut parts: Vec<&str> = Vec::new();
+    for s in p.split('/') {
+        match s {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            n => parts.push(n),
+        }
+    }
     format!("/{}", parts.join("/"))
 }
 
@@ -59,12 +70,12 @@ impl Loc {
         if head.len() < 2 || !head.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) {
             return Ok(Loc::Local(PathBuf::from(s)));
         }
-        let scheme = Scheme::lookup(&head.to_ascii_lowercase()).ok_or_else(|| invalid(s))?;
+        let scheme = Scheme::lookup(&head.to_ascii_lowercase()).ok_or_else(invalid)?;
         let (conn, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
         let valid = (1..=64).contains(&conn.len())
             && conn.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
         if !valid {
-            return Err(invalid(s));
+            return Err(invalid());
         }
         Ok(Loc::Remote { scheme, conn: conn.to_owned(), path: clean(path) })
     }
@@ -163,7 +174,7 @@ impl Serialize for Loc {
 impl<'de> Deserialize<'de> for Loc {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Loc, D::Error> {
         let s = String::deserialize(d)?;
-        Loc::parse(&s).map_err(|e| serde::de::Error::custom(format!("posizione non valida: {:?}", e.path)))
+        Loc::parse(&s).map_err(|_| serde::de::Error::custom("posizione non valida"))
     }
 }
 
@@ -247,5 +258,36 @@ mod tests {
         let (a, b) = (Loc::parse(r"D:\A\b").unwrap(), Loc::parse(r"d:\a").unwrap());
         assert!(a.is_within(&b) && !a.same(&b));
         assert!(!a.is_within(&remote("sftp://w/")) && !remote("sftp://w/").same(&a));
+    }
+
+    #[test]
+    fn parse_edge_cases() {
+        let l = remote("SFTP://w/x");
+        assert!(matches!(l, Loc::Remote { scheme: Scheme::Sftp, .. }));
+        assert_eq!(l.to_string(), "sftp://w/x");
+        assert_eq!(Loc::parse("C://x").unwrap(), Loc::Local(PathBuf::from("C://x")));
+        let ok = format!("sftp://{}/x", "a".repeat(64));
+        assert!(Loc::parse(&ok).is_ok());
+        let long = format!("sftp://{}/x", "a".repeat(65));
+        assert_eq!(Loc::parse(&long).unwrap_err().code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn dot_segments_are_resolved() {
+        assert_eq!(remote("sftp://w/a/./b").to_string(), "sftp://w/a/b");
+        assert_eq!(remote("sftp://w/a/../b").to_string(), "sftp://w/b");
+        assert_eq!(remote("sftp://w/../..").to_string(), "sftp://w/");
+        assert_eq!(remote("sftp://w/a").join("..").to_string(), "sftp://w/");
+        assert!(remote("sftp://w/a/../a").same(&remote("sftp://w/a")));
+        assert!(!remote("sftp://w/a/../b").is_within(&remote("sftp://w/a")));
+    }
+
+    #[test]
+    fn errors_do_not_echo_input() {
+        let e = Loc::parse("sftp://u:pw@h/x").unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidRequest);
+        assert!(!format!("{e:?}").contains("pw"));
+        let e = serde_json::from_str::<Loc>("\"sftp://u:pw@h/x\"").unwrap_err();
+        assert!(!e.to_string().contains("pw"));
     }
 }
