@@ -4,7 +4,7 @@ import i18n from "../i18n";
 import { listDrives } from "../ipc/api";
 import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
-import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
+import { dirTarget, folderName, joinPath, rootPath, sourceCaps } from "../lib/paths";
 import { cancelAllAndWait, unfinishedJobs, useJobs } from "../state/jobs";
 import { activeTab, targetGroup, useLayout } from "../state/layout";
 import {
@@ -76,6 +76,7 @@ const SIZE_CONCURRENCY = 4;
 
 /** Calcola la dimensione delle cartelle `names` di `dir` nella scheda; si ferma se la scheda cambia cartella. */
 async function measure(tabId: string, dir: string, names: string[]) {
+  if (!sourceCaps(dir).dirSize) return; // remoto: Spazio marca soltanto
   const here = () => {
     const v = views().views[tabId];
     return !!v && v.history[v.historyIndex] === dir;

@@ -1,7 +1,7 @@
 // Comandi sui file (Task 16): copia, spostamento, rinomina, nuova cartella, eliminazione, selezione per maschera.
-import { enqueueJob, normalizePaths } from "../ipc/api";
+import { enqueueJob, fileInfo, normalizePaths } from "../ipc/api";
 import type { ConflictPolicy, JobId, JobSpec } from "../ipc/types";
-import { DRIVES, joinPath, normalizePath } from "../lib/paths";
+import { folderName, isRemote, joinPath, normalizePath, parseRemote, sourceCaps } from "../lib/paths";
 import { useJobs, waitForJob } from "../state/jobs";
 import { targetGroup, useLayout, type LayoutState } from "../state/layout";
 import { useSettings } from "../state/settings";
@@ -23,9 +23,11 @@ export function copyTargets(l: LayoutState): { dest: string; requireChange: bool
 
 const INVALID_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
 
-/** Chiave i18n dell'errore di un nome di file o cartella, `null` se è valido. */
-export function nameError(name: string): string | null {
+/** Chiave i18n dell'errore di un nome di file o cartella dentro `base`, `null` se è valido. */
+export function nameError(name: string, base = ""): string | null {
   if (!name.trim()) return "ops.nameEmpty";
+  // Sul server vale POSIX: solo `/` e NUL, più `.` e `..` che il backend risolverebbe come percorso.
+  if (isRemote(base)) return /[/\0]/.test(name) || name === "." || name === ".." ? "ops.nameInvalid" : null;
   // Windows toglie in silenzio punti e spazi finali: meglio rifiutarli che creare un nome diverso.
   return INVALID_CHARS.test(name) || /[. ]$/.test(name) ? "ops.nameInvalid" : null;
 }
@@ -33,20 +35,23 @@ export function nameError(name: string): string | null {
 const ABS_ROOT = /^(?:[A-Za-z]:\\|\\\\[^\\/]+\\[^\\/]+\\)/;
 
 /**
- * Percorso da creare con F7: relativo alla cartella corrente (con `\` per le intermedie) o assoluto.
+ * Percorso da creare con F7: relativo alla cartella corrente (con `\`, o `/` sul remoto, per le intermedie) o assoluto.
  * `focus` è il nome, dentro la cartella corrente, su cui portare il cursore dopo la creazione.
  */
 export function mkdirTarget(base: string, input: string): { path: string; focus: string | null } | { error: string } {
   const s = input.trim();
-  const root = ABS_ROOT.exec(s)?.[0] ?? "";
-  if (!root && base === DRIVES) return { error: "ops.nameInvalid" };
-  const parts = s.slice(root.length).split("\\").filter(Boolean);
+  const r = parseRemote(s);
+  const root = r ? `${r.scheme}://${r.conn}/` : (ABS_ROOT.exec(s)?.[0] ?? "");
+  if (!root && !sourceCaps(base).write) return { error: "ops.nameInvalid" };
+  const where = root || base;
+  const sep = isRemote(where) ? "/" : "\\";
+  const parts = (r ? r.path : s.slice(root.length)).split(sep).filter(Boolean);
   if (!parts.length) return { error: "ops.nameEmpty" };
   for (const p of parts) {
-    const e = nameError(p);
+    const e = nameError(p, where);
     if (e) return { error: e };
   }
-  const rel = parts.join("\\");
+  const rel = parts.join(sep);
   if (!root) return { path: joinPath(base, rel), focus: parts[0] };
   const path = root + rel;
   return { path, focus: parentPath(path)?.toLowerCase() === base.toLowerCase() ? parts[parts.length - 1] : null };
@@ -54,17 +59,22 @@ export function mkdirTarget(base: string, input: string): { path: string; focus:
 
 /**
  * Destinazione digitata nella finestra di copia: assoluta, oppure relativa alla cartella delle sorgenti.
- * Un `\` finale resta: con un solo file da copiare dice al backend che la destinazione è una cartella
- * e non il nome del file (regola di TC).
+ * Un separatore finale resta: con un solo file da copiare dice che la destinazione è una cartella
+ * e non il nome del file (regola di TC; sul remoto lo applica `startCopyMove`).
  */
 export function resolveDest(base: string, input: string): string | null {
-  if (!input.trim()) return null;
-  const p = normalizePath(input);
-  const abs = /^(?:[A-Za-z]:\\|\\\\)/.test(p) ? p : base === DRIVES ? null : joinPath(base, p);
-  return abs && /[\\/]$/.test(input.trim()) && !abs.endsWith("\\") ? `${abs}\\` : abs;
+  const s = input.trim();
+  if (!s) return null;
+  const p = normalizePath(s);
+  const abs = /^(?:[A-Za-z]:\\|\\\\)/.test(p) || isRemote(p) ? p
+    : !sourceCaps(base).write ? null
+    : isRemote(base) ? normalizePath(joinPath(base, s)) : joinPath(base, p);
+  const sep = abs && isRemote(abs) ? "/" : "\\";
+  return abs && /[\\/]$/.test(s) && !abs.endsWith(sep) ? abs + sep : abs;
 }
 
-const noTrailing = (p: string) => p.replace(/\\+$/, "").toLowerCase();
+// Sul server i nomi distinguono maiuscole e minuscole.
+const noTrailing = (p: string) => (isRemote(p) ? p.replace(/\/+$/, "") : p.replace(/\\+$/, "").toLowerCase());
 
 /** OK disattivato: destinazione uguale alla cartella delle sorgenti con un solo gruppo o per uno spostamento. */
 export const mustChangeDest = (req: { from: string; move: boolean; requireChange: boolean }, dest: string | null) =>
@@ -86,29 +96,40 @@ async function focusWhenDone(id: JobId, tabId: string, base: string, name: strin
 /** Contesto dei comandi sulle selezioni; `null` nella lista delle unità o senza elementi. */
 function selection() {
   const ctx = activeTabContext();
-  if (ctx.path === DRIVES) return null;
-  const sources = ctx.markedOrCursor.map((r) => joinPath(ctx.path, r.name));
+  const sources = ctx.markedOrCursor.flatMap((r) => (r.drive ? [] : [joinPath(ctx.path, r.name)]));
   return sources.length ? { ...ctx, sources } : null;
+}
+
+/** Sorgente in sola lettura (HTTP, lista delle unità): la notifica al posto del backend. */
+function readOnly(tabId: string, path: string): boolean {
+  if (sourceCaps(path).write) return false;
+  views().showNotice(tabId, { code: "READ_ONLY_SOURCE" });
+  return true;
 }
 
 function openCopyMove(move: boolean, samePanel: boolean) {
   const sel = selection();
-  if (!sel) return;
+  if (!sel || (move && readOnly(sel.tabId, sel.path))) return;
   // Shift+F5: copia nella stessa cartella, con un nome nuovo (o il prompt di conflitto se si sceglie "Chiedi").
   const t = samePanel ? { dest: sel.path, requireChange: false, targets: [] } : copyTargets(useLayout.getState());
   ui().openDialog({
     kind: "copyMove", move, sources: sel.sources, from: sel.path,
-    dest: t.dest === DRIVES ? "" : t.dest, requireChange: t.requireChange, targets: t.targets,
+    dest: sourceCaps(t.dest).write ? t.dest : "", requireChange: t.requireChange, targets: t.targets,
     policy: samePanel ? "renameNew" : "ask",
   });
 }
 
-export function startCopyMove(
+export async function startCopyMove(
   req: Extract<DialogRequest, { kind: "copyMove" }>,
   dest: string,
   filter: string,
   policy: ConflictPolicy["type"],
 ) {
+  // `Loc` toglie il `/` finale di un indirizzo remoto: per un file solo verso `dir/` il nome lo mette il frontend.
+  const [src] = req.sources;
+  if (req.sources.length === 1 && isRemote(dest) && dest.endsWith("/") && (await fileInfo(src).then((i) => !i.isDir, () => false))) {
+    dest = joinPath(dest, folderName(src));
+  }
   return enqueue({
     kind: { type: req.move ? "move" : "copy" }, sources: req.sources, dest,
     filter: filter.trim() || null, policy: { type: policy },
@@ -131,7 +152,7 @@ export async function dropOnGroup(groupId: string, paths: string[]) {
   ui().openDialog({
     kind: "copyMove", move: false, sources,
     from: action.kind === "fromGroup" ? action.from : (parentPath(sources[0]) ?? sources[0]),
-    dest: dest === DRIVES ? "" : dest, requireChange: false, targets: [], policy: "ask",
+    dest: sourceCaps(dest).write ? dest : "", requireChange: false, targets: [], policy: "ask",
   });
 }
 
@@ -144,7 +165,7 @@ export async function createFolder(tabId: string, base: string, input: string) {
 
 export async function renameInPlace(tabId: string, base: string, oldName: string, newName: string) {
   views().setOverlay(null);
-  if (newName === oldName || nameError(newName)) return;
+  if (newName === oldName || nameError(newName, base)) return;
   const id = await enqueue({ kind: { type: "rename" }, sources: [joinPath(base, oldName)], dest: joinPath(base, newName) });
   await focusWhenDone(id, tabId, base, newName);
 }
@@ -154,7 +175,7 @@ export const deleteSources = (sources: string[], permanent: boolean) =>
 
 async function openDelete(permanent: boolean) {
   const sel = selection();
-  if (!sel) return;
+  if (!sel || readOnly(sel.tabId, sel.path)) return;
   if (useSettings.getState().confirmDelete) ui().openDialog({ kind: "delete", permanent, sources: sel.sources });
   else await deleteSources(sel.sources, permanent);
 }
@@ -164,13 +185,13 @@ export const applyMask = (tabId: string, mask: string, select: boolean) =>
 
 function startRename() {
   const { tabId, path, cursorRow } = activeTabContext();
-  if (path === DRIVES || !cursorRow || cursorRow.isParent) return;
+  if (!cursorRow || cursorRow.isParent || cursorRow.drive || readOnly(tabId, path)) return;
   views().setOverlay({ kind: "rename", tabId, name: cursorRow.name });
 }
 
 function openMkdir() {
   const { tabId, path } = activeTabContext();
-  if (path !== DRIVES) ui().openDialog({ kind: "mkdir", tabId, path });
+  if (!readOnly(tabId, path)) ui().openDialog({ kind: "mkdir", tabId, path });
 }
 
 const DEFS: [string, Command["run"]][] = [

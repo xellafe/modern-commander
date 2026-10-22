@@ -238,3 +238,35 @@ test("two tabs sorted by type both reorder when shared names arrive", async () =
   });
   expect(typeNames).toHaveBeenCalledTimes(1);
 });
+
+test("a network error on a remote tab leaves it where it is, with the notice and without nearestExistingAncestor", async () => {
+  listDir.mockResolvedValueOnce([f("a")]);
+  await useTabViews.getState().load("t1", "sftp://w/var");
+  listDir.mockRejectedValueOnce({ code: "CONNECTION_FAILED", path: null, detail: null });
+  await useTabViews.getState().reload("t1");
+  listDir.mockRejectedValueOnce({ code: "NOT_FOUND", path: "sftp://w/var/gone", detail: null });
+  await useTabViews.getState().load("t1", "sftp://w/var/gone");
+  expect(useLayout.getState().tabs["t1"].path).toBe("sftp://w/var");
+  expect(useTabViews.getState().views["t1"].rows.map((r) => r.name)).toEqual(["..", "a"]);
+  expect(useTabViews.getState().notice?.code).toBe("NOT_FOUND");
+  expect(nearestExistingAncestor).not.toHaveBeenCalled();
+});
+
+test("a remote tab failing its first load stays on its address, empty, so that Ctrl+R can retry", async () => {
+  listDir.mockRejectedValueOnce({ code: "CONNECTION_FAILED", path: null, detail: null });
+  await useTabViews.getState().load("t1", "sftp://w/var");
+  expect(useLayout.getState().tabs["t1"].path).toBe("sftp://w/var");
+  expect(useTabViews.getState().notice?.code).toBe("CONNECTION_FAILED");
+  expect(api.listDrives).not.toHaveBeenCalled();
+  listDir.mockResolvedValueOnce([f("a")]);
+  await useTabViews.getState().reload("t1");
+  expect(useTabViews.getState().views["t1"].rows.map((r) => r.name)).toEqual(["..", "a"]);
+});
+
+test("remote tabs are not watched", async () => {
+  const done = recordWatcher();
+  listDir.mockResolvedValue([]);
+  await useTabViews.getState().load("t1", "C:\\x");
+  await useTabViews.getState().load("t1", "sftp://w/");
+  await vi.waitFor(() => expect(done).toEqual(["watch C:\\x", "unwatch"]));
+});

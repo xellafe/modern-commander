@@ -1,5 +1,6 @@
 import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { folderName } from "../../lib/paths";
 import { useJobs } from "../../state/jobs";
 import { useUi } from "../../state/ui";
 import { ConflictDialog } from "./ConflictDialog";
@@ -64,7 +65,7 @@ export function Dialog({ title, onCancel, onConfirm, children, actions }: Dialog
 export function useWhat(paths: string[]): string {
   const { t } = useTranslation();
   return paths.length === 1
-    ? t("ops.oneItem", { name: paths[0].slice(paths[0].lastIndexOf("\\") + 1) })
+    ? t("ops.oneItem", { name: folderName(paths[0]) })
     : t("ops.items", { count: paths.length });
 }
 

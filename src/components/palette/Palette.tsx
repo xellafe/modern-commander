@@ -6,7 +6,7 @@ import { getCommands } from "../../commands/registry";
 import { cancelRequest, nextRequestId, scanTree } from "../../ipc/api";
 import type { ScanEntry } from "../../ipc/types";
 import { fuzzyFilter, highlightRuns, type FuzzyMatch } from "../../lib/fuzzy";
-import { DRIVES } from "../../lib/paths";
+import { sourceCaps } from "../../lib/paths";
 import { hotlistDirs, useHotlist } from "../../state/hotlist";
 import { useKeybindings } from "../../state/keybindings";
 import { usePalette, type PaletteMode } from "../../state/palette";
@@ -31,8 +31,8 @@ type ScanState = "scanning" | "done" | "truncated";
 function useJumpSource(enabled: boolean) {
   // La cartella si fissa all'apertura: la scheda attiva non cambia sotto la palette, ma `run` deve usare questa.
   const [root] = useState(() => {
-    const path = enabled ? activeTabContext().path : DRIVES;
-    return path === DRIVES ? null : path; // nell'elenco delle unità non c'è niente da scandire
+    const path = enabled ? activeTabContext().path : null;
+    return path && sourceCaps(path).scan ? path : null; // unità e sorgenti remote: niente scansione
   });
   const [files, setFiles] = useState<ScanEntry[]>([]);
   const [scan, setScan] = useState<ScanState>(root ? "scanning" : "done");

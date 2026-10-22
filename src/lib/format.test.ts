@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { fileKind, formatAttrs, formatEta, formatSize, splitName } from "./format";
+import { fileKind, formatAttrs, formatEta, formatMode, formatSize, splitName } from "./format";
 
 test("formatSize uses B/KB/MB/GB with the language's decimal separator", () => {
   expect(formatSize(0, "it")).toBe("0 B");
@@ -17,6 +17,12 @@ test("formatAttrs uses TC letters r a h s", () => {
   expect(formatAttrs(0)).toBe("----");
   expect(formatAttrs(0x1 | 0x20)).toBe("ra--");
   expect(formatAttrs(0x2 | 0x4)).toBe("--hs");
+});
+
+test("formatMode shows POSIX permissions like ls", () => {
+  expect(formatMode(0o755, true)).toBe("drwxr-xr-x");
+  expect(formatMode(0o644, false)).toBe("-rw-r--r--");
+  expect(formatMode(0o100600, false)).toBe("-rw-------"); // il tipo nei bit alti non conta
 });
 
 test("splitName separates the extension of files only", () => {

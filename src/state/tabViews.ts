@@ -3,7 +3,7 @@ import { listDir, listDrives, nearestExistingAncestor, unwatchDir, watchDir } fr
 import type { AppError, Drive, ErrorCode } from "../ipc/types";
 import { typeKey, visibleColumns } from "../lib/columns";
 import { quickFilterMask } from "../lib/mask";
-import { DRIVES } from "../lib/paths";
+import { DRIVES, isRemote, sourceCaps } from "../lib/paths";
 import { setTabPath, useLayout } from "./layout";
 import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
@@ -80,7 +80,8 @@ async function fetchListing(path: string): Promise<Listing> {
     return { path, entries: await listDir(path) };
   } catch (e) {
     const err = e as AppError;
-    if (err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") throw e;
+    // Sul remoto niente risalita: un errore di rete o una cartella sparita vanno solo in notifica.
+    if ((err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") || isRemote(path)) throw e;
     // Cartella sparita o unità non pronta: si risale all'antenato esistente, altrimenti alle unità.
     const up = await nearestExistingAncestor(path);
     return { ...(await fetchListing(up && up !== path ? up : DRIVES)), error: err };
@@ -116,7 +117,7 @@ function queueWatcher(tabId: string, op: () => Promise<void>) {
 function syncWatcher(tabId: string, path: string) {
   if (watched.get(tabId) === path) return;
   watched.set(tabId, path);
-  queueWatcher(tabId, () => (path === DRIVES ? unwatchDir(tabId) : watchDir(tabId, path)));
+  queueWatcher(tabId, () => (sourceCaps(path).watch ? watchDir(tabId, path) : unwatchDir(tabId)));
 }
 
 export const useTabViews = create<TabViewsState>((set, get) => ({
@@ -135,9 +136,10 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
         res = await fetchListing(path);
       } catch (e) {
         try {
-          // Prima lettura di una scheda (accesso negato…): non resta vuota, mostra le unità.
+          // Prima lettura di una scheda (accesso negato…): non resta vuota, mostra le unità. Una scheda
+          // remota invece resta sul suo indirizzo, vuota: Ctrl+R riprova (il server può tornare).
           if (get().views[tabId] || path === DRIVES) throw e;
-          res = { ...(await fetchListing(DRIVES)), error: e as AppError };
+          res = isRemote(path) ? { path, entries: [], error: e as AppError } : { ...(await fetchListing(DRIVES)), error: e as AppError };
         } catch {
           if (seq.get(tabId) === token) get().showNotice(tabId, e);
           return;

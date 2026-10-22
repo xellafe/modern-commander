@@ -2,7 +2,7 @@
 import type { MouseEvent } from "react";
 import { openPath, openWith, showContextMenu, showProperties, startDrag } from "../ipc/api";
 import type { AppError } from "../ipc/types";
-import { DRIVES, joinPath } from "../lib/paths";
+import { joinPath, sourceCaps } from "../lib/paths";
 import { useLayout } from "../state/layout";
 import { useSettings } from "../state/settings";
 import type { Row, TabView } from "../state/tabView";
@@ -16,10 +16,11 @@ export function rowsAt(view: TabView, i: number): Row[] {
   return view.marked.has(row.name) ? view.rows.filter((r) => view.marked.has(r.name)) : [row];
 }
 
-/** Percorsi per la shell; senza righe la cartella corrente stessa (nessuna nella lista delle unità). */
+/** Percorsi per la shell; senza righe la cartella corrente stessa. Nella lista delle unità solo le unità, sul remoto niente. */
 export function shellPaths(dir: string, rows: Row[]): string[] {
-  if (!rows.length) return dir === DRIVES ? [] : [dir];
-  return rows.map((r) => (r.drive ? r.name : joinPath(dir, r.name)));
+  const shell = sourceCaps(dir).shell;
+  if (!rows.length) return shell ? [dir] : [];
+  return rows.flatMap((r) => (r.drive ? [r.name] : shell ? [joinPath(dir, r.name)] : []));
 }
 
 /** Da coordinate client CSS a pixel fisici, come le vuole `show_context_menu`. */
@@ -115,6 +116,7 @@ export async function dragOut(tabId: string, name: string) {
   const l = useLayout.getState();
   const from = l.tabs[tabId].path;
   const paths = shellPaths(from, rows);
+  if (!paths.length) return;
   selfDrag.origin = { groupId: l.groups.find((g) => g.tabIds.includes(tabId))?.id ?? "", from };
   selfDrag.dragging = true;
   try {
@@ -187,6 +189,7 @@ const DEFS: [string, Command["run"]][] = [
   ["cm_Edit", () => {
     const f = cursorFile();
     if (!f) return;
+    if (!sourceCaps(f.path).write) return useTabViews.getState().showNotice(f.tabId, { code: "READ_ONLY_SOURCE" });
     if (useSettings.getState().useExternalEditor) return editFile(f.tabId, f.path);
     const l = useLayout.getState();
     l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor" });

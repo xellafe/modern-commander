@@ -56,6 +56,9 @@ test("shellPaths joins names, uses the drive root for drives and falls back to t
   expect(shellPaths("drives:", [{ ...f("D:\\", true), drive }])).toEqual(["D:\\"]);
   expect(shellPaths("C:\\x", [])).toEqual(["C:\\x"]);
   expect(shellPaths("drives:", [])).toEqual([]);
+  // Le sorgenti remote non arrivano mai alla shell di Windows.
+  expect(shellPaths("sftp://w/x", [{ ...f("a.txt") }])).toEqual([]);
+  expect(shellPaths("sftp://w/x", [])).toEqual([]);
 });
 
 test("toPhysical scales client coordinates and rounds to integers", () => {

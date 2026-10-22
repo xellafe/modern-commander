@@ -8,8 +8,8 @@ import { setGridColumns, setPageSize } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
 import { rowContextMenu, trackDragOut } from "../../commands/shell";
 import { driveSpan, gridTemplate, typeKey, visibleColumns, type ColumnId } from "../../lib/columns";
-import { formatAttrs, formatDate, formatSize, splitName } from "../../lib/format";
-import { joinPath } from "../../lib/paths";
+import { formatAttrs, formatDate, formatMode, formatSize, splitName } from "../../lib/format";
+import { joinPath, sourceCaps } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
 import { useSettings } from "../../state/settings";
 import { hasSize, markRange, toggleMark, type Row, type TabView } from "../../state/tabView";
@@ -89,7 +89,7 @@ function RenameInput({ tabId, row }: { tabId: string; row: Row }) {
   const { t } = useTranslation();
   const ref = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(row.name);
-  const error = nameError(value.trim());
+  const error = nameError(value.trim(), useLayout((s) => s.tabs[tabId]?.path ?? ""));
   useEffect(() => {
     ref.current!.focus();
     ref.current!.setSelectionRange(0, splitName(row.name, row.isDir)[0].length);
@@ -255,7 +255,7 @@ const FullRow = memo(function FullRow(p: RowProps) {
       case "modified": return <span key={id} className={cellClass(id)}>{formatDate(row.modifiedMs, lng)}</span>;
       case "created": return <span key={id} className={cellClass(id)}>{formatDate(row.createdMs, lng)}</span>;
       case "accessed": return <span key={id} className={cellClass(id)}>{formatDate(row.accessedMs, lng)}</span>;
-      case "attributes": return <span key={id} className={cellClass(id)}>{formatAttrs(row.attributes)}</span>;
+      case "attributes": return <span key={id} className={cellClass(id)}>{row.mode != null ? formatMode(row.mode, row.isDir) : formatAttrs(row.attributes)}</span>;
       case "type": return <span key={id} className={cellClass(id)}>{typeName}</span>;
     }
   };
@@ -402,7 +402,7 @@ interface TileProps {
 const Tile = memo(function Tile({ tabId, row, i, dir, cls, renaming }: TileProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [ready, setReady] = useState(false);
-  const hasThumb = !row.isDir && !row.isParent && !row.drive;
+  const hasThumb = !row.isDir && !row.isParent && !row.drive && sourceCaps(dir).thumbs;
   const path = hasThumb ? joinPath(dir, row.name) : "";
   useEffect(() => {
     setReady(false);
