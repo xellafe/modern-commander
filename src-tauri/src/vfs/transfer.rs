@@ -51,36 +51,29 @@ pub fn copy(
     if !used_tmp && !confirm_unsafe(dst) {
         return Err(dst.error(ErrorCode::Cancelled));
     }
-    // ponytail: nella scrittura diretta un annullamento o una connessione caduta lasciano incompleto un file che
-    // c'era già; è il rischio che l'utente ha accettato.
-    let (target, w) = match safe {
-        Some(w) => (tmp.as_str(), w),
-        None => (dpath.as_str(), dp.writer(&dpath, !replace)?),
-    };
-    let r = send(vfs, src, w, target, progress).and_then(|modified| {
+    // Il writer diretto si apre solo dopo la sorgente: aprirlo tronca `dst`, che così resta intatto se la
+    // sorgente non si apre.
+    let mut direct_created = false;
+    let r = (|| {
+        let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
+        let mut reader = sp.reader(&spath)?;
+        let modified = sp.stat(&spath)?.modified_ms;
+        let (target, w) = match safe {
+            Some(w) => (tmp.as_str(), w),
+            None => (dpath.as_str(), dp.writer(&dpath, !replace)?),
+        };
+        direct_created = !used_tmp && existing.is_none();
+        // ponytail: nella scrittura diretta un annullamento o una connessione caduta lasciano incompleto un file
+        // che c'era già; è il rischio che l'utente ha accettato.
+        pump(&mut reader, w, &spath, target, progress)?;
         let _ = dp.set_meta(target, modified, mode);
         if used_tmp { dp.rename(&tmp, &dpath, replace) } else { Ok(()) }
-    });
-    // Il temporaneo si elimina; nella scrittura diretta anche il file, se prima non c'era.
-    if r.is_err() && (used_tmp || existing.is_none()) {
-        let _ = dp.delete(target, false);
+    })();
+    // Il temporaneo si elimina; nella scrittura diretta anche il file, se l'abbiamo creato noi.
+    if r.is_err() && (used_tmp || direct_created) {
+        let _ = dp.delete(if used_tmp { &tmp } else { &dpath }, false);
     }
     r
-}
-
-/// Apre la sorgente e la copia su `w`; restituisce la sua data di modifica.
-fn send(
-    vfs: &Vfs,
-    src: &Loc,
-    w: Box<dyn Write + Send>,
-    target: &str,
-    progress: &mut dyn FnMut(u64) -> bool,
-) -> Result<Option<i64>, AppError> {
-    let (sp, spath) = vfs.endpoint(src, Purpose::Transfer)?;
-    let mut reader = sp.reader(&spath)?;
-    let modified = sp.stat(&spath)?.modified_ms;
-    pump(&mut reader, w, &spath, target, progress)?;
-    Ok(modified)
 }
 
 /// Copia a blocchi; il writer si chiude prima di tornare (anche dopo un errore).
@@ -222,6 +215,19 @@ mod tests {
         let mut asked = 0;
         let e = copy(&v, &loc("sftp://m/manca"), &loc("sftp://m/d/f"), true, &mut |_| { asked += 1; false }, &mut |_| true);
         assert_eq!((e.unwrap_err().code, asked), (ErrorCode::Cancelled, 1));
+        assert_eq!(m.data("/d/f").unwrap(), b"vecchio");
+    }
+
+    #[test]
+    fn unsafe_write_keeps_dst_when_the_source_cannot_be_opened() {
+        let mut m = MemProvider::new();
+        m.atomic_replace = false;
+        let m = Arc::new(m);
+        m.add_file("/d/f", b"vecchio");
+        let v = vfs(&[("m", &m)]);
+        // Confermata la scrittura diretta, la sorgente non si apre: il vecchio file non si tronca.
+        let e = copy(&v, &loc("sftp://m/manca"), &loc("sftp://m/d/f"), true, &mut |_| true, &mut |_| true);
+        assert_eq!(e.unwrap_err().code, ErrorCode::NotFound);
         assert_eq!(m.data("/d/f").unwrap(), b"vecchio");
     }
 }
