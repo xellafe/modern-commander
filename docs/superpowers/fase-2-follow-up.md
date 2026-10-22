@@ -151,7 +151,7 @@ Avvio: ~1.090 ms senza debugger, dentro il nuovo budget di 1,2 s (vedi il primo 
 ## Follow-up noti
 
 **Sicurezza**
-- `tauri.conf.json` ha `csp: null`: nessuna Content Security Policy. Oggi nessun HTML dei file entra nel DOM (Markdown con `html: false`, immagini del Markdown disattivate, `colorize` da testo già sostituito), ma manca una difesa in profondità. Da affrontare con la fase 3, quando arriveranno contenuti remoti (FTP, SFTP): una CSP che ammetta l'asset protocol, i worker di Monaco e pdf.js e gli stili in linea.
+- ✅ Risolto nella fase 3a (Task 14, commit `feat(security): CSP e verifiche della fase 3a`): CSP stretta in `tauri.conf.json`, motivazioni e verifiche in `fase-3a-follow-up.md` (sezione "CSP"). Testo originale: `tauri.conf.json` ha `csp: null`: nessuna Content Security Policy. Oggi nessun HTML dei file entra nel DOM (Markdown con `html: false`, immagini del Markdown disattivate, `colorize` da testo già sostituito), ma manca una difesa in profondità. Da affrontare con la fase 3, quando arriveranno contenuti remoti (FTP, SFTP): una CSP che ammetta l'asset protocol, i worker di Monaco e pdf.js e gli stili in linea.
 
 **Fuori perimetro (da proporre)**
 - Ricerca nel viewer (F7 del Lister di TC) e Shift+F4 (nuovo file).

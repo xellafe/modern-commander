@@ -55,6 +55,25 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 - Immagini, PDF e media passano dall'asset protocol di Tauri: la verifica di Range 206, percorsi UNC, nomi con `#`, `%` e spazi, percorsi oltre 260 caratteri è **da verificare**; per i file che falliscono restano testo ed esadecimale. Vedi [docs/superpowers/fase-2-follow-up.md](docs/superpowers/fase-2-follow-up.md).
 - Archivi: solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'estrazione arriva con la fase 3. 7z con intestazioni cifrate non supportato; RAR escluso. Nell'ispettore ZIP, TAR e TAR.GZ si elencano da soli, il 7z solo su richiesta (pulsante "Mostra contenuto"): il crate non limita la memoria e un 7z costruito ad arte può allocarne molta.
 
+## Sorgenti di rete (fase 3a)
+
+| Tasti | Funzione |
+|---|---|
+| Ctrl+F | Gestore delle connessioni: nuova, modifica, duplica, elimina, connetti, importa da WinSCP |
+| `\\server` nella barra del percorso | Elenco delle condivisioni SMB del server |
+
+- **Protocolli**: SFTP (password o keyboard-interactive), FTP e FTPS (esplicito e implicito, modalità passiva), indici HTTP/HTTPS di Apache, nginx e IIS (Basic e Digest). Le schede remote si usano come quelle locali: F3, F4, F5, F6, F7, F8, ispettore, conflitti e coda.
+- **Password**: solo nel Windows Credential Manager (`ModernCommander:<id connessione>`), mai nei file di configurazione. Le connessioni stanno in `connections.json` nella cartella di configurazione.
+- **Impronte**: le chiavi SSH degli host e i certificati TLS non riconosciuti dall'archivio di Windows si accettano con un dialogo e si ricordano in `known_hosts.json` (stessa cartella). Una chiave cambiata blocca la connessione finché non si usa "Dimentica impronta".
+- **Import da WinSCP**: siti dal registro o da `WinSCP.ini`, senza password; SCP diventa SFTP, WebDAV e S3 si saltano.
+- Il viewer apre immagini, PDF e media remoti scaricandoli in una cartella temporanea, che si svuota alla chiusura e all'avvio.
+
+### Limiti accettati
+
+- Niente chiavi SSH né WebDAV (issue #1, #2), niente SCP. HTTP è in sola lettura.
+- Dove la scrittura sicura (temporaneo e rinomina) non è possibile, il salvataggio diretto chiede conferma.
+- Verifiche manuali e limiti noti: [docs/superpowers/fase-3a-follow-up.md](docs/superpowers/fase-3a-follow-up.md).
+
 ## Build
 
 Prerequisiti: Rust stable (`x86_64-pc-windows-msvc`), Visual Studio Build Tools con il carico di
