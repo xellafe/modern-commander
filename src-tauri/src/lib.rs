@@ -9,6 +9,7 @@ pub mod paths;
 pub mod requests;
 pub mod shell;
 pub mod terminal;
+pub mod vfs;
 
 use ops::queue::{Event, Queue};
 use std::sync::Arc;
