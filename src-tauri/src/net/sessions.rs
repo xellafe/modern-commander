@@ -152,7 +152,8 @@ impl Shared {
     }
 }
 
-/// Una sessione di navigazione per connessione, riusata; ogni trasferimento ne apre una sua.
+/// Una sessione di navigazione per connessione, riusata; i trasferimenti prendono in prestito sessioni a parte, una per
+/// utilizzatore, che poi tornano tra le libere (vedi `Lease`).
 pub struct Sessions(Arc<Shared>);
 
 impl Sessions {
@@ -249,33 +250,39 @@ impl Sessions {
 impl Connector for Sessions {
     fn provider(&self, scheme: Scheme, id: &str, purpose: Purpose) -> Result<Arc<dyn Provider>, AppError> {
         if purpose == Purpose::Transfer {
+            // L'epoca prima dei dati di accesso: un `save` o un `disconnect` durante l'apertura scarta la sessione nuova.
+            let epoch = self.0.epoch.load(Ordering::SeqCst);
             // Lo schema si verifica anche quando c'è una sessione libera.
             let (conn, password) = self.0.login(scheme, id)?;
-            let epoch = self.0.epoch.load(Ordering::SeqCst);
             let p = match self.0.take_idle(id) {
                 Some(p) => p,
                 None => self.0.open(&conn, password.as_deref())?,
             };
-            let fell = Arc::new(AtomicBool::new(false));
-            return Ok(Arc::new(Lent { shared: self.0.clone(), id: id.to_owned(), epoch, p: Some(p), fell }));
+            let fell = AtomicBool::new(false);
+            let lease = Lease { shared: self.0.clone(), id: id.to_owned(), epoch, p: Some(p), fell };
+            return Ok(Arc::new(Lent(Arc::new(lease))));
         }
         let session = self.0.browse(scheme, id)?;
         Ok(Arc::new(Watched { shared: self.0.clone(), scheme, id: id.to_owned(), cur: Mutex::new(session) }))
     }
 }
 
-/// Sessione di trasferimento in prestito, sempre a un solo utilizzatore: lasciandola cadere torna tra le libere della
-/// connessione, a meno che una chiamata o uno stream abbia dato `CONNECTION_FAILED` o `TIMEOUT` (allora si chiude,
-/// su un altro thread per i provider che lo richiedono). Così una coda non apre una connessione per ogni operazione.
-struct Lent {
+/// Prestito di una sessione di trasferimento, sempre a un solo utilizzatore. Lo tengono il provider restituito
+/// (`Lent`) e i suoi stream (`Seen`): quando cadono tutti, la sessione torna tra le libere della connessione, a meno
+/// che una chiamata o uno stream abbia dato `CONNECTION_FAILED` o `TIMEOUT`, o che il provider si sappia rotto (allora
+/// si chiude, su un altro thread per i provider che lo richiedono). Così una coda non apre una connessione per ogni
+/// operazione.
+/// ponytail: una sessione chiusa dal server mentre è libera si scopre solo al primo comando del prestito successivo,
+/// che dà `CONNECTION_FAILED`; un `NOOP` alla presa se diventa un problema.
+struct Lease {
     shared: Arc<Shared>,
     id: String,
     epoch: u64,
     p: Option<Arc<dyn Provider>>,
-    fell: Arc<AtomicBool>,
+    fell: AtomicBool,
 }
 
-impl Lent {
+impl Lease {
     fn p(&self) -> &dyn Provider {
         self.p.as_deref().expect("presente fino al Drop")
     }
@@ -290,20 +297,23 @@ impl Lent {
     }
 }
 
-impl Drop for Lent {
+impl Drop for Lease {
     fn drop(&mut self) {
         if let Some(p) = self.p.take()
             && !self.fell.load(Ordering::SeqCst)
+            && !p.is_broken()
         {
             self.shared.give_back(&self.id, p, self.epoch);
         }
     }
 }
 
-/// Stream di una sessione in prestito: una caduta a metà la esclude dal riuso.
+struct Lent(Arc<Lease>);
+
+/// Stream di una sessione in prestito: tiene il prestito finché è aperto, e una caduta a metà lo esclude dal riuso.
 struct Seen<S> {
     inner: S,
-    fell: Arc<AtomicBool>,
+    lease: Arc<Lease>,
 }
 
 impl<S> Seen<S> {
@@ -311,7 +321,7 @@ impl<S> Seen<S> {
         if let Err(e) = &r
             && e.get_ref().and_then(|x| x.downcast_ref::<AppError>()).is_none_or(dropped)
         {
-            self.fell.store(true, Ordering::SeqCst);
+            self.lease.fell.store(true, Ordering::SeqCst);
         }
         r
     }
@@ -337,36 +347,36 @@ impl<S: Write> Write for Seen<S> {
 
 impl Provider for Lent {
     fn caps(&self) -> Caps {
-        self.p().caps()
+        self.0.p().caps()
     }
     fn stat(&self, path: &str) -> Result<Stat, AppError> {
-        self.seen(self.p().stat(path))
+        self.0.seen(self.0.p().stat(path))
     }
     fn list(&self, path: &str) -> Result<Vec<Stat>, AppError> {
-        self.seen(self.p().list(path))
+        self.0.seen(self.0.p().list(path))
     }
     fn read_at(&self, path: &str, offset: u64, len: u32) -> Result<Vec<u8>, AppError> {
-        self.seen(self.p().read_at(path, offset, len))
+        self.0.seen(self.0.p().read_at(path, offset, len))
     }
     fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
-        let inner = self.seen(self.p().reader(path))?;
-        Ok(Box::new(Seen { inner, fell: self.fell.clone() }))
+        let inner = self.0.seen(self.0.p().reader(path))?;
+        Ok(Box::new(Seen { inner, lease: self.0.clone() }))
     }
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {
-        let inner = self.seen(self.p().writer(path, create_new))?;
-        Ok(Box::new(Seen { inner, fell: self.fell.clone() }))
+        let inner = self.0.seen(self.0.p().writer(path, create_new))?;
+        Ok(Box::new(Seen { inner, lease: self.0.clone() }))
     }
     fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError> {
-        self.seen(self.p().rename(from, to, replace))
+        self.0.seen(self.0.p().rename(from, to, replace))
     }
     fn delete(&self, path: &str, is_dir: bool) -> Result<(), AppError> {
-        self.seen(self.p().delete(path, is_dir))
+        self.0.seen(self.0.p().delete(path, is_dir))
     }
     fn mkdir(&self, path: &str) -> Result<(), AppError> {
-        self.seen(self.p().mkdir(path))
+        self.0.seen(self.0.p().mkdir(path))
     }
     fn set_meta(&self, path: &str, modified_ms: Option<i64>, mode: Option<u32>) -> Result<(), AppError> {
-        self.seen(self.p().set_meta(path, modified_ms, mode))
+        self.0.seen(self.0.p().set_meta(path, modified_ms, mode))
     }
 }
 
@@ -630,6 +640,29 @@ mod tests {
         drop(p);
         transfer(&s, &id);
         assert_eq!(fake.opens(), 4);
+    }
+
+    #[test]
+    fn a_session_returns_only_after_its_streams_close() {
+        let fake = Arc::new(Fake::default());
+        let (_dir, _creds, s, id) = setup(fake.clone());
+        s.connect(&id, Some("pw".into()), false).unwrap();
+        let p = transfer(&s, &id);
+        let mut w = p.writer("/f", true).unwrap();
+        w.write_all(b"abc").unwrap();
+        w.flush().unwrap();
+        drop(w);
+        let r = p.reader("/f").unwrap();
+        // Il provider cade prima dello stream: la sessione resta in prestito, il prossimo ne riceve un'altra.
+        drop(p);
+        let q = transfer(&s, &id);
+        assert_eq!(fake.opens(), 3);
+        assert_eq!(q.stat("/f").unwrap_err().code, ErrorCode::NotFound, "non è la sessione dello stream");
+        drop(q);
+        // Chiuso lo stream, torna libera ed è la prima a essere riusata.
+        drop(r);
+        assert!(transfer(&s, &id).stat("/f").is_ok());
+        assert_eq!(fake.opens(), 3);
     }
 
     #[test]

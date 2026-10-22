@@ -94,6 +94,9 @@ fn ftp_error(e: FtpError, path: Option<&str>) -> AppError {
             let text = String::from_utf8_lossy(&r.body).trim_end().to_owned();
             (reply_code(r.status.code(), &text), text)
         }
+        // Una risposta illeggibile o un errore TLS: le risposte successive potrebbero non essere allineate, la sessione
+        // va scartata come dopo una caduta.
+        FtpError::BadResponse | FtpError::SecureError(_) => (ErrorCode::ConnectionFailed, e.to_string()),
         _ => (ErrorCode::Io, e.to_string()),
     };
     AppError { detail: Some(detail), ..AppError::new(code, path.map(Path::new)) }
@@ -593,6 +596,10 @@ impl Provider for FtpProvider {
         };
         let cmd = format!("MFMT {} {p}", t.format("%Y%m%d%H%M%S"));
         self.with(|ftp| ftp.custom_command(cmd, &[Status::File]).map(|_| ()).map_err(fe(path)))
+    }
+
+    fn is_broken(&self) -> bool {
+        lock(&self.ctl.state).broken
     }
 }
 

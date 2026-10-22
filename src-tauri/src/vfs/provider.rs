@@ -47,6 +47,11 @@ pub trait Provider: Send + Sync {
     fn delete(&self, path: &str, is_dir: bool) -> Result<(), AppError>;
     fn mkdir(&self, path: &str) -> Result<(), AppError>;
     fn set_meta(&self, path: &str, modified_ms: Option<i64>, mode: Option<u32>) -> Result<(), AppError>;
+    /// La sessione sa di non essere più utilizzabile (per esempio una connessione FTP caduta durante uno stream): non
+    /// torna tra le sessioni libere.
+    fn is_broken(&self) -> bool {
+        false
+    }
 }
 
 /// Navigazione e trasferimenti usano sessioni diverse: la lista non aspetta un upload in corso.
