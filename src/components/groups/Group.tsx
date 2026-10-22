@@ -1,5 +1,5 @@
 import { Funnel, Search } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { executeCommand } from "../../commands/registry";
 import { useLayout, type Group as GroupModel } from "../../state/layout";
@@ -47,7 +47,7 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
       {!isFile && <div className="mc-group-body">
         <FileList tabId={tabId} active={active} />
         {overlay?.kind === "menu" && <PathMenu key={overlay.title} tabId={tabId} title={overlay.title} items={overlay.items} />}
-        {overlay?.kind === "appMenu" && <AppMenu items={overlay.items} />}
+        {overlay?.kind === "appMenu" && <AppMenu items={overlay.items} x={overlay.x} y={overlay.y} />}
         {overlay?.kind === "quickSearch" && (
           <div className="mc-quicksearch" role="status" aria-label={t("groups.quickSearch")}>
             <Search size={12} aria-hidden />
@@ -146,11 +146,18 @@ function PathMenu({ tabId, title, items }: { tabId: string; title: string; items
 }
 
 // Menu contestuale dell'app sulle schede remote (niente menu di Windows): ogni voce esegue un comando.
-function AppMenu({ items }: { items: { commandId: string; labelKey: string }[] }) {
+function AppMenu({ items, x, y }: { items: { commandId: string; labelKey: string }[]; x: number; y: number }) {
   const { t } = useTranslation();
   const [sel, setSel] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => ref.current?.focus(), []);
+  // Si apre sul punto del click (coordinate client), tenuto dentro il gruppo.
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    const box = el.offsetParent!.getBoundingClientRect();
+    el.style.left = `${Math.max(4, Math.min(x - box.left, box.width - el.offsetWidth - 4))}px`;
+    el.style.top = `${Math.max(4, Math.min(y - box.top, box.height - el.offsetHeight - 4))}px`;
+    el.focus();
+  }, [x, y]);
 
   const choose = (i: number) => {
     closeOverlay();

@@ -12,7 +12,7 @@ import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
 import { sourceCaps } from "../lib/paths";
 import {
-  appMenuItems, classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
+  appMenuItems, classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowContextMenu, rowsAt, SHELL_COMMAND_IDS, shellPaths,
   suppressNativeContextMenu, toPhysical,
 } from "./shell";
 
@@ -282,13 +282,13 @@ test("appMenuItems: two files drop Edit and Rename; a folder drops Edit only; HT
 test("dropOnGroup with remote sources skips normalizePaths", async () => {
   useLayout.setState({
     groups: [{ id: "g1", tabIds: ["t1"], activeTabId: "t1" }, { id: "g2", tabIds: ["t2"], activeTabId: "t2" }],
-    tabs: { t1: { id: "t1", path: "sftp://w/x" }, t2: { id: "t2", path: "D:\y" } },
+    tabs: { t1: { id: "t1", path: "sftp://w/x" }, t2: { id: "t2", path: "D:\\y" } },
     activeGroupId: "g1",
     activationOrder: ["g1", "g2"],
   });
   await dropOnGroup("g2", ["sftp://w/x/a.txt"]);
   expect(api.normalizePaths).not.toHaveBeenCalled();
-  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", sources: ["sftp://w/x/a.txt"], from: "sftp://w/x", dest: "D:\y" });
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", sources: ["sftp://w/x/a.txt"], from: "sftp://w/x", dest: "D:\\y" });
 });
 
 test("remote rows never start an OLE drag", async () => {
@@ -296,4 +296,24 @@ test("remote rows never start an OLE drag", async () => {
   await useTabViews.getState().load("t1", "sftp://w/x");
   await dragOut("t1", "a.txt");
   expect(api.startDrag).not.toHaveBeenCalled();
+});
+
+test("remote menu: right-click on an unmarked row clears the marks, on a marked row keeps them, so menu and commands share targets", async () => {
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt"), f("b.txt"), f("c.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/x");
+  const click = (name: string | null) => rowContextMenu("t1", name === null ? null : indexOf(name), { preventDefault() {}, button: 2, clientX: 5, clientY: 6 } as never);
+  const menu = () => (useTabViews.getState().overlay as { items: { commandId: string }[]; x: number; y: number });
+  mark("a.txt", "b.txt");
+  click("c.txt");
+  expect(view().marked.size).toBe(0);
+  expect(view().rows[view().cursor].name).toBe("c.txt");
+  expect(menu().items.map((i) => i.commandId)).toContain("cm_Edit"); // un solo file
+  expect(menu()).toMatchObject({ x: 5, y: 6 });
+  mark("a.txt", "b.txt");
+  click("b.txt");
+  expect(view().marked.size).toBe(2);
+  expect(menu().items.map((i) => i.commandId)).not.toContain("cm_Edit");
+  click(null); // area vuota: le marcate
+  expect(view().marked.size).toBe(2);
+  expect(menu().items.map((i) => i.commandId)).not.toContain("cm_RenameOnly");
 });

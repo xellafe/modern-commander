@@ -9,7 +9,6 @@ import type { Row, TabView } from "../state/tabView";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { registerCommand, type Command } from "./registry";
 
-
 /** Righe su cui agisce un'azione partita dalla riga `i`: tutte le marcate se `i` è marcata, altrimenti solo `i`. Mai '..'. */
 export function rowsAt(view: TabView, i: number): Row[] {
   const row = view.rows[i];
@@ -57,7 +56,7 @@ export function appMenuItems(caps: SourceCaps, rows: Row[]): { commandId: string
 /** Dopo un'azione del menu (Elimina, Rinomina…) la lista si aggiorna da sola col watcher. Sul remoto il menu è dell'app. */
 function showMenu(tabId: string, rows: Row[], x: number, y: number) {
   const dir = useLayout.getState().tabs[tabId].path;
-  if (isRemote(dir)) return useTabViews.getState().setOverlay({ kind: "appMenu", tabId, items: appMenuItems(sourceCaps(dir), rows) });
+  if (isRemote(dir)) return useTabViews.getState().setOverlay({ kind: "appMenu", tabId, items: appMenuItems(sourceCaps(dir), rows), x, y });
   const paths = shellPaths(dir, rows);
   if (!paths.length) return;
   const pt = toPhysical(x, y, window.devicePixelRatio || 1);
@@ -76,6 +75,15 @@ export function rowContextMenu(tabId: string, i: number | null, e: MouseEvent) {
   const v = views.views[tabId];
   if (!v) return;
   if (i !== null) views.update(tabId, (w) => ({ ...w, cursor: i }));
+  if (isRemote(useLayout.getState().tabs[tabId].path)) {
+    // Sul remoto le voci devono riguardare le righe su cui agiranno i comandi (marcate, altrimenti il cursore), come in TC:
+    // il tasto destro su una riga non marcata toglie le marcature e la fa unico bersaglio.
+    const row = i === null ? undefined : v.rows[i];
+    if (row && !v.marked.has(row.name) && v.marked.size) views.update(tabId, (w) => ({ ...w, marked: new Set() }));
+    const w = useTabViews.getState().views[tabId];
+    const rows = w.marked.size ? w.rows.filter((r) => w.marked.has(r.name)) : (w.rows[w.cursor] && !w.rows[w.cursor].isParent ? [w.rows[w.cursor]] : []);
+    return void showMenu(tabId, rows, e.clientX, e.clientY);
+  }
   void showMenu(tabId, i === null ? [] : rowsAt(v, i), e.clientX, e.clientY);
 }
 
@@ -163,8 +171,20 @@ async function dragInApp(tabId: string, name: string, drop: (groupId: string, pa
   selfDrag.origin = { groupId: l.groups.find((g) => g.tabIds.includes(tabId))?.id ?? "", from };
   selfDrag.dragging = true;
   try {
-    const up = await new Promise<globalThis.MouseEvent>((res) => window.addEventListener("mouseup", res, { once: true }));
-    const groupId = document.elementFromPoint(up.clientX, up.clientY)?.closest<HTMLElement>("[data-group-id]")?.dataset.groupId;
+    // Rilascio nella finestra (mouseup), oppure fuori (perdita del focus o mousemove a pulsante già rilasciato): annulla.
+    const up = await new Promise<globalThis.MouseEvent | null>((res) => {
+      const end = (ev: globalThis.MouseEvent | null) => {
+        for (const [t, h] of Object.entries(on)) window.removeEventListener(t, h as EventListener);
+        res(ev);
+      };
+      const on = {
+        mouseup: (ev: globalThis.MouseEvent) => end(ev),
+        blur: () => end(null),
+        mousemove: (ev: globalThis.MouseEvent) => ev.buttons & 1 || end(null),
+      };
+      for (const [t, h] of Object.entries(on)) window.addEventListener(t, h as EventListener);
+    });
+    const groupId = up && document.elementFromPoint(up.clientX, up.clientY)?.closest<HTMLElement>("[data-group-id]")?.dataset.groupId;
     if (groupId) await drop(groupId, rows.map((r) => joinPath(from, r.name)));
   } catch (e) {
     report(tabId, e);
