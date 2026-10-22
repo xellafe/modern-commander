@@ -9,12 +9,13 @@
 //! Chiudere uno stream conclude il trasferimento leggendo la risposta del server, così la connessione resta usabile.
 //! Una connessione caduta o in timeout non si riusa: ogni operazione successiva dà `CONNECTION_FAILED`.
 //!
-//! Collegamenti simbolici: `LIST` non dice se puntano a una cartella. Un collegamento è a cartella se `CWD` ci entra
-//! (`dir_link`); altrimenti è il file a cui punta (o un collegamento rotto), con la dimensione di `SIZE`.
+//! Collegamenti simbolici: `LIST` e `MLSD` non dicono se puntano a una cartella. Un collegamento è a cartella se
+//! `CWD` ci entra (`dir_link`); altrimenti è il file a cui punta (o un collegamento rotto), con la dimensione di `SIZE`.
 //!
 //! Nomi non UTF-8: come in SFTP, si mostrano con U+FFFD e ogni operazione su quei percorsi dà `INVALID_NAME`.
-//! ponytail: `suppaftp` scrive i comandi, `PASS` compreso, nel log a livello trace. L'app non installa un logger;
-//! se se ne aggiunge uno, `suppaftp` va filtrato sotto trace.
+//! ponytail: `suppaftp` scrive i comandi, `PASS` compreso, nel log a livello trace. Nelle build di rilascio il
+//! livello trace è tolto (`log` con `release_max_level_debug`); in debug l'app non installa un logger, ma se se ne
+//! aggiunge uno `suppaftp` va filtrato sotto trace.
 
 use super::connections::Connection;
 use super::sessions::ProviderFactory;
@@ -30,7 +31,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, UNIX_EPOCH};
 use suppaftp::list::{File, ListParser, PosixPexQuery};
 use suppaftp::types::FileType;
-use suppaftp::{FtpError, FtpResult, ImplFtpStream, RustlsConnector, Status, TlsConnector, TransferStream};
+use suppaftp::{FtpError, FtpResult, ImplFtpStream, Mode, RustlsConnector, Status, TlsConnector, TransferStream};
 
 const IO_TIMEOUT: Duration = Duration::from_millis(IO_TIMEOUT_MS as u64);
 
@@ -102,6 +103,17 @@ fn fe(path: &str) -> impl Fn(FtpError) -> AppError + '_ {
     move |e| ftp_error(e, Some(path))
 }
 
+/// Un comando di cui un rifiuto del server è una risposta valida (`None`). Ogni altro errore (connessione, timeout,
+/// risposta illeggibile) si propaga: la sessione va segnata come rotta, o una risposta in ritardo verrebbe letta
+/// come quella del comando successivo.
+fn soft<T>(r: FtpResult<T>) -> FtpResult<Option<T>> {
+    match r {
+        Ok(v) => Ok(Some(v)),
+        Err(FtpError::UnexpectedResponse(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 fn io_error(e: io::Error, path: &str) -> AppError {
     AppError { detail: Some(e.to_string()), ..AppError::new(io_code(&e), Some(Path::new(path))) }
 }
@@ -116,13 +128,30 @@ fn mode_of(f: &File) -> u32 {
 /// capiscono (`total 8`). Un collegamento esce come collegamento a cartella in sospeso: lo verifica `list_in`.
 /// Le date di `LIST` sono al minuto (o al giorno, per i file vecchi); quelle di `MLSD` al secondo.
 fn parse_line(line: &str, mlsd: bool) -> Option<Stat> {
+    let fixed: String;
     let (f, has_mode) = if mlsd {
-        // I fatti finiscono al primo spazio, poi c'è il nome.
-        let facts = line.split_once(' ').map_or("", |(f, _)| f).to_ascii_lowercase();
-        if facts.contains("type=cdir") || facts.contains("type=pdir") {
+        // Come in `suppaftp`: i fatti finiscono al primo "; ", poi c'è il nome.
+        let end = line.find("; ");
+        let facts = end.map_or("", |e| &line[..e]);
+        let lower = facts.to_ascii_lowercase();
+        let ty = lower.split(';').find_map(|f| f.strip_prefix("type=")).unwrap_or_default();
+        if matches!(ty, "cdir" | "pdir") {
             return None;
         }
-        (ListParser::parse_mlsd(line).ok()?, facts.contains("unix.mode="))
+        // `type=OS.unix=slink:<bersaglio>` o `OS.unix=symlink` (ProFTPD, Pure-FTPd): `suppaftp` non li conosce e
+        // scarterebbe la riga. Diventano `type=link`, un collegamento in sospeso come le voci `l` di `LIST`.
+        // ponytail: un server che segue i collegamenti senza dirlo mostra un collegamento a cartella come una
+        // cartella vera, che la copia attraversa e l'eliminazione svuota; non lo si può distinguere da qui.
+        let line = match end {
+            Some(e) if ty.starts_with("os.unix=slink") || ty.starts_with("os.unix=symlink") => {
+                let facts: Vec<&str> =
+                    facts.split(';').map(|f| if f.to_ascii_lowercase().starts_with("type=") { "type=link" } else { f }).collect();
+                fixed = format!("{}; {}", facts.join(";"), &line[e + 2..]);
+                fixed.as_str()
+            }
+            _ => line,
+        };
+        (ListParser::parse_mlsd(line).ok()?, lower.contains("unix.mode="))
     } else if let Ok(f) = ListParser::parse_posix(line) {
         (f, true)
     } else {
@@ -241,10 +270,10 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls
     ftp.login(user, pass).map_err(err)?;
     ftp.transfer_type(FileType::Binary).map_err(err)?;
     // Un server senza `FEAT` non ha nessuna delle estensioni.
-    let features = ftp.feat().unwrap_or_default();
+    let features = soft(ftp.feat()).map_err(err)?.unwrap_or_default();
     let has = |k: &str| features.keys().any(|f| f.eq_ignore_ascii_case(k));
     if has("UTF8") {
-        let _ = ftp.opts("UTF8", Some("ON"));
+        soft(ftp.opts("UTF8", Some("ON"))).map_err(err)?;
     }
     let feat = Feat { mlst: has("MLST"), mdtm: has("MDTM"), size: has("SIZE"), mfmt: has("MFMT") };
     let state = State { ftp, busy: false, broken: false };
@@ -276,6 +305,10 @@ fn connect(conn: &Connection, tls: Option<&Arc<ClientConfig>>) -> Result<Ftp, Ap
     };
     let mut ftp = ftp.passive_stream_builder(data_stream);
     ftp.set_passive_nat_workaround(true);
+    // `PASV` porta solo indirizzi IPv4: su IPv6 serve `EPSV`, che dà solo la porta.
+    if ftp.get_ref().peer_addr().is_ok_and(|a| a.is_ipv6()) {
+        ftp.set_mode(Mode::ExtendedPassive);
+    }
     Ok(ftp)
 }
 
@@ -321,7 +354,8 @@ impl Stream {
             Err(FtpError::UnexpectedResponse(_)) if early => Ok(()),
             r => r.map_err(|e| ftp_error(e, Some(&self.path))),
         };
-        let r = flushed.map_err(|e| io_error(e, &self.path)).and(r);
+        // La risposta del server (552 spazio esaurito, ...) spiega meglio dell'errore di scrittura.
+        let r = r.and(flushed.map_err(|e| io_error(e, &self.path)));
         let mut s = lock(&self.ctl.state);
         let r = s.note(r);
         s.busy = false;
@@ -343,10 +377,17 @@ impl Read for Stream {
 }
 
 impl Write for Stream {
+    /// Se il server chiude la connessione dati a metà (552, quota, ...), l'errore è la sua risposta finale.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match &mut self.data {
-            Some(data) => data.write(buf).map_err(|e| io::Error::other(io_error(e, &self.path))),
-            None => Err(io::Error::other(AppError::new(ErrorCode::Io, Some(Path::new(&self.path))))),
+        let Some(data) = &mut self.data else {
+            return Err(io::Error::other(AppError::new(ErrorCode::Io, Some(Path::new(&self.path)))));
+        };
+        match data.write(buf) {
+            Ok(n) => Ok(n),
+            Err(e) => {
+                let e = io::Error::other(io_error(e, &self.path));
+                Err(self.end(false).err().unwrap_or(e))
+            }
         }
     }
 
@@ -389,12 +430,15 @@ impl FtpProvider {
         let mut out: Vec<Stat> = lines.iter().filter_map(|l| parse_line(l, self.feat.mlst)).collect();
         for s in out.iter_mut().filter(|s| s.dir_link) {
             let full = join(dir, &s.name);
-            if checked(&full).is_ok() && ftp.cwd(&full).is_ok() {
+            if checked(&full).is_ok() && soft(ftp.cwd(&full)).map_err(fe(dir))?.is_some() {
                 s.size = 0;
             } else {
                 s.is_dir = false;
                 s.dir_link = false;
-                if let Some(n) = self.feat.size.then(|| ftp.size(&full).ok()).flatten() {
+                if self.feat.size
+                    && checked(&full).is_ok()
+                    && let Some(n) = soft(ftp.size(&full)).map_err(fe(dir))?
+                {
                     s.size = n as u64;
                 }
             }
@@ -415,7 +459,7 @@ impl FtpProvider {
             let line = ftp.mlst(Some(path)).map_err(fe(path))?;
             parse_line(&line, true).filter(|s| !s.is_dir)
         } else if self.feat.size
-            && let Ok(n) = ftp.size(path)
+            && let Some(n) = soft(ftp.size(path)).map_err(fe(path))?
         {
             Some(Stat { name: String::new(), is_dir: false, dir_link: false, size: n as u64, modified_ms: None, mode: None })
         } else {
@@ -430,7 +474,7 @@ impl FtpProvider {
         if !s.is_dir
             && self.feat.mdtm
             && !self.feat.mlst
-            && let Ok(t) = ftp.mdtm(path)
+            && let Some(t) = soft(ftp.mdtm(path)).map_err(fe(path))?
         {
             s.modified_ms = Some(t.and_utc().timestamp_millis());
         }
@@ -534,6 +578,7 @@ impl Provider for FtpProvider {
             let Err(e) = ftp.mkdir(p) else { return Ok(()) };
             match self.exists(ftp, p) {
                 Ok(true) => Err(AppError::new(ErrorCode::AlreadyExists, Some(Path::new(path)))),
+                Err(x) if dropped(&x) => Err(x),
                 _ => Err(ftp_error(e, Some(path))),
             }
         })
@@ -585,6 +630,11 @@ mod tests {
         assert_eq!(m("type=dir;modify=20261021100005; sub").unwrap().mode, None);
         assert!(m("type=cdir;modify=20261021100005; /home/u").is_none());
         assert!(m("type=pdir;modify=20261021100005; ..").is_none());
+        // Collegamenti di ProFTPD e Pure-FTPd: in sospeso come le voci `l`.
+        for l in ["type=OS.unix=slink:/srv/releases/1;modify=20261021100005;UNIX.mode=0777; current", "Type=OS.unix=symlink; current"] {
+            let s = m(l).unwrap();
+            assert_eq!((s.name.as_str(), s.is_dir, s.dir_link), ("current", true, true), "{l}");
+        }
     }
 
     #[test]

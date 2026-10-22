@@ -2213,6 +2213,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "libssh2-sys",
+ "log",
  "notify",
  "portable-pty",
  "rcgen",
