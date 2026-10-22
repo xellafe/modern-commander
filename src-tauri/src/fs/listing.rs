@@ -3,6 +3,7 @@
 
 use crate::error::{AppError, ErrorCode};
 use crate::paths::{normalize_lexical, to_extended};
+use crate::vfs::provider::Stat;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, FILETIME, HANDLE};
@@ -34,6 +35,26 @@ pub struct Entry {
     pub attributes: u32,
     /// Collegamento simbolico o giunzione.
     pub is_symlink: bool,
+    /// Permessi POSIX delle sorgenti remote; `None` in locale.
+    pub mode: Option<u32>,
+}
+
+/// Voce di una cartella remota: una sola data, ripetuta in creazione e accesso; niente attributi Win32.
+impl From<Stat> for Entry {
+    fn from(s: Stat) -> Self {
+        let t = s.modified_ms.unwrap_or(0);
+        Entry {
+            name: s.name,
+            is_dir: s.is_dir,
+            size: s.size,
+            modified_ms: t,
+            created_ms: t,
+            accessed_ms: t,
+            attributes: 0,
+            is_symlink: s.dir_link,
+            mode: s.mode,
+        }
+    }
 }
 
 /// Chiude l'handle di ricerca al drop.
@@ -68,6 +89,7 @@ fn entry_from(d: &WIN32_FIND_DATAW) -> Option<Entry> {
         // Dopo FindFirstFile, `dwReserved0` contiene il reparse tag quando l'attributo è presente.
         is_symlink: attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
             && matches!(d.dwReserved0, IO_REPARSE_TAG_SYMLINK | IO_REPARSE_TAG_MOUNT_POINT),
+        mode: None,
     })
 }
 

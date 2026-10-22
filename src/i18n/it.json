@@ -277,6 +277,16 @@
     "CHANGED_ON_DISK": "Il file è stato modificato su disco da un altro programma.",
     "UNMAPPABLE_CHARS": "Il testo contiene caratteri che la codifica scelta non sa rappresentare.",
     "CORRUPT_ARCHIVE": "L'archivio è danneggiato o non si può leggere.",
+    "AUTH_REQUIRED": "Il server chiede una password.",
+    "AUTH_FAILED": "Autenticazione non riuscita: utente o password non validi.",
+    "CONNECTION_FAILED": "Connessione al server non riuscita o interrotta.",
+    "TIMEOUT": "Il server non ha risposto in tempo.",
+    "HOST_KEY_UNKNOWN": "L'impronta del server è sconosciuta.",
+    "HOST_KEY_CHANGED": "L'impronta del server è cambiata rispetto a quella accettata.",
+    "CERT_UNTRUSTED": "Il certificato del server non è attendibile.",
+    "UNSAFE_WRITE": "Il server non permette il salvataggio sicuro: se la connessione cade il file può restare incompleto.",
+    "READ_ONLY_SOURCE": "Questa sorgente è in sola lettura.",
+    "RANGE_UNSUPPORTED": "Il server non permette di leggere il file a blocchi.",
     "IO": "Errore di input/output."
   },
   "ops": {

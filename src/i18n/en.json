@@ -277,6 +277,16 @@
     "CHANGED_ON_DISK": "The file was changed on disk by another program.",
     "UNMAPPABLE_CHARS": "The text contains characters the chosen encoding cannot represent.",
     "CORRUPT_ARCHIVE": "The archive is damaged or cannot be read.",
+    "AUTH_REQUIRED": "The server requires a password.",
+    "AUTH_FAILED": "Authentication failed: wrong user name or password.",
+    "CONNECTION_FAILED": "Could not connect to the server, or the connection was lost.",
+    "TIMEOUT": "The server did not respond in time.",
+    "HOST_KEY_UNKNOWN": "The server fingerprint is unknown.",
+    "HOST_KEY_CHANGED": "The server fingerprint has changed from the accepted one.",
+    "CERT_UNTRUSTED": "The server certificate is not trusted.",
+    "UNSAFE_WRITE": "This server does not allow safe saving: if the connection drops, the file may be left incomplete.",
+    "READ_ONLY_SOURCE": "This source is read-only.",
+    "RANGE_UNSUPPORTED": "The server does not allow reading the file in blocks.",
     "IO": "Input/output error."
   },
   "ops": {

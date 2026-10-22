@@ -19,6 +19,16 @@ export type ErrorCode =
   | "CHANGED_ON_DISK"
   | "UNMAPPABLE_CHARS"
   | "CORRUPT_ARCHIVE"
+  | "AUTH_REQUIRED"
+  | "AUTH_FAILED"
+  | "CONNECTION_FAILED"
+  | "TIMEOUT"
+  | "HOST_KEY_UNKNOWN"
+  | "HOST_KEY_CHANGED"
+  | "CERT_UNTRUSTED"
+  | "UNSAFE_WRITE"
+  | "READ_ONLY_SOURCE"
+  | "RANGE_UNSUPPORTED"
   | "IO";
 
 export interface AppError {
@@ -39,6 +49,8 @@ export interface Entry {
   /** Attributi Win32 grezzi. */
   attributes: number;
   isSymlink: boolean;
+  /** Permessi POSIX delle sorgenti remote; null in locale. */
+  mode?: number | null;
 }
 
 export type DriveKind = "fixed" | "removable" | "network" | "cdrom" | "other";
@@ -69,6 +81,8 @@ export interface FileInfo {
   modifiedMs: number;
   accessedMs: number;
   attributes: number;
+  /** Date al secondo o meglio: sempre in locale, non su FTP senza MDTM. */
+  mtimeReliable: boolean;
 }
 
 /** fs/columns.rs: confine di carattere sulla riga, con la colonna dove inizia quel carattere. */

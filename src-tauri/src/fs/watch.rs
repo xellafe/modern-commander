@@ -105,9 +105,10 @@ pub async fn watch_dir(
     path: String,
 ) -> Result<(), AppError> {
     // metadata, add_watch e spawn possono bloccarsi (UNC lenti, unità rimovibili): thread dedicato.
+    let path = super::local_only(&path)?;
     let watchers = watchers.inner().clone();
     super::blocking(move || {
-        watchers.watch(tab_id, PathBuf::from(path), move |tab_id| {
+        watchers.watch(tab_id, path, move |tab_id| {
             let _ = app.emit("fs-changed", FsChanged { tab_id });
         })
     })

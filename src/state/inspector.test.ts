@@ -17,7 +17,7 @@ const listArchive = vi.mocked(api.listArchive);
 const cancelRequest = vi.mocked(api.cancelRequest);
 const dirSize = vi.mocked(computeDirSize);
 
-const INFO: FileInfo = { size: 10, isDir: false, createdMs: 1, modifiedMs: 2, accessedMs: 3, attributes: 0 };
+const INFO: FileInfo = { size: 10, isDir: false, createdMs: 1, modifiedMs: 2, accessedMs: 3, attributes: 0, mtimeReliable: true };
 const enc = (s: string) => new TextEncoder().encode(s);
 const set = (path: string, isDir = false) => useInspector.getState().setTarget({ path, isDir });
 const state = () => useInspector.getState();

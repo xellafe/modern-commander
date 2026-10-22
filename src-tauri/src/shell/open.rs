@@ -22,6 +22,7 @@ use windows::core::{HSTRING, PCWSTR, w};
 /// l'argomento resta solo `path`.
 #[tauri::command]
 pub async fn open_path(window: tauri::Window, path: String) -> Result<(), AppError> {
+    crate::fs::local_only(&path)?;
     let owner = window.hwnd().map_err(detail_error)?.0 as isize; // HWND non è Send
     let (tx, mut rx) = tauri::async_runtime::channel(1);
     std::thread::spawn(move || {
@@ -68,6 +69,7 @@ fn shell_execute(owner: HWND, verb: PCWSTR, path: &str) -> windows::core::Result
 /// Ricerca nel PATH e `CreateProcess` girano fuori dal thread della UI.
 #[tauri::command]
 pub async fn open_with(exe: String, path: String) -> Result<(), AppError> {
+    crate::fs::local_only(&path)?;
     tauri::async_runtime::spawn_blocking(move || {
         editor_command(&exe, &path)?
             .spawn()

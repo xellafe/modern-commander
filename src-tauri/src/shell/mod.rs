@@ -98,6 +98,10 @@ pub(crate) struct Selection {
 impl Selection {
     /// Risolve i percorsi in PIDL; tutti devono avere la stessa cartella padre.
     pub fn parse(paths: &[String]) -> Result<Self, AppError> {
+        // Le posizioni remote non arrivano alla shell: `UNSUPPORTED` se ce n'è anche una sola.
+        for p in paths {
+            crate::fs::local_only(p)?;
+        }
         let invalid = |p: Option<&str>| AppError::new(ErrorCode::InvalidRequest, p.map(Path::new));
         let items = paths
             .iter()

@@ -43,7 +43,7 @@ class FakeModel {
   }
 }
 
-const info = (modifiedMs: number): FileInfo => ({ size: 9, isDir: false, createdMs: 0, modifiedMs, accessedMs: 0, attributes: 0 });
+const info = (modifiedMs: number): FileInfo => ({ size: 9, isDir: false, createdMs: 0, modifiedMs, accessedMs: 0, attributes: 0, mtimeReliable: true });
 const bytes = (s: string) => new TextEncoder().encode(s);
 const model = () => editorModel("t1") as unknown as FakeModel;
 const err = (code: string) => ({ code, path: "C:\\a.ts", detail: null });

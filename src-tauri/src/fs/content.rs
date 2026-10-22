@@ -6,6 +6,7 @@ use super::listing::FILETIME_UNIX_DIFF_MS;
 use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::{PART_SUFFIX, from_win, wide};
 use crate::paths::to_extended;
+use crate::vfs::provider::{Provider, stream_error};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -32,6 +33,8 @@ pub struct FileInfo {
     pub accessed_ms: i64,
     /// Attributi Win32 grezzi (`FILE_ATTRIBUTE_*`).
     pub attributes: u32,
+    /// Date al secondo o meglio: sempre in locale, `Caps::precise_mtime` sul remoto.
+    pub mtime_reliable: bool,
 }
 
 /// Apre in sola lettura senza escludere nessuno, anche con percorsi oltre i 260 caratteri.
@@ -39,7 +42,7 @@ pub(crate) fn open_shared(path: &Path) -> std::io::Result<File> {
     File::options().read(true).share_mode(SHARE_ALL).open(to_extended(path))
 }
 
-fn ms(filetime: u64) -> i64 {
+pub(crate) fn ms(filetime: u64) -> i64 {
     (filetime / 10_000) as i64 - FILETIME_UNIX_DIFF_MS
 }
 
@@ -52,6 +55,22 @@ pub fn file_info(path: &Path) -> Result<FileInfo, AppError> {
         modified_ms: ms(m.last_write_time()),
         accessed_ms: ms(m.last_access_time()),
         attributes: m.file_attributes(),
+        mtime_reliable: true,
+    })
+}
+
+/// `file_info` di un elemento remoto: una sola data, ripetuta in creazione e accesso; niente attributi.
+pub fn remote_file_info(p: &dyn Provider, path: &str) -> Result<FileInfo, AppError> {
+    let s = p.stat(path)?;
+    let t = s.modified_ms.unwrap_or(0);
+    Ok(FileInfo {
+        size: s.size,
+        is_dir: s.is_dir,
+        created_ms: t,
+        modified_ms: t,
+        accessed_ms: t,
+        attributes: 0,
+        mtime_reliable: p.caps().precise_mtime,
     })
 }
 
@@ -65,6 +84,28 @@ pub fn read_chunk(path: &Path, offset: u64, len: u32) -> Result<Vec<u8>, AppErro
     f.seek(SeekFrom::Start(offset)).map_err(err)?;
     let mut buf = Vec::new();
     f.take(u64::from(len)).read_to_end(&mut buf).map_err(err)?;
+    Ok(buf)
+}
+
+/// `read_chunk` di un file remoto.
+pub fn remote_chunk(p: &dyn Provider, path: &str, offset: u64, len: u32) -> Result<Vec<u8>, AppError> {
+    if len > MAX_CHUNK {
+        return Err(AppError::new(ErrorCode::InvalidRequest, Some(Path::new(path))));
+    }
+    p.read_at(path, offset, len)
+}
+
+/// `read_whole` di un file remoto.
+pub fn remote_whole(p: &dyn Provider, path: &str, max: u64) -> Result<Vec<u8>, AppError> {
+    let too_large = || AppError::new(ErrorCode::TooLarge, Some(Path::new(path)));
+    if p.stat(path)?.size > max {
+        return Err(too_large());
+    }
+    let mut buf = Vec::new();
+    p.reader(path)?.take(max.saturating_add(1)).read_to_end(&mut buf).map_err(|e| stream_error(e, path))?;
+    if buf.len() as u64 > max {
+        return Err(too_large());
+    }
     Ok(buf)
 }
 

@@ -261,6 +261,8 @@ pub async fn term_spawn(
     let terminals = terminals.inner().clone();
     crate::fs::blocking(move || {
         let kind = shell.unwrap_or_else(|| default_shell(&available_shells()));
+        // Una scheda remota non ha una cartella locale: `resolve_cwd` ripiega su quella dell'utente.
+        let cwd = if crate::fs::local_only(&cwd).is_ok() { cwd } else { String::new() };
         let command = shell_command(kind, &resolve_cwd(&cwd));
         let id = terminals.0.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let t = terminals.clone();

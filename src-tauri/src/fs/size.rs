@@ -5,7 +5,7 @@ use super::listing::walk_dir;
 use crate::error::{AppError, ErrorCode};
 use crate::requests::Requests;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
@@ -81,7 +81,7 @@ struct DirSizeEvent {
 pub fn calc_dir_size(app: AppHandle, requests: State<'_, Requests>, request_id: u64, path: String) {
     let guard = requests.register(request_id);
     tauri::async_runtime::spawn_blocking(move || {
-        let r = dir_size(&PathBuf::from(&path), guard.flag());
+        let r = super::local_only(&path).and_then(|p| dir_size(&p, guard.flag()));
         drop(guard); // fuori dal registro prima di emettere il risultato
         let (result, error) = match r {
             Ok(v) => (Some(v), None),
@@ -94,7 +94,7 @@ pub fn calc_dir_size(app: AppHandle, requests: State<'_, Requests>, request_id: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn write(p: &Path, n: usize) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();

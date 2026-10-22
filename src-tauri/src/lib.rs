@@ -11,9 +11,21 @@ pub mod shell;
 pub mod terminal;
 pub mod vfs;
 
+use error::{AppError, ErrorCode};
 use ops::queue::{Event, Queue};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+use vfs::loc::Scheme;
+use vfs::provider::{Connector, Provider, Purpose};
+
+/// Finché non ci sono le connessioni salvate, nessuna posizione remota ha un provider: `NOT_FOUND`.
+struct NoConnections;
+
+impl Connector for NoConnections {
+    fn provider(&self, _: Scheme, _: &str, _: Purpose) -> Result<Arc<dyn Provider>, AppError> {
+        Err(AppError::new(ErrorCode::NotFound, None))
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +33,7 @@ pub fn run() {
         .manage(fs::watch::Watchers::default())
         .manage(requests::Requests::default())
         .manage(terminal::Terminals::default())
+        .manage(Arc::new(vfs::router::Vfs::new(Arc::new(NoConnections))))
         // Un ricaricamento della pagina (anche il reload di Vite) perde i canali e non esegue la pulizia dei
         // componenti: i terminali aperti si chiudono qui. All'avvio non ce n'è nessuno: nessun effetto.
         // ponytail: vale con la finestra unica; con più finestre servirebbe la proprietà della sessione per webview.

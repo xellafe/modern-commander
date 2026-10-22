@@ -32,6 +32,25 @@ pub enum ErrorCode {
     UnmappableChars,
     /// Archivio danneggiato o non leggibile.
     CorruptArchive,
+    /// La sorgente remota chiede una password che non è salvata.
+    AuthRequired,
+    /// Credenziali rifiutate dal server.
+    AuthFailed,
+    /// Connessione non riuscita o caduta.
+    ConnectionFailed,
+    Timeout,
+    /// Impronta dell'host SSH mai vista: `detail` porta `SHA256:<base64>`.
+    HostKeyUnknown,
+    /// Impronta dell'host SSH diversa da quella accettata: `detail` porta `SHA256:<base64>`.
+    HostKeyChanged,
+    /// Certificato TLS che Windows non accetta: `detail` porta `SHA256:<base64>`.
+    CertUntrusted,
+    /// Il server non permette la scrittura sicura (temporaneo e rinomina): serve la conferma dell'utente.
+    UnsafeWrite,
+    /// Sorgente in sola lettura (HTTP).
+    ReadOnlySource,
+    /// Il server non supporta le letture a intervalli (`Range`).
+    RangeUnsupported,
     Io,
 }
 
@@ -42,6 +61,15 @@ pub struct AppError {
     pub path: Option<String>,
     pub detail: Option<String>,
 }
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+/// Serve per far viaggiare un `AppError` dentro un `std::io::Error` (gli stream dei provider).
+impl std::error::Error for AppError {}
 
 impl AppError {
     pub fn new(code: ErrorCode, path: Option<&Path>) -> Self {
@@ -104,6 +132,21 @@ mod tests {
         assert_eq!(s(ErrorCode::ChangedOnDisk), "CHANGED_ON_DISK");
         assert_eq!(s(ErrorCode::UnmappableChars), "UNMAPPABLE_CHARS");
         assert_eq!(s(ErrorCode::CorruptArchive), "CORRUPT_ARCHIVE");
+    }
+
+    #[test]
+    fn network_codes_serialize_screaming_snake() {
+        let s = |c| serde_json::to_value(c).unwrap();
+        assert_eq!(s(ErrorCode::AuthRequired), "AUTH_REQUIRED");
+        assert_eq!(s(ErrorCode::AuthFailed), "AUTH_FAILED");
+        assert_eq!(s(ErrorCode::ConnectionFailed), "CONNECTION_FAILED");
+        assert_eq!(s(ErrorCode::Timeout), "TIMEOUT");
+        assert_eq!(s(ErrorCode::HostKeyUnknown), "HOST_KEY_UNKNOWN");
+        assert_eq!(s(ErrorCode::HostKeyChanged), "HOST_KEY_CHANGED");
+        assert_eq!(s(ErrorCode::CertUntrusted), "CERT_UNTRUSTED");
+        assert_eq!(s(ErrorCode::UnsafeWrite), "UNSAFE_WRITE");
+        assert_eq!(s(ErrorCode::ReadOnlySource), "READ_ONLY_SOURCE");
+        assert_eq!(s(ErrorCode::RangeUnsupported), "RANGE_UNSUPPORTED");
     }
 
     #[test]

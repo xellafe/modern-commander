@@ -133,8 +133,14 @@ export const readFile = async (path: string, max: number) =>
  * Salva il testo dell'editor senza mai scrivere sul posto (`<file>.mcpart` poi sostituzione). Con una data
  * attesa `CHANGED_ON_DISK` se il file è cambiato; `null` sovrascrive. `UNMAPPABLE_CHARS` se la codifica non basta.
  */
-export const writeTextFile = (path: string, text: string, encoding: string, bom: boolean, expectedModifiedMs: number | null) =>
-  invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs });
+export const writeTextFile = (
+  path: string,
+  text: string,
+  encoding: string,
+  bom: boolean,
+  expectedModifiedMs: number | null,
+  allowUnsafe = false,
+) => invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs, allowUnsafe });
 
 /** Carattere di ogni virtual key nel layout di tastiera attivo (`MapVirtualKeyW`); null se il tasto non ne ha. */
 export const keyLabels = (vks: number[]) => invoke<(string | null)[]>("key_labels", { vks });

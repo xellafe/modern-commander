@@ -2,13 +2,11 @@
 //! e colonna) trova il carattere che occupa una colonna, senza caricare mai la riga in memoria. Servono solo i confini
 //! dei caratteri, non il testo: il conteggio coincide con `encoding_rs` per la stessa codifica. Annullabile.
 
-use super::content::open_shared;
-use super::lines::read_block;
+use super::source::BlockSource;
 use crate::error::{AppError, ErrorCode};
 use encoding_rs::Encoding;
 use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow::{self, Break, Continue};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Confine di carattere sulla riga, con la colonna dove inizia quel carattere.
@@ -289,18 +287,18 @@ impl Seg {
 /// `u64::MAX` si chiede la fine riga. Ogni blocco letto chiama `progress` con il confine di carattere corrente.
 /// `INVALID_REQUEST` per un'etichetta sconosciuta (o `replacement` e `iso-2022-jp`, che hanno stato fra i caratteri).
 pub fn column_offset(
-    path: &Path,
+    src: &mut dyn BlockSource,
     encoding: &str,
     from: Mark,
     target: u64,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(Mark),
 ) -> Result<ColumnHit, AppError> {
-    column_offset_in(path, encoding, from, target, cancel, progress, BLOCK)
+    column_offset_in(src, encoding, from, target, cancel, progress, BLOCK)
 }
 
 fn column_offset_in(
-    path: &Path,
+    src: &mut dyn BlockSource,
     encoding: &str,
     from: Mark,
     target: u64,
@@ -310,17 +308,15 @@ fn column_offset_in(
 ) -> Result<ColumnHit, AppError> {
     let enc = Encoding::for_label(encoding.as_bytes())
         .filter(|e| *e != encoding_rs::REPLACEMENT && *e != encoding_rs::ISO_2022_JP)
-        .ok_or_else(|| AppError::new(ErrorCode::InvalidRequest, Some(path)))?;
+        .ok_or_else(|| AppError::new(ErrorCode::InvalidRequest, None))?;
     let mut seg = Seg::new(enc);
     let mut c = Counter { col: from.column, target, cr: None };
-    let mut f = open_shared(path).map_err(|e| AppError::from_io(&e, path))?;
-    let mut buf = Vec::with_capacity(block);
     let mut pos = from.offset;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(AppError::new(ErrorCode::Cancelled, Some(path)));
+            return Err(AppError::new(ErrorCode::Cancelled, None));
         }
-        read_block(&mut f, pos, block, &mut buf, path)?;
+        let buf = src.read_at(pos, block as u32)?;
         for &b in &buf {
             if let Break(h) = seg.push(b, pos, &mut c) {
                 return Ok(h);
@@ -341,6 +337,7 @@ fn column_offset_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::source::LocalFile;
     use std::io::Write;
 
     const ZERO: Mark = Mark { offset: 0, column: 0 };
@@ -354,7 +351,7 @@ mod tests {
     // Blocchi da 3 byte: quasi ogni carattere multibyte finisce a cavallo di due blocchi.
     fn col(bytes: &[u8], enc: &str, target: u64) -> ColumnHit {
         let f = file(bytes);
-        column_offset_in(f.path(), enc, ZERO, target, &AtomicBool::new(false), &mut |_| {}, 3).unwrap()
+        column_offset_in(&mut LocalFile::open(f.path()).unwrap(), enc, ZERO, target, &AtomicBool::new(false), &mut |_| {}, 3).unwrap()
     }
 
     fn hit(offset: u64, column: u64, eol: bool) -> ColumnHit {
@@ -468,31 +465,31 @@ mod tests {
         let f = file(&line);
         let no = AtomicBool::new(false);
         let mut marks = vec![];
-        let full = column_offset(f.path(), "utf-8", ZERO, u64::MAX, &no, &mut |m| marks.push(m)).unwrap();
+        let full = column_offset(&mut LocalFile::open(f.path()).unwrap(), "utf-8", ZERO, u64::MAX, &no, &mut |m| marks.push(m)).unwrap();
         assert_eq!((full.offset, full.eol), (line.len() as u64, true));
         assert_eq!(marks.len(), 3);
         // Il secondo confine di blocco cade dentro una `è`: il punto di controllo è il suo inizio.
         assert_eq!(marks[1].offset, 2 * BLOCK as u64 - 1);
         for m in &marks {
             let target = m.column + 1000;
-            let resumed = column_offset(f.path(), "utf-8", *m, target, &no, &mut |_| {}).unwrap();
-            let fresh = column_offset(f.path(), "utf-8", ZERO, target, &no, &mut |_| {}).unwrap();
+            let resumed = column_offset(&mut LocalFile::open(f.path()).unwrap(), "utf-8", *m, target, &no, &mut |_| {}).unwrap();
+            let fresh = column_offset(&mut LocalFile::open(f.path()).unwrap(), "utf-8", ZERO, target, &no, &mut |_| {}).unwrap();
             assert_eq!(resumed, fresh);
-            assert_eq!(column_offset(f.path(), "utf-8", *m, u64::MAX, &no, &mut |_| {}).unwrap(), full);
+            assert_eq!(column_offset(&mut LocalFile::open(f.path()).unwrap(), "utf-8", *m, u64::MAX, &no, &mut |_| {}).unwrap(), full);
         }
     }
 
     #[test]
     fn unknown_label_is_invalid_request() {
         let f = file(b"abc");
-        let e = column_offset(f.path(), "klingon", ZERO, 1, &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+        let e = column_offset(&mut LocalFile::open(f.path()).unwrap(), "klingon", ZERO, 1, &AtomicBool::new(false), &mut |_| {}).unwrap_err();
         assert_eq!(e.code, ErrorCode::InvalidRequest);
     }
 
     #[test]
     fn cancel_returns_cancelled() {
         let f = file(b"abc");
-        let e = column_offset(f.path(), "utf-8", ZERO, 1, &AtomicBool::new(true), &mut |_| {}).unwrap_err();
+        let e = column_offset(&mut LocalFile::open(f.path()).unwrap(), "utf-8", ZERO, 1, &AtomicBool::new(true), &mut |_| {}).unwrap_err();
         assert_eq!(e.code, ErrorCode::Cancelled);
     }
 }
