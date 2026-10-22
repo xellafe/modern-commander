@@ -9,8 +9,8 @@
 //! riceverebbe le credenziali): un `3xx` dà `IO` con lo stato e la destinazione in `detail`.
 //!
 //! `stat` legge l'elenco della cartella madre, così cartelle e file hanno gli stessi metadati di `list`.
-//! ponytail: un elenco per ogni `stat` (una cartella grande copiata file per file la rielenca a ogni file); `HEAD`
-//! o una cache degli elenchi se serve.
+//! ponytail: si ricorda solo l'ultimo elenco, per pochi secondi: `stat` alternati su cartelle diverse rielencano
+//! ogni volta; `HEAD` o una cache per cartella se serve.
 //! ponytail: le date dell'indice non dicono il fuso (Apache usa l'ora locale del server, nginx l'UTC): si leggono
 //! come UTC, al minuto; le date di IIS si capiscono solo nel formato inglese.
 //! ponytail: `ureq` scrive le intestazioni senza oscurarle (`Authorization` compresa) solo nel log a livello trace,
@@ -29,12 +29,13 @@ use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ureq::config::Config;
 use ureq::http::Response;
 use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::time::{Duration as UDuration, Instant as UInstant};
 use ureq::unversioned::transport::{
     Buffers, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout, TcpConnector, Transport, TransportAdapter,
 };
@@ -42,6 +43,9 @@ use ureq::{Agent, Body, BodyReader};
 
 /// Limite dell'HTML di un indice.
 const INDEX_LIMIT: u64 = 16 << 20;
+
+/// Per quanto `stat` riusa l'ultimo elenco letto.
+const LISTING_TTL: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------------------------------------------
 // Indice: funzioni pure su testo non fidato (mai un panic).
@@ -184,7 +188,9 @@ fn scan(row: &str) -> (Vec<&str>, String) {
 /// Il figlio diretto di `dir` a cui punta `href` (nome decodificato, cartella sì/no), se lo è. Fuori: query,
 /// frammenti soli, altri schemi e host (`http:`, `//host`), `..`, altre cartelle, nomi non validi.
 fn child(href: &str, dir: &[&str]) -> Option<(String, bool)> {
+    // Come i browser: spazi e controlli ai bordi tolti, tab e a capo interni ignorati.
     let href = decode_entities(href);
+    let href: String = href.trim_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
     let href = href.split('#').next().unwrap_or_default();
     if href.is_empty() || href.contains('?') || href.starts_with("//") || href.split('/').next()?.contains(':') {
         return None;
@@ -336,7 +342,14 @@ impl<In: Transport> Connector<In> for Tls {
         }
         let mut conn = ClientConnection::new(Arc::clone(&self.config), self.name.clone())?;
         let mut sock = TransportAdapter::new(t.boxed(), details.current_time.clone());
-        sock.set_timeout(details.timeout);
+        // Il tempo della connessione TCP conta: TCP più handshake restano entro il timeout di connessione.
+        let mut timeout = details.timeout;
+        if let (UDuration::Exact(after), UInstant::Exact(start), UInstant::Exact(now)) =
+            (timeout.after, details.now, (details.current_time)())
+        {
+            timeout.after = UDuration::Exact(after.saturating_sub(now.saturating_duration_since(start)));
+        }
+        sock.set_timeout(timeout);
         conn.complete_io(&mut sock)?;
         let buffers = LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size());
         Ok(Some(Either::B(TlsTransport { buffers, stream: StreamOwned::new(conn, sock) })))
@@ -471,6 +484,9 @@ pub(crate) struct HttpProvider {
     slot: Option<Slot>,
     /// L'ultima richiesta con `Range` ha avuto `206`.
     ranged: AtomicBool,
+    /// L'ultimo elenco letto (cartella, quando, voci): `stat` lo riusa per `LISTING_TTL`, così la copia di una
+    /// cartella (uno `stat` per file) non riscarica l'indice a ogni file. `list` lo rinnova sempre.
+    last: Mutex<Option<(String, Instant, Vec<Stat>)>>,
 }
 
 /// Prepara il client e prova cartella iniziale, certificato e credenziali con una richiesta `Range: bytes=0-0`.
@@ -493,7 +509,7 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls
     } else {
         (agent(None), None)
     };
-    let p = HttpProvider { agent, base, creds, slot, ranged: AtomicBool::new(false) };
+    let p = HttpProvider { agent, base, creds, slot, ranged: AtomicBool::new(false), last: Mutex::new(None) };
     let start = if conn.start_dir.is_empty() { "/" } else { conn.start_dir.as_str() };
     let resp = p.get(start, true, Some((0, 1)))?;
     p.ranged.store(resp.status().as_u16() == 206, Ordering::Relaxed);
@@ -502,6 +518,10 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls
 }
 
 impl HttpProvider {
+    fn last(&self) -> std::sync::MutexGuard<'_, Option<(String, Instant, Vec<Stat>)>> {
+        self.last.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Un errore di `ureq`; un certificato rifiutato diventa `CERT_UNTRUSTED` con l'impronta.
     fn error(&self, e: ureq::Error, path: &str) -> AppError {
         if let Some(fp) = self.slot.as_ref().and_then(|s| s.lock().unwrap_or_else(|e| e.into_inner()).take()) {
@@ -577,14 +597,29 @@ impl Provider for HttpProvider {
             return Ok(Stat { name: String::new(), is_dir: true, dir_link: false, size: 0, modified_ms: None, mode: None });
         }
         let parent = if parent.is_empty() { "/" } else { parent };
-        let found = self.list(parent)?.into_iter().find(|s| s.name == name);
+        let cached = match &*self.last() {
+            Some((dir, at, items)) if dir == parent && at.elapsed() < LISTING_TTL => {
+                Some(items.iter().find(|s| s.name == name).cloned())
+            }
+            _ => None,
+        };
+        let found = match cached {
+            Some(found) => found,
+            None => self.list(parent)?.into_iter().find(|s| s.name == name),
+        };
         found.ok_or_else(|| AppError::new(ErrorCode::NotFound, Some(Path::new(path))))
     }
 
     fn list(&self, path: &str) -> Result<Vec<Stat>, AppError> {
         let mut resp = ok(self.get(path, true, None)?, path)?;
         let html = resp.body_mut().with_config().limit(INDEX_LIMIT).read_to_vec().map_err(|e| self.error(e, path))?;
-        Ok(parse_index(&String::from_utf8_lossy(&html), path))
+        let items = parse_index(&String::from_utf8_lossy(&html), path);
+        let dir = match path.trim_end_matches('/') {
+            "" => "/",
+            d => d,
+        };
+        *self.last() = Some((dir.to_owned(), Instant::now(), items.clone()));
+        Ok(items)
     }
 
     /// `206` con l'intervallo chiesto, altrimenti `RANGE_UNSUPPORTED`. Oltre la fine (`416`): niente.
@@ -682,7 +717,9 @@ mod tests {
     #[test]
     fn index_ignores_foreign_links() {
         let html = r##"<pre><a href="../">../</a> <a href="/altro/">altro</a>
-            <a href="http://altrohost/x">x</a><br><a href="?C=N;O=D">Name</a><tr><a href="#top">top</a>"##;
+            <a href="http://altrohost/x">x</a><br><a href="?C=N;O=D">Name</a><tr><a href="#top">top</a>
+            <a href=" ../">x</a><a href="	..
+/">y</a><a href=" ?C=M;O=A">z</a>"##;
         assert_eq!(parse_index(html, "/logs/"), []);
     }
 
@@ -822,6 +859,30 @@ mod tests {
         assert_eq!(p.mkdir("/d").unwrap_err().code, ErrorCode::ReadOnlySource);
         let c = p.caps();
         assert_eq!((c.writable, c.atomic_replace, c.precise_mtime), (false, false, false));
+    }
+
+    /// `stat` di più file della stessa cartella: un solo elenco scaricato; `list` lo rinnova.
+    #[test]
+    fn http_stat_reuses_listing() {
+        use std::sync::atomic::AtomicUsize;
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let f = Arc::clone(&fetches);
+        let port = serve(None, move |req| match req.split(' ').nth(1).unwrap_or_default() {
+            "/d/" => {
+                f.fetch_add(1, Ordering::SeqCst);
+                (200, Vec::new(), b"<a href=\"a\">a</a>\n<a href=\"b\">b</a>\n<a href=\"c\">c</a>".to_vec())
+            }
+            _ => (200, Vec::new(), Vec::new()),
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let p = open_in(dir.path(), &conn(port, ""), None, false).map_err(|e| e.code).unwrap();
+        for name in ["a", "b", "c"] {
+            assert_eq!(p.stat(&format!("/d/{name}")).unwrap().name, name);
+        }
+        assert_eq!(p.stat("/d/x").unwrap_err().code, ErrorCode::NotFound);
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        assert_eq!(p.list("/d/").unwrap().len(), 3);
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
     }
 
     /// Digest SHA-256 verificato dal server con `digest_response`; HTTPS con certificato autofirmato: rifiutato con
