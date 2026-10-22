@@ -10,8 +10,9 @@ import { useUi } from "../state/ui";
 import { dropOnGroup } from "./fileOps";
 import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
+import { sourceCaps } from "../lib/paths";
 import {
-  classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
+  appMenuItems, classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
   suppressNativeContextMenu, toPhysical,
 } from "./shell";
 
@@ -252,4 +253,47 @@ test("every shell command has a title in both languages", async () => {
     expect(en.commands[id], id).toBeTruthy();
     expect(it.commands[id], id).toBeTruthy();
   }
+});
+
+const ids = (caps: string, rows: ReturnType<typeof f>[]) => appMenuItems(sourceCaps(caps), rows as never).map((i) => i.commandId);
+
+test("appMenuItems: SFTP with one file has every item, in order", () => {
+  expect(appMenuItems(sourceCaps("sftp://w/x"), [f("a.txt")] as never)).toEqual([
+    { commandId: "cm_List", labelKey: "commands.cm_List" },
+    { commandId: "cm_Edit", labelKey: "commands.cm_Edit" },
+    { commandId: "cm_Copy", labelKey: "commands.cm_Copy" },
+    { commandId: "cm_RenMov", labelKey: "commands.cm_RenMov" },
+    { commandId: "cm_RenameOnly", labelKey: "commands.cm_RenameOnly" },
+    { commandId: "cm_Delete", labelKey: "commands.cm_Delete" },
+    { commandId: "cm_MkDir", labelKey: "commands.cm_MkDir" },
+    { commandId: "cm_RereadSource", labelKey: "commands.cm_RereadSource" },
+    { commandId: "mc_CopyPath", labelKey: "commands.mc_CopyPath" },
+  ]);
+});
+
+test("appMenuItems: two files drop Edit and Rename; a folder drops Edit only; HTTP is read-only", () => {
+  expect(ids("sftp://w/x", [f("a"), f("b")])).toEqual(
+    ["cm_List", "cm_Copy", "cm_RenMov", "cm_Delete", "cm_MkDir", "cm_RereadSource", "mc_CopyPath"]);
+  expect(ids("sftp://w/x", [f("d", true)])).not.toContain("cm_Edit");
+  expect(ids("sftp://w/x", [f("d", true)])).toContain("cm_RenameOnly");
+  expect(ids("http://w/x", [f("a")])).toEqual(["cm_List", "cm_Copy", "cm_RereadSource", "mc_CopyPath"]);
+});
+
+test("dropOnGroup with remote sources skips normalizePaths", async () => {
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["t1"], activeTabId: "t1" }, { id: "g2", tabIds: ["t2"], activeTabId: "t2" }],
+    tabs: { t1: { id: "t1", path: "sftp://w/x" }, t2: { id: "t2", path: "D:\y" } },
+    activeGroupId: "g1",
+    activationOrder: ["g1", "g2"],
+  });
+  await dropOnGroup("g2", ["sftp://w/x/a.txt"]);
+  expect(api.normalizePaths).not.toHaveBeenCalled();
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", sources: ["sftp://w/x/a.txt"], from: "sftp://w/x", dest: "D:\y" });
+});
+
+test("remote rows never start an OLE drag", async () => {
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/x");
+  await dragOut("t1", "a.txt");
+  expect(api.startDrag).not.toHaveBeenCalled();
 });

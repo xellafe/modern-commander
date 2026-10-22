@@ -31,6 +31,8 @@ export type Overlay =
   | { kind: "quickSearch"; tabId: string; prefix: string }
   | { kind: "filter"; tabId: string }
   | { kind: "menu"; tabId: string; title: string; items: MenuItem[] }
+  /** Menu dell'app sulle schede remote, dove non c'è la shell: `commandId` è un comando registrato. */
+  | { kind: "appMenu"; tabId: string; items: { commandId: string; labelKey: string }[] }
   /** Modifica in place del nome (Shift+F6) sulla riga `name`. */
   | { kind: "rename"; tabId: string; name: string };
 

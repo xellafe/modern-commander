@@ -155,7 +155,8 @@ export async function dropOnGroup(groupId: string, paths: string[]) {
   if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length) return;
   const action = dropAction(paths, groupId);
   if (action.kind === "ignore") return;
-  const sources = await normalizePaths(paths);
+  // normalizePaths riguarda i percorsi di Explorer: un indirizzo remoto (drag tra i gruppi dell'app) non ci passa.
+  const sources = paths.some(isRemote) ? paths : await normalizePaths(paths);
   const dest = l.tabs[g.activeTabId].path;
   ui().openDialog({
     kind: "copyMove", move: false, sources,

@@ -3,7 +3,7 @@ import type { TFunction } from "i18next";
 import { TriangleAlert } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { nameError, renameInPlace } from "../../commands/fileOps";
+import { dropOnGroup, nameError, renameInPlace } from "../../commands/fileOps";
 import { setGridColumns, setPageSize } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
 import { rowContextMenu, trackDragOut } from "../../commands/shell";
@@ -65,7 +65,7 @@ const openRow = () => void executeCommand("cm_Return");
 const rowHandlers = (tabId: string, i: number) => ({
   onMouseDown: (e: MouseEvent) => {
     clickRow(tabId, i, e);
-    trackDragOut(tabId, i, e);
+    trackDragOut(tabId, i, e, dropOnGroup);
   },
   onDoubleClick: openRow,
   onContextMenu: (e: MouseEvent) => {

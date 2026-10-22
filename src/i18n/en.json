@@ -257,6 +257,7 @@
     "mc_Keybindings": "Keyboard shortcuts",
     "mc_CommandPalette": "Command palette",
     "mc_QuickJump": "Quick jump",
+    "mc_CopyPath": "Copy path",
     "cm_FtpConnect": "Remote connections"
   },
   "errors": {

@@ -2,12 +2,13 @@
 import type { MouseEvent } from "react";
 import { openPath, openWith, showContextMenu, showProperties, startDrag } from "../ipc/api";
 import type { AppError } from "../ipc/types";
-import { joinPath, sourceCaps } from "../lib/paths";
+import { isRemote, joinPath, sourceCaps, type SourceCaps } from "../lib/paths";
 import { useLayout } from "../state/layout";
 import { useSettings } from "../state/settings";
 import type { Row, TabView } from "../state/tabView";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { registerCommand, type Command } from "./registry";
+
 
 /** Righe su cui agisce un'azione partita dalla riga `i`: tutte le marcate se `i` è marcata, altrimenti solo `i`. Mai '..'. */
 export function rowsAt(view: TabView, i: number): Row[] {
@@ -36,9 +37,28 @@ function report(tabId: string, e: unknown) {
 
 const run = (tabId: string, p: Promise<void>) => p.catch((e) => report(tabId, e));
 
-/** Dopo un'azione del menu (Elimina, Rinomina…) la lista si aggiorna da sola col watcher. */
+/** Voci del menu dell'app (schede remote, senza shell): dipendono da cosa si può fare sulla sorgente e da quante righe. */
+export function appMenuItems(caps: SourceCaps, rows: Row[]): { commandId: string; labelKey: string }[] {
+  const one = rows.length === 1;
+  const ids = [
+    ["cm_List", true],
+    ["cm_Edit", caps.write && one && !rows[0].isDir],
+    ["cm_Copy", true],
+    ["cm_RenMov", caps.write],
+    ["cm_RenameOnly", caps.write && one],
+    ["cm_Delete", caps.write],
+    ["cm_MkDir", caps.write],
+    ["cm_RereadSource", true],
+    ["mc_CopyPath", true],
+  ] as const;
+  return ids.filter(([, on]) => on).map(([commandId]) => ({ commandId, labelKey: `commands.${commandId}` }));
+}
+
+/** Dopo un'azione del menu (Elimina, Rinomina…) la lista si aggiorna da sola col watcher. Sul remoto il menu è dell'app. */
 function showMenu(tabId: string, rows: Row[], x: number, y: number) {
-  const paths = shellPaths(useLayout.getState().tabs[tabId].path, rows);
+  const dir = useLayout.getState().tabs[tabId].path;
+  if (isRemote(dir)) return useTabViews.getState().setOverlay({ kind: "appMenu", tabId, items: appMenuItems(sourceCaps(dir), rows) });
+  const paths = shellPaths(dir, rows);
   if (!paths.length) return;
   const pt = toPhysical(x, y, window.devicePixelRatio || 1);
   return run(tabId, showContextMenu(paths, pt.x, pt.y));
@@ -130,8 +150,31 @@ export async function dragOut(tabId: string, name: string) {
   }
 }
 
+/**
+ * Sulle schede remote non c'è il drag OLE: le righe si portano con il mouse su un altro gruppo dell'app, che al
+ * rilascio apre la finestra di copia (`drop` è `dropOnGroup`, passata da chi chiama per non incrociare i moduli).
+ */
+async function dragInApp(tabId: string, name: string, drop: (groupId: string, paths: string[]) => Promise<void>) {
+  const v = useTabViews.getState().views[tabId];
+  const rows = v ? rowsAt(v, v.rows.findIndex((r) => r.name === name)) : [];
+  if (!rows.length) return;
+  const l = useLayout.getState();
+  const from = l.tabs[tabId].path;
+  selfDrag.origin = { groupId: l.groups.find((g) => g.tabIds.includes(tabId))?.id ?? "", from };
+  selfDrag.dragging = true;
+  try {
+    const up = await new Promise<globalThis.MouseEvent>((res) => window.addEventListener("mouseup", res, { once: true }));
+    const groupId = document.elementFromPoint(up.clientX, up.clientY)?.closest<HTMLElement>("[data-group-id]")?.dataset.groupId;
+    if (groupId) await drop(groupId, rows.map((r) => joinPath(from, r.name)));
+  } catch (e) {
+    report(tabId, e);
+  } finally {
+    selfDrag.dragging = false;
+  }
+}
+
 /** Dal mousedown sinistro su una riga: oltre la soglia, con il pulsante ancora premuto, parte il drag nativo. */
-export function trackDragOut(tabId: string, i: number, e: MouseEvent) {
+export function trackDragOut(tabId: string, i: number, e: MouseEvent, drop: (groupId: string, paths: string[]) => Promise<void>) {
   // Il nome, non l'indice: il watcher può ricaricare la lista prima che si superi la soglia.
   const name = useTabViews.getState().views[tabId]?.rows[i]?.name;
   if (e.button !== 0 || name === undefined) return;
@@ -144,7 +187,7 @@ export function trackDragOut(tabId: string, i: number, e: MouseEvent) {
     if (!(ev.buttons & 1)) return stop();
     if (!pastDragThreshold(ev.clientX - x0, ev.clientY - y0)) return;
     stop();
-    void dragOut(tabId, name);
+    void (isRemote(useLayout.getState().tabs[tabId].path) ? dragInApp(tabId, name, drop) : dragOut(tabId, name));
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", stop);
@@ -157,6 +200,13 @@ export const openFile = (tabId: string, path: string) => run(tabId, openPath(pat
 function cursorFile() {
   const { tabId, path, cursorRow: r } = activeTabContext();
   return r && !r.isDir ? { tabId, name: r.name, path: joinPath(path, r.name) } : null;
+}
+
+// Copia negli appunti la posizione completa delle righe (cursore o marcate), una per riga.
+function copyPath() {
+  const { tabId, path, markedOrCursor } = activeTabContext();
+  const text = (markedOrCursor.length ? markedOrCursor.map((r) => joinPath(path, r.name)) : [path]).join("\n");
+  return run(tabId, navigator.clipboard.writeText(text));
 }
 
 const editFile = (tabId: string, path: string) => run(tabId, openWith(useSettings.getState().externalEditor, path));
@@ -179,6 +229,7 @@ function properties() {
 const DEFS: [string, Command["run"]][] = [
   ["cm_ContextMenu", keyboardMenu],
   ["cm_Properties", properties],
+  ["mc_CopyPath", copyPath],
   // F3: viewer interno in una scheda del gruppo attivo. Invio (cm_Return) invece esegue i programmi, come Explorer.
   ["cm_List", () => {
     const f = cursorFile();

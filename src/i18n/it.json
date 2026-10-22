@@ -257,6 +257,7 @@
     "mc_Keybindings": "Scorciatoie da tastiera",
     "mc_CommandPalette": "Palette dei comandi",
     "mc_QuickJump": "Salto rapido",
+    "mc_CopyPath": "Copia percorso",
     "cm_FtpConnect": "Connessioni remote"
   },
   "errors": {
