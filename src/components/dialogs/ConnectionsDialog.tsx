@@ -1,11 +1,12 @@
-import { Globe, Server } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { forgetHost, forgetPassword } from "../../ipc/api";
 import type { AppError, Connection, ConnectionView, Scheme } from "../../ipc/types";
 import { defaultPort, startLocation, useConnections } from "../../state/connections";
+import { activeTab, useLayout } from "../../state/layout";
+import { useTabViews } from "../../state/tabViews";
 import { useUi, type DialogRequest } from "../../state/ui";
-import { openInActiveTab } from "../sidebar/FolderTree";
+import { ConnIcon } from "../groups/ConnIcon";
 import { Dialog } from "./Dialog";
 
 const SCHEMES: Scheme[] = ["sftp", "ftp", "ftps", "http", "https"];
@@ -17,8 +18,14 @@ const blank = (c: Partial<Connection>): Draft => ({
   id: "", name: "", scheme: "sftp", host: "", port: 22, user: "", startDir: "/", ftpsImplicit: false, ...c, password: "",
 });
 
-export const ConnIcon = ({ scheme, size = 12 }: { scheme: Scheme; size?: number }) =>
-  scheme.startsWith("http") ? <Globe size={size} aria-hidden /> : <Server size={size} aria-hidden />;
+/** Cartella iniziale nella scheda attiva, oppure in una scheda nuova se quella attiva è un file. */
+function openStart(c: Connection) {
+  const l = useLayout.getState();
+  const tab = activeTab(l);
+  // La scheda nuova si carica da sola al primo render (Group.tsx).
+  if (tab.file) l.newTab(l.activeGroupId, startLocation(c));
+  else void useTabViews.getState().load(tab.id, startLocation(c));
+}
 
 /** Ctrl+F: elenco delle connessioni salvate, con nuova, modifica, duplica, elimina e connetti. */
 export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind: "connections" }> }) {
@@ -48,7 +55,7 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
   const connectSel = () => {
     if (!sel) return;
     close();
-    openInActiveTab(startLocation(sel));
+    openStart(sel);
   };
   const remove = () => {
     if (!sel) return;
@@ -82,13 +89,13 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
     const saved = list.find((c) => c.id === form.id);
     const save = () => {
       if (!ok) return;
-      const { password, ...conn } = form;
+      const { password, hasPassword: _, ...conn } = form as Draft & { hasPassword?: boolean };
       const c = { ...conn, host: conn.host.trim(), name: conn.name.trim() || conn.host.trim() };
       run(async () => {
         const view = await useConnections.getState().save(c, password || null, !!password);
         if (req.draft) {
           close();
-          openInActiveTab(startLocation(view));
+          openStart(view);
         } else {
           setForm(null);
           select(view.id);

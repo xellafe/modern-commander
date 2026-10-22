@@ -7,7 +7,7 @@ import { closeTab } from "../../commands/navigation";
 import { useKeybindings } from "../../state/keybindings";
 import { DRIVES, folderName, parseRemote } from "../../lib/paths";
 import { useConnections } from "../../state/connections";
-import { ConnIcon } from "../dialogs/ConnectionsDialog";
+import { ConnIcon } from "./ConnIcon";
 import { useEditors } from "../../state/editors";
 import { useLayout, type Group, type Tab } from "../../state/layout";
 

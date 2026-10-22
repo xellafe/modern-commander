@@ -3,7 +3,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { ConnectionView } from "../ipc/types";
-import { ensureConnected, resolveTypedAddress, useConnections } from "./connections";
+import { ensureConnected, isTypedAddress, resolveTypedAddress, useConnections } from "./connections";
 import { useUi, type DialogRequest } from "./ui";
 
 const conn = (id: string, scheme: ConnectionView["scheme"], host: string, port: number, user: string): ConnectionView => ({
@@ -57,7 +57,7 @@ test("an existing connection id after :// opens directly; local paths are not ad
 });
 
 test("AUTH_REQUIRED asks the password, then connects with remember", async () => {
-  connect.mockResolvedValue();
+  connect.mockResolvedValue(true);
   answer((d) => {
     expect(d.kind).toBe("password");
     if (d.kind === "password") d.done({ password: "pw", remember: true });
@@ -80,7 +80,7 @@ test("AUTH_FAILED after a password asks again; cancelling gives false", async ()
 });
 
 test("HOST_KEY_UNKNOWN with Accept trusts the fingerprint, then connects", async () => {
-  connect.mockResolvedValue();
+  connect.mockResolvedValue(true);
   trustHost.mockResolvedValue();
   answer((d) => {
     expect(d).toMatchObject({ kind: "trust", fingerprint: "SHA256:x", tls: false });
@@ -113,4 +113,44 @@ test("store keeps the list in sync and names connections", async () => {
   vi.mocked(api.deleteConnection).mockResolvedValue();
   await useConnections.getState().remove("c1");
   expect(useConnections.getState().list.map((c) => c.id)).toEqual(["c2", "h1"]);
+});
+
+test("IPv6 literals match without brackets", () => {
+  const list = [...LIST, conn("v6", "sftp", "::1", 22, "")];
+  expect(resolveTypedAddress("sftp://[::1]/x", list)).toEqual({ open: "sftp://v6/x" });
+  expect(resolveTypedAddress("sftp://[fe80::2]:2222/", list)).toMatchObject({ create: { host: "fe80::2", port: 2222 } });
+});
+
+test("an address with no host is not resolved", () => {
+  expect(resolveTypedAddress("sftp://bob@/x", LIST)).toBeNull();
+  expect(isTypedAddress("sftp://bob@/x")).toBe(true);
+  expect(isTypedAddress("C:\\x")).toBe(false);
+});
+
+test("password not stored: connected, with a warning", async () => {
+  connect.mockResolvedValue(false);
+  answer((d) => d.kind === "password" && d.done({ password: "pw", remember: true }));
+  expect(await ensureConnected("c1", { code: "AUTH_REQUIRED", path: null, detail: null })).toBe(true);
+  expect(useUi.getState().dialog).toMatchObject({ kind: "message", text: "connections.notRemembered" });
+});
+
+test("a connection error after the password is rethrown, never taken as success", async () => {
+  connect.mockRejectedValue({ code: "ACCESS_DENIED", path: null, detail: null });
+  answer((d) => d.kind === "password" && d.done({ password: "pw", remember: true }));
+  await expect(ensureConnected("c1", { code: "AUTH_REQUIRED", path: null, detail: null })).rejects.toMatchObject({ code: "ACCESS_DENIED" });
+  expect(useUi.getState().dialog).toBeNull();
+});
+
+test("after accepting the fingerprint the typed password is reused", async () => {
+  connect.mockRejectedValueOnce({ code: "HOST_KEY_UNKNOWN", path: null, detail: "SHA256:x" }).mockResolvedValueOnce(true);
+  trustHost.mockResolvedValue();
+  const off = useUi.subscribe(({ dialog: d }) => {
+    if (d?.kind === "password") d.done({ password: "pw", remember: true });
+    else if (d?.kind === "trust") {
+      off();
+      d.done(true);
+    }
+  });
+  expect(await ensureConnected("c1", { code: "AUTH_REQUIRED", path: null, detail: null })).toBe(true);
+  expect(connect.mock.calls).toEqual([["c1", "pw", true], ["c1", "pw", true]]);
 });

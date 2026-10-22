@@ -48,8 +48,9 @@ pub async fn forget_password(net: Net<'_>, id: String) -> Result<(), AppError> {
     blocking(move || s.forget_password(&id)).await?
 }
 
+/// `false`: connessi, ma la password chiesta con `remember` non si è potuta salvare.
 #[tauri::command]
-pub async fn connect(net: Net<'_>, id: String, password: Option<String>, remember: bool) -> Result<(), AppError> {
+pub async fn connect(net: Net<'_>, id: String, password: Option<String>, remember: bool) -> Result<bool, AppError> {
     let s = net.inner().clone();
     blocking(move || s.connect(&id, password, remember)).await?
 }

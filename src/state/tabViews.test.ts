@@ -275,7 +275,7 @@ test("remote listing asks the password and retries only once", async () => {
   const { useUi } = await import("./ui");
   useUi.setState({ dialog: null });
   const off = useUi.subscribe(({ dialog: d }) => d?.kind === "password" && d.done({ password: "pw", remember: false }));
-  vi.mocked(api.connect).mockResolvedValue();
+  vi.mocked(api.connect).mockResolvedValue(true);
   listDir.mockRejectedValue({ code: "AUTH_REQUIRED", path: null, detail: null });
   await useTabViews.getState().load("t1", "sftp://c1/x");
   off();

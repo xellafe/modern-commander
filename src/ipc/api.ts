@@ -262,9 +262,12 @@ export const deleteConnection = (id: string) => invoke<void>("delete_connection"
 
 export const forgetPassword = (id: string) => invoke<void>("forget_password", { id });
 
-/** Senza password usa quella salvata (`AUTH_REQUIRED` se serve e non c'è); con `remember` la salva se la connessione riesce. */
+/**
+ * Senza password usa quella salvata (`AUTH_REQUIRED` se serve e non c'è); con `remember` la salva se la connessione
+ * riesce. `false`: connessi, ma la password non si è potuta salvare.
+ */
 export const connect = (id: string, password: string | null, remember: boolean) =>
-  invoke<void>("connect", { id, password, remember });
+  invoke<boolean>("connect", { id, password, remember });
 
 export const disconnect = (id: string) => invoke<void>("disconnect", { id });
 

@@ -177,9 +177,9 @@ impl Sessions {
         }))
     }
 
-    /// Senza password usa quella salvata; con `remember` salva quella data, solo se la connessione riesce. Se poi il
-    /// salvataggio fallisce la sessione resta aperta: l'errore dice solo che la password non è stata ricordata.
-    pub fn connect(&self, id: &str, password: Option<String>, remember: bool) -> Result<(), AppError> {
+    /// Senza password usa quella salvata; con `remember` salva quella data, solo se la connessione riesce. Ogni errore
+    /// è della connessione; `Ok(false)`: sessione aperta, ma la password non si è potuta salvare.
+    pub fn connect(&self, id: &str, password: Option<String>, remember: bool) -> Result<bool, AppError> {
         let s = &self.0;
         let conn = connections::find(s.dir()?, id)?;
         let given = password.is_some();
@@ -191,10 +191,7 @@ impl Sessions {
         let user = conn.user.clone();
         let to_store = if remember && given { password.clone() } else { None };
         let _old = lock(&s.live).insert(id.to_owned(), Live { conn, password, browse: Some(session) });
-        match to_store {
-            Some(pw) => s.creds.store(id, &user, &pw),
-            None => Ok(()),
-        }
+        Ok(to_store.is_none_or(|pw| s.creds.store(id, &user, &pw).is_ok()))
     }
 
     /// Le sessioni dei trasferimenti in corso restano finché il trasferimento le usa.
@@ -453,7 +450,7 @@ impl Provider for Watched {
 mod tests {
     use super::*;
     use crate::net::connections::sample;
-    use crate::net::credentials::MemSecrets;
+    use crate::net::credentials::{MemSecrets, Refuses};
     use crate::vfs::mem::MemProvider;
 
     /// Server finto che chiede la password `pw`. `offline`: le sessioni nascono cadute; `drop_all` fa cadere quelle
@@ -508,7 +505,7 @@ mod tests {
         (dir, creds, s, id)
     }
 
-    fn code(r: Result<(), AppError>) -> ErrorCode {
+    fn code<T: std::fmt::Debug>(r: Result<T, AppError>) -> ErrorCode {
         r.unwrap_err().code
     }
 
@@ -520,13 +517,27 @@ mod tests {
         // Una password rifiutata non si ricorda.
         assert_eq!(code(s.connect(&id, Some("no".into()), true)), ErrorCode::AuthFailed);
         assert!(creds.load(&id).unwrap().is_none());
-        s.connect(&id, Some("pw".into()), true).unwrap();
+        assert!(s.connect(&id, Some("pw".into()), true).unwrap());
         s.disconnect(&id);
-        s.connect(&id, None, false).unwrap();
+        assert!(s.connect(&id, None, false).unwrap());
         s.disconnect(&id);
         creds.delete(&id).unwrap();
         assert_eq!(code(s.connect(&id, None, false)), ErrorCode::AuthRequired);
         assert_eq!(code(s.connect("sconosciuta", None, false)), ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn password_that_cannot_be_stored_keeps_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = connections::save(dir.path(), &Refuses, sample(Scheme::Sftp), None, false).unwrap().conn.id;
+        let fake = Arc::new(Fake::default());
+        let factories = HashMap::from([(Scheme::Sftp, fake.clone() as Arc<dyn ProviderFactory>)]);
+        let s = Sessions::with(factories, Ok(dir.path().to_owned()), Arc::new(Refuses));
+        assert!(!s.connect(&id, Some("pw".into()), true).unwrap());
+        s.provider(Scheme::Sftp, &id, Purpose::Browse).unwrap();
+        assert_eq!(fake.opens(), 1, "la sessione aperta da connect resta");
+        // Senza `remember` non si prova a salvare.
+        assert!(s.connect(&id, Some("pw".into()), false).unwrap());
     }
 
     #[test]

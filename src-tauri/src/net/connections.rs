@@ -141,7 +141,7 @@ pub(crate) fn sample(scheme: Scheme) -> Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::credentials::MemSecrets;
+    use crate::net::credentials::{MemSecrets, Refuses};
     use crate::net::trust::{self, Trust};
 
     #[test]
@@ -179,21 +179,6 @@ mod tests {
         assert!(list(d, &creds).unwrap().is_empty());
         assert!(creds.load(&view.conn.id).unwrap().is_none());
         assert_eq!(trust::check_in(d, "ssh", "other.org", 22, "SHA256:a").unwrap(), Trust::Unknown);
-    }
-
-    /// Credential Manager che rifiuta di salvare.
-    struct Refuses;
-
-    impl Secrets for Refuses {
-        fn store(&self, _: &str, _: &str, _: &str) -> Result<(), AppError> {
-            Err(AppError::new(ErrorCode::AccessDenied, None))
-        }
-        fn load(&self, _: &str) -> Result<Option<String>, AppError> {
-            Ok(None)
-        }
-        fn delete(&self, _: &str) -> Result<(), AppError> {
-            Ok(())
-        }
     }
 
     #[test]

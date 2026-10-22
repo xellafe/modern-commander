@@ -132,6 +132,23 @@ impl Secrets for MemSecrets {
     }
 }
 
+/// Archivio che rifiuta di salvare, per i test: carica e cancella come uno vuoto.
+#[cfg(test)]
+pub struct Refuses;
+
+#[cfg(test)]
+impl Secrets for Refuses {
+    fn store(&self, _: &str, _: &str, _: &str) -> Result<(), AppError> {
+        Err(AppError::new(crate::error::ErrorCode::AccessDenied, None))
+    }
+    fn load(&self, _: &str) -> Result<Option<String>, AppError> {
+        Ok(None)
+    }
+    fn delete(&self, _: &str) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

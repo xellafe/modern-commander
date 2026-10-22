@@ -2,10 +2,10 @@ import { ChevronRight } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DRIVES, normalizePath, parseRemote, pathCrumbs } from "../../lib/paths";
-import { resolveTypedAddress, useConnections } from "../../state/connections";
+import { isTypedAddress, resolveTypedAddress, useConnections } from "../../state/connections";
 import { useTabViews } from "../../state/tabViews";
 import { useUi } from "../../state/ui";
-import { ConnIcon } from "../dialogs/ConnectionsDialog";
+import { ConnIcon } from "./ConnIcon";
 
 // Segmenti cliccabili; un click sullo spazio vuoto apre il campo di testo (Invio naviga, Esc annulla).
 export function Breadcrumb({ tabId, path }: { tabId: string; path: string }) {
@@ -35,9 +35,11 @@ export function Breadcrumb({ tabId, path }: { tabId: string; path: string }) {
             setEditing(false);
             if (e.key !== "Enter") return;
             // Indirizzo con un host vero: la connessione salvata corrispondente, altrimenti una nuova da salvare.
-            const typed = resolveTypedAddress(e.currentTarget.value, useConnections.getState().list);
+            const value = e.currentTarget.value;
+            const typed = resolveTypedAddress(value, useConnections.getState().list);
+            if (!typed && isTypedAddress(value)) return useTabViews.getState().showNotice(tabId, { code: "INVALID_REQUEST" });
             if (typed && "create" in typed) return useUi.getState().openDialog({ kind: "connections", draft: typed.create });
-            const p = typed ? typed.open : normalizePath(e.currentTarget.value);
+            const p = typed ? typed.open : normalizePath(value);
             if (p && p !== path) go(p);
           }}
         />

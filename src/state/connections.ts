@@ -40,6 +40,12 @@ export const startLocation = (c: Connection) => normalizePath(`${c.scheme}://${c
 
 const TYPED = /^(sftp|ftps?|https?):\/\/([^/]*)(\/[\s\S]*)?$/i;
 
+/** Ha la forma di un indirizzo remoto scritto a mano (anche se poi non si risolve). */
+export const isTypedAddress = (input: string) => TYPED.test(input.trim());
+
+/** Host IPv6 senza parentesi quadre (`[::1]` → `::1`). */
+const bare = (host: string) => host.replace(/^\[(.*)\]$/, "$1");
+
 /**
  * Indirizzo scritto a mano: `<schema>://[utente@]host[:porta]/percorso` si apre sulla connessione salvata con stesso
  * schema, host e porta (di default quella dello schema) e, se indicato, stesso utente; senza corrispondenza dà la
@@ -63,10 +69,10 @@ export function resolveTypedAddress(
   const user = at >= 0 ? auth.slice(0, at) : null;
   const hp = /^(.+?)(?::(\d{1,5}))?$/.exec(auth.slice(at + 1));
   if (!hp) return null;
-  const host = hp[1];
+  const host = bare(hp[1]);
   const port = hp[2] ? Number(hp[2]) : defaultPort(scheme);
   const match = list.find((c) =>
-    c.scheme === scheme && c.host.toLowerCase() === host.toLowerCase() && c.port === port && (user === null || c.user === user));
+    c.scheme === scheme && bare(c.host).toLowerCase() === host.toLowerCase() && c.port === port && (user === null || c.user === user));
   if (match) return { open: `${scheme}://${match.id}${path}` };
   return {
     create: { name: host, scheme, host, port, user: user ?? "", startDir: path, ftpsImplicit: scheme === "ftps" && port === 990 },
@@ -75,10 +81,12 @@ export function resolveTypedAddress(
 
 const AUTH: ErrorCode[] = ["AUTH_REQUIRED", "AUTH_FAILED"];
 const TRUST: ErrorCode[] = ["HOST_KEY_UNKNOWN", "CERT_UNTRUSTED"];
-/** Errori di `connect` che vengono dal server; gli altri, dopo un login riuscito con `remember`, sono del Credential Manager. */
-const NET: ErrorCode[] = [...AUTH, ...TRUST, "HOST_KEY_CHANGED", "CONNECTION_FAILED", "TIMEOUT", "NOT_FOUND"];
 
-/** Apre una finestra e ne aspetta la risposta; con un'altra finestra già aperta risponde subito `none`. */
+/**
+ * Apre una finestra e ne aspetta la risposta; con un'altra finestra già aperta risponde subito `none`.
+ * ponytail: all'avvio la domanda di una seconda connessione, mentre è aperta quella della prima, vale come Annulla
+ * (la scheda resta vuota, Ctrl+R la ripropone); una coda di domande se diventa scomodo.
+ */
 function ask<T>(none: T, make: (done: (v: T) => void) => DialogRequest): Promise<T> {
   return new Promise((resolve) => {
     if (useUi.getState().dialog) return resolve(none);
@@ -111,9 +119,10 @@ export async function ensureConnected(id: string, error: AppError): Promise<bool
 
 async function settle(id: string, first: AppError): Promise<boolean> {
   let err = first;
+  // Restano per il nuovo tentativo dopo l'impronta: la password scritta non si richiede.
+  let password: string | null = null;
+  let remember = false;
   for (;;) {
-    let password: string | null = null;
-    let remember = false;
     const code = err?.code;
     if (AUTH.includes(code)) {
       const r = await ask<{ password: string; remember: boolean } | null>(null, (done) =>
@@ -132,15 +141,10 @@ async function settle(id: string, first: AppError): Promise<boolean> {
       return false;
     }
     try {
-      await connect(id, password, remember);
+      if (!(await connect(id, password, remember)) && remember) message("connections.title", "connections.notRemembered");
       return true;
     } catch (e) {
       err = e as AppError;
-      // Connessione riuscita ma password non salvata: la sessione c'è.
-      if (remember && !NET.includes(err?.code)) {
-        message("connections.title", "connections.notRemembered");
-        return true;
-      }
       if (![...AUTH, ...TRUST, "HOST_KEY_CHANGED"].includes(err?.code)) throw e;
     }
   }
