@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ArchiveListing, ColumnHit, ColumnProgress, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
+import type { ArchiveListing, ColumnHit, ColumnProgress, Connection, ConnectionView, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -246,3 +246,30 @@ export const onJobUpdated = (cb: (job: JobView) => void): Promise<UnlistenFn> =>
 
 export const onJobPrompt = (cb: (prompt: Prompt) => void): Promise<UnlistenFn> =>
   listen<Prompt>("job-prompt", (e) => cb(e.payload));
+
+/** Le connessioni salvate: delle password solo se ci sono. */
+export const listConnections = () => invoke<ConnectionView[]>("list_connections");
+
+/**
+ * Un `id` vuoto crea una connessione nuova. La password si salva nel Credential Manager solo con `remember`;
+ * cambiando host o porta si dimentica l'impronta accettata.
+ */
+export const saveConnection = (conn: Connection, password: string | null, remember: boolean) =>
+  invoke<ConnectionView>("save_connection", { conn, password, remember });
+
+/** Elimina anche la password e l'impronta della connessione. */
+export const deleteConnection = (id: string) => invoke<void>("delete_connection", { id });
+
+export const forgetPassword = (id: string) => invoke<void>("forget_password", { id });
+
+/** Senza password usa quella salvata (`AUTH_REQUIRED` se serve e non c'è); con `remember` la salva se la connessione riesce. */
+export const connect = (id: string, password: string | null, remember: boolean) =>
+  invoke<void>("connect", { id, password, remember });
+
+export const disconnect = (id: string) => invoke<void>("disconnect", { id });
+
+/** Accetta l'impronta (SSH o TLS, secondo lo schema) per host e porta della connessione. */
+export const trustHost = (id: string, fingerprint: string) => invoke<void>("trust_host", { id, fingerprint });
+
+/** Dimentica le impronte accettate per host e porta della connessione. */
+export const forgetHost = (id: string) => invoke<void>("forget_host", { id });

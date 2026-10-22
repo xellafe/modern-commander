@@ -4,6 +4,7 @@ pub mod elevation;
 pub mod error;
 pub mod fs;
 pub mod mask;
+pub mod net;
 pub mod ops;
 pub mod paths;
 pub mod requests;
@@ -11,29 +12,21 @@ pub mod shell;
 pub mod terminal;
 pub mod vfs;
 
-use error::{AppError, ErrorCode};
 use ops::queue::{Event, Queue};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
-use vfs::loc::Scheme;
-use vfs::provider::{Connector, Provider, Purpose};
-
-/// Finché non ci sono le connessioni salvate, nessuna posizione remota ha un provider: `NOT_FOUND`.
-struct NoConnections;
-
-impl Connector for NoConnections {
-    fn provider(&self, _: Scheme, _: &str, _: Purpose) -> Result<Arc<dyn Provider>, AppError> {
-        Err(AppError::new(ErrorCode::NotFound, None))
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Nessun protocollo ha ancora una factory: ogni connessione dà `UNSUPPORTED`.
+    let sessions = Arc::new(net::sessions::Sessions::new(HashMap::new()));
     tauri::Builder::default()
         .manage(fs::watch::Watchers::default())
         .manage(requests::Requests::default())
         .manage(terminal::Terminals::default())
-        .manage(Arc::new(vfs::router::Vfs::new(Arc::new(NoConnections))))
+        .manage(sessions.clone())
+        .manage(Arc::new(vfs::router::Vfs::new(sessions)))
         // Un ricaricamento della pagina (anche il reload di Vite) perde i canali e non esegue la pulizia dei
         // componenti: i terminali aperti si chiudono qui. All'avvio non ce n'è nessuno: nessun effetto.
         // ponytail: vale con la finestra unica; con più finestre servirebbe la proprietà della sessione per webview.
@@ -100,6 +93,14 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_kill,
+            net::list_connections,
+            net::save_connection,
+            net::delete_connection,
+            net::forget_password,
+            net::connect,
+            net::disconnect,
+            net::trust_host,
+            net::forget_host,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

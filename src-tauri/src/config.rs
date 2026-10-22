@@ -1,4 +1,5 @@
-//! Lettura e scrittura dei file di configurazione JSON (`settings`, `keybindings`, `hotlist`).
+//! Lettura e scrittura dei file di configurazione JSON (`settings`, `keybindings`, `hotlist`), più quelli interni
+//! del backend (`connections`, `known_hosts`) che il frontend non legge né scrive.
 //! Modalità portable: se accanto all'exe c'è un file `portable`, si usa `<exe>\config`,
 //! altrimenti `%APPDATA%\ModernCommander`.
 
@@ -22,7 +23,15 @@ fn validate_name(name: &str) -> Result<(), AppError> {
     }
 }
 
-fn current_config_dir() -> Result<PathBuf, AppError> {
+/// File che solo il backend legge e scrive: mai raggiungibili da `read_config`/`write_config`.
+fn validate_internal(name: &str) -> Result<(), AppError> {
+    match name {
+        "connections" | "known_hosts" => Ok(()),
+        _ => Err(AppError::new(ErrorCode::InvalidRequest, None)),
+    }
+}
+
+pub(crate) fn current_config_dir() -> Result<PathBuf, AppError> {
     let invalid = || AppError::new(ErrorCode::InvalidRequest, None);
     let exe = std::env::current_exe().map_err(|e| AppError::from_io(&e, Path::new("")))?;
     let exe_dir = exe.parent().ok_or_else(invalid)?;
@@ -36,6 +45,15 @@ fn read(name: &str) -> Result<Option<serde_json::Value>, AppError> {
 
 fn read_in(dir: &Path, name: &str) -> Result<Option<serde_json::Value>, AppError> {
     validate_name(name)?;
+    read_file(dir, name)
+}
+
+pub(crate) fn read_internal_in(dir: &Path, name: &str) -> Result<Option<serde_json::Value>, AppError> {
+    validate_internal(name)?;
+    read_file(dir, name)
+}
+
+fn read_file(dir: &Path, name: &str) -> Result<Option<serde_json::Value>, AppError> {
     let path = dir.join(format!("{name}.json"));
     let res = match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| AppError {
@@ -87,6 +105,15 @@ fn backup_if_unreadable(path: &Path) -> Result<(), AppError> {
 
 fn write_in(dir: &Path, name: &str, value: &serde_json::Value) -> Result<(), AppError> {
     validate_name(name)?;
+    write_file(dir, name, value)
+}
+
+pub(crate) fn write_internal_in(dir: &Path, name: &str, value: &serde_json::Value) -> Result<(), AppError> {
+    validate_internal(name)?;
+    write_file(dir, name, value)
+}
+
+fn write_file(dir: &Path, name: &str, value: &serde_json::Value) -> Result<(), AppError> {
     let path = dir.join(format!("{name}.json"));
     let tmp = dir.join(format!("{name}.json.tmp"));
     let text = serde_json::to_string_pretty(value).map_err(|e| AppError {
@@ -131,6 +158,9 @@ mod tests {
     fn rejects_unknown_config_names() {
         assert_eq!(validate_name("../evil").unwrap_err().code, ErrorCode::InvalidRequest);
         assert!(validate_name("settings").is_ok());
+        // I file interni non passano dall'IPC, e le funzioni interne non leggono quelli del frontend.
+        assert!(validate_name("connections").is_err() && validate_name("known_hosts").is_err());
+        assert!(validate_internal("connections").is_ok() && validate_internal("settings").is_err());
     }
 
     #[test]

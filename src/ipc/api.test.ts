@@ -138,3 +138,24 @@ test("typeNames passa le chiavi a type_names", async () => {
   expect(await typeNames(["/", "txt"])).toEqual(["Cartella di file", "Documento di testo"]);
   expect(invoke).toHaveBeenCalledWith("type_names", { keys: ["/", "txt"] });
 });
+
+test("i comandi delle connessioni passano i parametri in camelCase", async () => {
+  const api = await import("./api");
+  const conn = { id: "", name: "S", scheme: "sftp", host: "h", port: 22, user: "u", startDir: "/", ftpsImplicit: false } as const;
+  await api.listConnections();
+  await api.saveConnection(conn, "pw", true);
+  await api.deleteConnection("c1");
+  await api.forgetPassword("c1");
+  await api.connect("c1", null, false);
+  await api.disconnect("c1");
+  await api.trustHost("c1", "SHA256:abc");
+  await api.forgetHost("c1");
+  expect(invoke).toHaveBeenCalledWith("list_connections");
+  expect(invoke).toHaveBeenCalledWith("save_connection", { conn, password: "pw", remember: true });
+  expect(invoke).toHaveBeenCalledWith("delete_connection", { id: "c1" });
+  expect(invoke).toHaveBeenCalledWith("forget_password", { id: "c1" });
+  expect(invoke).toHaveBeenCalledWith("connect", { id: "c1", password: null, remember: false });
+  expect(invoke).toHaveBeenCalledWith("disconnect", { id: "c1" });
+  expect(invoke).toHaveBeenCalledWith("trust_host", { id: "c1", fingerprint: "SHA256:abc" });
+  expect(invoke).toHaveBeenCalledWith("forget_host", { id: "c1" });
+});

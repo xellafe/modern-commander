@@ -32,6 +32,8 @@ pub struct MemProvider {
     pub writable_dirs: Option<HashSet<String>>,
     /// `false`: date al minuto, come un server FTP senza `MDTM`.
     pub precise_mtime: bool,
+    /// `true`: `list` dà `CONNECTION_FAILED`, come una sessione caduta.
+    pub offline: bool,
 }
 
 /// Le connessioni per id.
@@ -95,7 +97,7 @@ impl Write for MemWriter {
 impl MemProvider {
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: false }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -162,6 +164,9 @@ impl Provider for MemProvider {
     }
 
     fn list(&self, path: &str) -> Result<Vec<Stat>, AppError> {
+        if self.offline {
+            return Err(err(ErrorCode::ConnectionFailed, path));
+        }
         let children: Vec<String> = {
             let nodes = self.nodes.lock().unwrap();
             dir_exists(&nodes, path)?;

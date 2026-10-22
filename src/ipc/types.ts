@@ -250,3 +250,23 @@ export type PromptReply =
   | { type: "error"; action: ErrorAction; applyToAll: boolean }
   /** `proceed: false` salta l'elemento; `applyToAll` vale per il resto del job. */
   | { type: "unsafeWrite"; proceed: boolean; applyToAll: boolean };
+
+export type Scheme = "sftp" | "ftp" | "ftps" | "http" | "https";
+
+/** Connessione salvata: la password non c'è mai, sta nel Credential Manager. */
+export interface Connection {
+  /** Vuoto per una connessione nuova: l'id lo dà il backend. */
+  id: string;
+  name: string;
+  scheme: Scheme;
+  host: string;
+  port: number;
+  user: string;
+  startDir: string;
+  /** FTPS implicito (porta 990) invece di `AUTH TLS`. */
+  ftpsImplicit: boolean;
+}
+
+export interface ConnectionView extends Connection {
+  hasPassword: boolean;
+}
