@@ -3,6 +3,7 @@
 //! vivi (chiusi male), all'avvio successivo.
 
 use crate::error::{AppError, ErrorCode};
+use crate::paths::invalid_windows_name;
 use crate::vfs::loc::Loc;
 use crate::vfs::router::Vfs;
 use crate::vfs::transfer;
@@ -57,8 +58,11 @@ fn alive(pid: u32) -> bool {
 /// Scarica `loc` in `base/<uuid>/<nome>` e ne restituisce il percorso. `progress(byte)` dopo ogni blocco; con
 /// `cancel` alzato `CANCELLED` e non resta niente, neanche la cartella.
 pub fn fetch_in(vfs: &Vfs, loc: &Loc, base: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<PathBuf, AppError> {
-    let Loc::Remote { path, .. } = loc else { return Err(AppError::new(ErrorCode::InvalidRequest, None)) };
-    let name = path.rsplit('/').next().filter(|n| !n.is_empty()).ok_or_else(|| loc.error(ErrorCode::InvalidRequest))?;
+    if !loc.is_remote() {
+        return Err(AppError::new(ErrorCode::InvalidRequest, None));
+    }
+    // Il nome viene dal server: con `\`, `:` o `..` unito alla cartella porterebbe altrove (un disco, una share SMB).
+    let name = loc.file_name().filter(|n| !invalid_windows_name(n)).ok_or_else(|| loc.error(ErrorCode::InvalidName))?;
     let dir = base.join(uuid::Uuid::new_v4().simple().to_string());
     std::fs::create_dir_all(&dir).map_err(|e| AppError::from_io(&e, &dir))?;
     let dst = dir.join(name);
@@ -108,6 +112,22 @@ mod tests {
     }
 
     #[test]
+    fn fetch_temp_refuses_names_that_leave_its_dir() {
+        let m = Arc::new(MemProvider::new());
+        let v = vfs(&[("m", &m)]);
+        let base = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        // Un server FTP può elencare nomi con `\` o `:`: uniti alla cartella porterebbero altrove (anche su una share SMB).
+        for name in [r"\x", r"C:\x", r"\\h\s\x", "..", "a:b", "x."] {
+            m.add_file(&format!("/d/{name}"), b"x");
+            let loc = Loc::Remote { scheme: crate::vfs::loc::Scheme::Ftp, conn: "m".into(), path: format!("/d/{name}") };
+            let e = fetch_in(&v, &loc, base.path(), &cancel, &mut |_| {}).unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidName, "{name}");
+        }
+        assert_eq!(std::fs::read_dir(base.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn cleanup_stale_keeps_live_pids() {
         use std::process::{Command, Stdio};
         let base = tempfile::tempdir().unwrap();
@@ -117,10 +137,9 @@ mod tests {
             std::fs::write(d.join("f"), b"x").unwrap();
             d
         };
-        let mut done = Command::new("cmd").args(["/c", "exit"]).spawn().unwrap();
-        done.wait().unwrap();
-        let dead = mk(&done.id().to_string());
-        drop(done);
+        // Un pid che non può esistere (oltre la tabella dei pid di Windows): quello di un processo finito potrebbe
+        // essere già riusato.
+        let dead = mk(&0xFFFF_FFFCu32.to_string());
         let mut running = Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
         let live = mk(&running.id().to_string());
         let own = mk(&std::process::id().to_string());

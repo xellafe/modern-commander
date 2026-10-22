@@ -9,7 +9,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::PART_SUFFIX;
 use crate::paths::invalid_windows_name;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Component, Path};
 
 const BLOCK: usize = 256 * 1024;
 
@@ -46,9 +46,12 @@ pub fn write<R: Read>(
     progress: &mut dyn FnMut(u64) -> bool,
     open: impl FnOnce() -> Result<(R, Option<i64>, String), AppError>,
 ) -> Result<(), AppError> {
-    // Un nome remoto che Windows non accetta non si rinomina in silenzio: errore per quell'elemento.
+    // Un nome remoto che Windows non accetta non si rinomina in silenzio: errore per quell'elemento. Una
+    // destinazione locale è sempre `cartella\nome`: senza nome o con `..` può essere un nome remoto ostile unito
+    // alla cartella, che porterebbe la scrittura altrove.
     if let Loc::Local(p) = dst
-        && p.file_name().is_some_and(|n| invalid_windows_name(&n.to_string_lossy()))
+        && (p.file_name().is_none_or(|n| invalid_windows_name(&n.to_string_lossy()))
+            || p.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)))
     {
         return Err(dst.error(ErrorCode::InvalidName));
     }
@@ -220,6 +223,22 @@ mod tests {
         let mut m = MemProvider::new();
         m.writable_dirs = Some(HashSet::new());
         unsafe_write_asks(m);
+    }
+
+    #[test]
+    fn local_destination_must_be_a_plain_file_name() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/a", b"x");
+        let v = vfs(&[("m", &m)]);
+        let d = tempfile::tempdir().unwrap();
+        let sub = d.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        for dst in [sub.join(".."), sub.join("..").join("a"), sub.join("a.")] {
+            let e = copy(&v, &loc("sftp://m/a"), &Loc::Local(dst.clone()), false, &mut |_| unreachable!(), &mut |_| true);
+            assert_eq!(e.unwrap_err().code, ErrorCode::InvalidName, "{}", dst.display());
+        }
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1, "solo `sub`");
+        assert_eq!(std::fs::read_dir(&sub).unwrap().count(), 0);
     }
 
     #[test]
