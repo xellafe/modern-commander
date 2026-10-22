@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::NTSTATUS;
 use windows::Win32::Security::Cryptography::{
     BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE, BCRYPT_MD5_ALGORITHM, BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS, BCRYPT_SHA1_ALGORITHM,
-    BCRYPT_SHA256_ALGORITHM, BCryptCloseAlgorithmProvider, BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData,
-    BCryptOpenAlgorithmProvider,
+    BCRYPT_SHA256_ALG_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCloseAlgorithmProvider, BCryptCreateHash, BCryptDestroyHash,
+    BCryptFinishHash, BCryptHash, BCryptHashData, BCryptOpenAlgorithmProvider,
 };
 
 /// Blocchi da 1 MiB: l'annullamento si controlla a ogni blocco.
@@ -84,6 +84,13 @@ pub fn hash_file(path: &Path, algo: HashAlgo, cancel: &AtomicBool) -> Result<Str
     let mut digest = vec![0u8; digest_len];
     check(unsafe { BCryptFinishHash(hash.0, &mut digest, 0) }, path)?;
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// SHA-256 di un buffer in memoria (impronte delle chiavi e dei certificati).
+pub fn sha256(data: &[u8]) -> Result<[u8; 32], AppError> {
+    let mut digest = [0u8; 32];
+    check(unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut digest) }, Path::new(""))?;
+    Ok(digest)
 }
 
 #[cfg(test)]
