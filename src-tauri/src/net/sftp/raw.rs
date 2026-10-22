@@ -124,6 +124,8 @@ impl RawSftp {
             match rc {
                 0 => return Ok(out),
                 ERROR_BUFFER_TOO_SMALL if buf.len() < MAX_NAME => buf.resize(buf.len() * 2, 0),
+                // Un server ostile non riempie la memoria.
+                n if n > 0 && out.len() == crate::net::MAX_ENTRIES => return Err(ErrorCode::TooLarge),
                 n if n > 0 => {
                     let name = &buf[..n as usize];
                     if name != b"." && name != b".." {

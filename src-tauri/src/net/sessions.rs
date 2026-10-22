@@ -233,8 +233,11 @@ impl Sessions {
         connections::delete(self.0.dir()?, &*self.0.creds, id)
     }
 
+    /// Dimentica anche la password in memoria: si chiude la connessione, e la prossima operazione la chiede.
     pub fn forget_password(&self, id: &str) -> Result<(), AppError> {
-        self.0.creds.delete(id)
+        let r = self.0.creds.delete(id);
+        self.disconnect(id);
+        r
     }
 
     /// Accetta l'impronta per host e porta della connessione: SSH per SFTP, TLS per FTPS e HTTPS.
@@ -550,6 +553,18 @@ mod tests {
         creds.delete(&id).unwrap();
         assert_eq!(code(s.connect(&id, None, false)), ErrorCode::AuthRequired);
         assert_eq!(code(s.connect("sconosciuta", None, false)), ErrorCode::NotFound);
+    }
+
+    /// "Dimentica password" toglie anche quella in memoria: trasferimenti, schede nuove e riconnessioni la richiedono.
+    #[test]
+    fn forget_password_also_drops_it_from_memory() {
+        let (_dir, creds, s, id) = setup(Arc::default());
+        assert!(s.connect(&id, Some("pw".into()), true).unwrap());
+        s.forget_password(&id).unwrap();
+        assert!(creds.load(&id).unwrap().is_none());
+        assert_eq!(s.provider(Scheme::Sftp, &id, Purpose::Transfer).err().unwrap().code, ErrorCode::AuthRequired);
+        assert_eq!(s.provider(Scheme::Sftp, &id, Purpose::Browse).err().unwrap().code, ErrorCode::AuthRequired);
+        assert_eq!(code(s.connect(&id, None, false)), ErrorCode::AuthRequired);
     }
 
     #[test]

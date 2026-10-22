@@ -69,8 +69,15 @@ pub(crate) fn list(dir: &Path, creds: &dyn Secrets) -> Result<Vec<ConnectionView
     Ok(load(dir)?.into_iter().map(|c| view(creds, c)).collect())
 }
 
-/// Un `id` vuoto crea la connessione con un uuid nuovo; un `id` che non esiste dà `NOT_FOUND`. Cambiando host o
-/// porta si dimentica l'impronta del vecchio indirizzo. La password si salva solo con `remember`.
+/// Un host è un nome, un IPv4 o un IPv6 senza parentesi: vuoto no, e niente spazi, caratteri di controllo né
+/// `/ \ ? # @ [ ]`, che finirebbero nel percorso o nell'utente di un URL (`http://intranet/logs:80`).
+pub(crate) fn valid_host(host: &str) -> bool {
+    !host.is_empty() && !host.chars().any(|c| c.is_whitespace() || c.is_control() || "/\\?#@[]".contains(c))
+}
+
+/// Un host non valido (vedi `valid_host`) dà `INVALID_REQUEST`. Un `id` vuoto crea la connessione con un uuid nuovo;
+/// un `id` che non esiste dà `NOT_FOUND`. Cambiando host o porta si dimentica l'impronta del vecchio indirizzo. La
+/// password si salva solo con `remember`.
 pub(crate) fn save(
     dir: &Path,
     creds: &dyn Secrets,
@@ -78,6 +85,9 @@ pub(crate) fn save(
     password: Option<String>,
     remember: bool,
 ) -> Result<ConnectionView, AppError> {
+    if !valid_host(&conn.host) {
+        return Err(AppError::new(ErrorCode::InvalidRequest, None));
+    }
     let is_new = conn.id.is_empty();
     {
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -179,6 +189,23 @@ mod tests {
         assert!(list(d, &creds).unwrap().is_empty());
         assert!(creds.load(&view.conn.id).unwrap().is_none());
         assert_eq!(trust::check_in(d, "ssh", "other.org", 22, "SHA256:a").unwrap(), Trust::Unknown);
+    }
+
+    /// Un host con `/` diventerebbe parte dell'URL (`http://intranet/logs:80`): rifiutato, come gli altri caratteri che
+    /// cambiano il significato di un indirizzo. Nomi, IPv4 e IPv6 senza parentesi passano.
+    #[test]
+    fn host_is_validated_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemSecrets::default();
+        for bad in ["", " ", "intranet/logs", "a b", "a\\b", "a?b", "a#b", "u@h", "h\n", "h\0", "[::1]", " h"] {
+            let c = Connection { host: bad.into(), ..sample(Scheme::Http) };
+            assert_eq!(save(dir.path(), &creds, c, None, false).unwrap_err().code, ErrorCode::InvalidRequest, "{bad:?}");
+        }
+        assert!(list(dir.path(), &creds).unwrap().is_empty());
+        for good in ["example.org", "10.0.0.1", "::1", "fe80::1", "srv-01"] {
+            let c = Connection { host: good.into(), ..sample(Scheme::Http) };
+            assert_eq!(save(dir.path(), &creds, c, None, false).unwrap().conn.host, good);
+        }
     }
 
     #[test]

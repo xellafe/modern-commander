@@ -258,6 +258,11 @@ fn join(dir: &str, name: &str) -> String {
     format!("{}/{name}", dir.trim_end_matches('/'))
 }
 
+/// La data del server (secondi) in millisecondi; fuori scala nessuna data.
+fn mtime_ms(secs: Option<u64>) -> Option<i64> {
+    i64::try_from(secs?).ok()?.checked_mul(1000)
+}
+
 /// Un percorso che non si può inviare così com'è (vedi il commento del modulo) dà `INVALID_NAME`.
 fn checked(path: &str) -> Result<&Path, AppError> {
     match path.contains(['\u{FFFD}', '\\']) {
@@ -296,7 +301,7 @@ impl SftpProvider {
             is_dir,
             dir_link: link && is_dir,
             size: if is_dir { 0 } else { t.size.unwrap_or(0) },
-            modified_ms: t.mtime.map(|s| s as i64 * 1000),
+            modified_ms: mtime_ms(t.mtime),
             mode: t.perm.map(|m| m & 0o7777),
         }
     }
@@ -419,6 +424,15 @@ mod tests {
         assert_eq!(checked(&join("/d", &name)).unwrap_err().code, ErrorCode::InvalidName);
         assert_eq!(checked("/d/a\\b").unwrap_err().code, ErrorCode::InvalidName);
         assert_eq!(checked("/d/caf\u{e9}.txt").unwrap(), Path::new("/d/caf\u{e9}.txt"));
+    }
+
+    /// La data del server è un numero qualsiasi: fuori scala non c'è, mai un overflow.
+    #[test]
+    fn server_mtime_never_overflows() {
+        assert_eq!(mtime_ms(Some(1_600_000_000)), Some(1_600_000_000_000));
+        assert_eq!(mtime_ms(None), None);
+        assert_eq!(mtime_ms(Some(u64::MAX)), None);
+        assert_eq!(mtime_ms(Some(i64::MAX as u64)), None);
     }
 
     #[test]

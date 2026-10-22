@@ -43,6 +43,13 @@ const TYPED = /^(sftp|ftps?|https?):\/\/([^/]*)(\/[\s\S]*)?$/i;
 /** Ha la forma di un indirizzo remoto scritto a mano (anche se poi non si risolve). */
 export const isTypedAddress = (input: string) => TYPED.test(input.trim());
 
+/**
+ * Host accettato dal backend (`valid_host`): nome, IPv4 o IPv6 senza parentesi; niente spazi, controlli né
+ * `/ \ ? # @ [ ]`.
+ */
+export const validHost = (host: string) =>
+  !!host && ![...host].some((c) => c <= " " || c === "\x7f" || /\s/.test(c) || "/\\?#@[]".includes(c));
+
 /** Host IPv6 senza parentesi quadre (`[::1]` → `::1`). */
 const bare = (host: string) => host.replace(/^\[(.*)\]$/, "$1");
 
@@ -64,12 +71,14 @@ export function resolveTypedAddress(
   const byId = list.find((c) => c.id === auth);
   if (byId) return { open: `${byId.scheme}://${byId.id}${path}` };
 
-  // L'utente può contenere `@` (un indirizzo email): l'host è dopo l'ultima.
+  // L'utente può contenere `@` (un indirizzo email): l'host è dopo l'ultima. Una password (`utente:password@`) non
+  // entra mai nella connessione: si chiede alla connessione e si salva solo nel Credential Manager.
   const at = auth.lastIndexOf("@");
-  const user = at >= 0 ? auth.slice(0, at) : null;
+  const user = at >= 0 ? auth.slice(0, at).split(":")[0] : null;
   const hp = /^(.+?)(?::(\d{1,5}))?$/.exec(auth.slice(at + 1));
   if (!hp) return null;
   const host = bare(hp[1]);
+  if (!validHost(host)) return null;
   const port = hp[2] ? Number(hp[2]) : defaultPort(scheme);
   const match = list.find((c) =>
     c.scheme === scheme && bare(c.host).toLowerCase() === host.toLowerCase() && c.port === port && (user === null || c.user === user));

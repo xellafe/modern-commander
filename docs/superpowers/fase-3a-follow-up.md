@@ -32,7 +32,8 @@ La CSP arriva come header, non come `<meta>`: si legge in Network → documento 
 **FTP e FTPS** su un server di prova
 - FTPS esplicito e implicito (990) con certificato autofirmato: dialogo con l'impronta, Accetta, poi niente più domande; certificato cambiato → di nuovo il dialogo.
 - vsftpd con `require_ssl_reuse=YES` (riuso della sessione TLS sul canale dati).
-- Server con MLSD e collegamenti simbolici; server con solo `LIST` (vsftpd: i file con il punto restano nascosti senza `-a`).
+- Server con MLSD e collegamenti simbolici; server con solo `LIST` (vsftpd: i file con il punto restano nascosti, vedi i limiti noti).
+- Upload di una cartella con molti file su un server senza `MLST` (vsftpd): nel log del server due `LIST` della cartella di destinazione per file (prima erano tre), e nessun `LIST` in più per gli `stat` ravvicinati sulla stessa cartella.
 - EPSV su IPv6.
 - Disco pieno (552) durante un upload: errore `DISK_FULL` tradotto.
 - Un job da molti file fa un solo login (pool di sessioni), non uno per file: controllare il log del server.
@@ -54,8 +55,10 @@ La CSP arriva come header, non come `<meta>`: si legge in Network → documento 
 - Trascinamento tra gruppi da una scheda remota (copia e spostamento).
 - Invio su un file remoto apre il viewer.
 - Avvio con due schede remote su connessioni diverse, senza password ricordate: due richieste; annullando la seconda, quella scheda resta in errore e Ctrl+R la ricollega.
-- Gestore delle connessioni: "Dimentica impronta" e "Dimentica password" (poi la connessione chiede di nuovo).
-- Importazione da WinSCP con i siti veri dell'utente: anteprima corretta (nome, protocollo, host, utente), SCP diventano SFTP, WebDAV e S3 saltati con il motivo, nessuna password importata.
+- Gestore delle connessioni: "Dimentica impronta" e "Dimentica password". Dopo "Dimentica password" la connessione si chiude: la prossima operazione della scheda già aperta, un trasferimento o una scheda nuova chiedono di nuovo la password.
+- Host non valido: con `/`, spazi, `\ ? # @ [ ]` nel campo host il salvataggio resta disattivato e il campo è segnato; `sftp://my host/x` scritto nel percorso dà l'avviso di indirizzo non valido.
+- Indirizzo scritto con la password (`sftp://utente:password@host/x`): la connessione nuova ha solo `utente`, il campo password è vuoto e la password non finisce in `connections.json`.
+- Importazione da WinSCP con i siti veri dell'utente: anteprima corretta (nome, protocollo, host, utente), SCP diventano SFTP, WebDAV e S3 saltati con il motivo, nessuna password importata; un sito con un host non valido (per esempio `intranet/logs`) saltato con "indirizzo del server non valido", gli altri importati.
 
 **Viewer ed editor su file remoti**
 - Immagine, PDF e media remoti: avanzamento del download, Esc annulla.
@@ -117,3 +120,6 @@ Note:
 - SFTP: nomi con `\` o non UTF-8 visibili ma non apribili.
 - HTTP: date di Apache in ora locale lette come UTC; IIS solo date in inglese; IIS solo NTLM → `UNSUPPORTED`. Sola lettura.
 - Niente chiavi SSH né WebDAV (issue #1, #2), niente SCP.
+- FTP con solo `LIST` (vsftpd): i file e le cartelle che iniziano con il punto non si vedono. È voluto: `LIST` parte senza `-a` perché alcuni server leggono `-a` come un percorso.
+- Un elenco remoto con più di 200.000 voci (o un elenco FTP oltre 64 MB, un indice HTTP oltre 16 MB) dà `TOO_LARGE`.
+- Host delle connessioni: nomi, IPv4 e IPv6 senza parentesi quadre; niente host con `/`, spazi o `\ ? # @`.

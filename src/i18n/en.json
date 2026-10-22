@@ -279,7 +279,7 @@
     "UNSUPPORTED": "This item is not supported by the operation.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",
-    "TOO_LARGE": "The file is too large for this operation.",
+    "TOO_LARGE": "The file or folder is too large for this operation.",
     "CHANGED_ON_DISK": "The file was changed on disk by another program.",
     "UNMAPPABLE_CHARS": "The text contains characters the chosen encoding cannot represent.",
     "CORRUPT_ARCHIVE": "The archive is damaged or cannot be read.",
@@ -536,6 +536,7 @@
       "webdav": "WebDAV is not supported",
       "s3": "S3 is not supported",
       "nohost": "no server address",
+      "badhost": "invalid server address",
       "unknown": "unsupported protocol"
     },
     "notRemembered": "Connected, but the password was not remembered."

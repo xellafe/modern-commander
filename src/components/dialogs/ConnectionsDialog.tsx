@@ -2,7 +2,7 @@ import { useEffect, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { forgetHost, forgetPassword, importConnections, winscpCandidates } from "../../ipc/api";
 import type { AppError, Connection, ConnectionView, ImportCandidate, Scheme } from "../../ipc/types";
-import { defaultPort, startLocation, useConnections } from "../../state/connections";
+import { defaultPort, startLocation, useConnections, validHost } from "../../state/connections";
 import { activeTab, useLayout } from "../../state/layout";
 import { useTabViews } from "../../state/tabViews";
 import { useUi, type DialogRequest } from "../../state/ui";
@@ -142,7 +142,8 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
       port: form.port === defaultPort(form.scheme, form.ftpsImplicit) ? defaultPort(scheme, ftpsImplicit) : form.port,
     });
     const portOk = Number.isInteger(form.port) && form.port > 0 && form.port < 65536;
-    const ok = !!form.host.trim() && portOk;
+    const hostOk = validHost(form.host.trim());
+    const ok = hostOk && portOk;
     const saved = list.find((c) => c.id === form.id);
     const save = () => {
       if (!ok) return;
@@ -190,7 +191,8 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
         )}
         <label className="mc-field">
           <span>{t("connections.host")}</span>
-          <input type="text" value={form.host} spellCheck={false} data-autofocus onChange={(e) => set({ host: e.target.value })} />
+          <input type="text" value={form.host} spellCheck={false} data-autofocus aria-invalid={!!form.host.trim() && !hostOk}
+            onChange={(e) => set({ host: e.target.value })} />
         </label>
         <label className="mc-field">
           <span>{t("connections.port")}</span>

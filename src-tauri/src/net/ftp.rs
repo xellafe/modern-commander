@@ -19,11 +19,13 @@
 
 use super::connections::Connection;
 use super::sessions::ProviderFactory;
+use super::MAX_ENTRIES;
+use super::http_index::LastListing;
 use super::sftp::{CONNECT_TIMEOUT, IO_TIMEOUT_MS, drop_in_background, tcp};
 use crate::error::{AppError, ErrorCode};
 use crate::vfs::provider::{Caps, Provider, Stat};
 use rustls::ClientConfig;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::mem::ManuallyDrop;
 use std::net::TcpStream;
 use std::path::Path;
@@ -164,7 +166,8 @@ fn parse_line(line: &str, mlsd: bool) -> Option<Stat> {
         return None;
     }
     let link = f.is_symlink();
-    let modified_ms = f.modified().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64).filter(|&ms| ms != 0);
+    let modified_ms =
+        f.modified().duration_since(UNIX_EPOCH).ok().and_then(|d| i64::try_from(d.as_millis()).ok()).filter(|&ms| ms != 0);
     Some(Stat {
         name: f.name().to_owned(),
         is_dir: f.is_directory() || link,
@@ -173,6 +176,37 @@ fn parse_line(line: &str, mlsd: bool) -> Option<Stat> {
         modified_ms,
         mode: has_mode.then(|| mode_of(&f)),
     })
+}
+
+/// Byte al massimo di un elenco (`LIST`/`MLSD`).
+const LISTING_BYTES: u64 = 64 << 20;
+
+/// Le righe non vuote di un elenco, in UTF-8 lossy (come `suppaftp`). Oltre `MAX_ENTRIES` righe o `LISTING_BYTES`
+/// byte: `TOO_LARGE`, senza leggere il resto.
+fn read_lines(r: impl Read, dir: &str) -> Result<Vec<String>, AppError> {
+    let mut r = io::BufReader::new(r.take(LISTING_BYTES + 1));
+    let (mut lines, mut total, mut buf) = (Vec::new(), 0u64, Vec::new());
+    let too_large = || AppError::new(ErrorCode::TooLarge, Some(Path::new(dir)));
+    loop {
+        buf.clear();
+        let n = r.read_until(b'\n', &mut buf).map_err(|e| io_error(e, dir))?;
+        if n == 0 {
+            return Ok(lines);
+        }
+        total += n as u64;
+        if total > LISTING_BYTES {
+            return Err(too_large());
+        }
+        let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        if lines.len() == MAX_ENTRIES {
+            return Err(too_large());
+        }
+        lines.push(String::from_utf8_lossy(line).into_owned());
+    }
 }
 
 /// Un percorso con U+FFFD (nome non UTF-8) o con un a capo (spezzerebbe il comando) dà `INVALID_NAME`.
@@ -281,7 +315,7 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls
     let feat = Feat { mlst: has("MLST"), mdtm: has("MDTM"), size: has("SIZE"), mfmt: has("MFMT") };
     let state = State { ftp, busy: false, broken: false };
     let ctl = Arc::new(Ctl { state: Mutex::new(state), idle: Condvar::new() });
-    Ok(FtpProvider { ctl: ManuallyDrop::new(ctl), feat })
+    Ok(FtpProvider { ctl: ManuallyDrop::new(ctl), feat, last: LastListing::default() })
 }
 
 fn connect(conn: &Connection, tls: Option<&Arc<ClientConfig>>) -> Result<Ftp, AppError> {
@@ -330,6 +364,8 @@ impl ProviderFactory for FtpFactory {
 pub(crate) struct FtpProvider {
     ctl: ManuallyDrop<Arc<Ctl>>,
     feat: Feat,
+    /// Per `stat` senza `MLST`; `list` lo rinnova, ogni comando che cambia il server lo dimentica.
+    last: LastListing,
 }
 
 impl Drop for FtpProvider {
@@ -416,6 +452,15 @@ impl FtpProvider {
         s.note(r)
     }
 
+    /// Come `with`, per un comando che cambia il server: l'elenco ricordato si dimentica, anche se il comando fallisce.
+    fn change<T>(&self, f: impl FnOnce(&mut Ftp) -> Result<T, AppError>) -> Result<T, AppError> {
+        self.with(|ftp| {
+            let r = f(ftp);
+            self.last.clear();
+            r
+        })
+    }
+
     /// Apre uno stream, che tiene la connessione fino alla sua chiusura.
     fn stream(&self, path: &str, f: impl FnOnce(&mut Ftp) -> Result<Data, AppError>) -> Result<Stream, AppError> {
         let mut s = self.ctl.free()?;
@@ -429,7 +474,18 @@ impl FtpProvider {
     /// percorso non passa come argomento di `LIST` (che alcuni server leggono come opzioni o caratteri jolly).
     fn list_in(&self, ftp: &mut Ftp, dir: &str) -> Result<Vec<Stat>, AppError> {
         ftp.cwd(dir).map_err(fe(dir))?;
-        let lines = if self.feat.mlst { ftp.mlsd(None) } else { ftp.list(None) }.map_err(fe(dir))?;
+        // Come `list`/`mlsd` di `suppaftp`, ma con un limite a quanto si legge.
+        let cmd = if self.feat.mlst { "MLSD" } else { "LIST" };
+        let (_, mut data) =
+            ftp.custom_data_command(cmd, &[Status::AboutToSend, Status::AlreadyOpen]).map_err(fe(dir))?;
+        let lines = read_lines(&mut data, dir);
+        // Interrotto (`TOO_LARGE`, errore): il server risponde 226 o 426, una risposta sola in ogni caso.
+        let done = match data.finish() {
+            Err(FtpError::UnexpectedResponse(_)) if lines.is_err() => Ok(()),
+            r => r,
+        };
+        let lines = lines?;
+        done.map_err(fe(dir))?;
         let mut out: Vec<Stat> = lines.iter().filter_map(|l| parse_line(l, self.feat.mlst)).collect();
         for s in out.iter_mut().filter(|s| s.dir_link) {
             let full = join(dir, &s.name);
@@ -446,13 +502,18 @@ impl FtpProvider {
                 }
             }
         }
+        self.last.put(dir, &out);
         Ok(out)
     }
 
     /// Un file si riconosce con `MLST` o `SIZE` (che seguono i collegamenti); cartelle e collegamenti solo
     /// nell'elenco della cartella madre. Con `MDTM` la data di un file è al secondo.
-    /// ponytail: senza `MLST`, un elemento che non c'è o una cartella costano un elenco della cartella madre (una
-    /// cartella grande copiata file per file la rielenca a ogni file); una cache degli elenchi se serve.
+    /// Senza `MLST`, un elemento che non c'è o una cartella costano un elenco della cartella madre, riusato per
+    /// `LISTING_TTL` finché nessun comando di questo provider cambia il server.
+    /// ponytail: un caricamento cambia il server, quindi ogni file caricato in una cartella costa ancora un elenco;
+    /// aggiornare l'elenco ricordato al posto di dimenticarlo, se serve. Un cambiamento fatto da un'altra sessione
+    /// non si vede per `LISTING_TTL`: la verifica di `create_new` e di `rename` può guardare un elenco vecchio di
+    /// qualche secondo (non era atomica neanche prima).
     fn stat_in(&self, ftp: &mut Ftp, path: &str) -> Result<Stat, AppError> {
         let name = name_of(path).to_owned();
         if name.is_empty() {
@@ -470,9 +531,14 @@ impl FtpProvider {
         };
         let mut s = match found {
             Some(s) => Stat { name, ..s },
-            None => self.list_in(ftp, parent_of(path))?.into_iter().find(|s| s.name == name).ok_or_else(|| {
-                AppError::new(ErrorCode::NotFound, Some(Path::new(path)))
-            })?,
+            None => {
+                let parent = parent_of(path);
+                let found = match self.last.find(parent, &name) {
+                    Some(found) => found,
+                    None => self.list_in(ftp, parent)?.into_iter().find(|s| s.name == name),
+                };
+                found.ok_or_else(|| AppError::new(ErrorCode::NotFound, Some(Path::new(path))))?
+            }
         };
         if !s.is_dir
             && self.feat.mdtm
@@ -544,7 +610,9 @@ impl Provider for FtpProvider {
             if create_new && self.exists(ftp, p)? {
                 return Err(AppError::new(ErrorCode::AlreadyExists, Some(Path::new(path))));
             }
-            ftp.put_with_stream(p).map_err(fe(path))
+            let r = ftp.put_with_stream(p).map_err(fe(path));
+            self.last.clear();
+            r
         })?))
     }
 
@@ -554,7 +622,7 @@ impl Provider for FtpProvider {
         if from == to {
             return Ok(());
         }
-        self.with(|ftp| {
+        self.change(|ftp| {
             if self.exists(ftp, t)? {
                 return Err(AppError::new(ErrorCode::AlreadyExists, Some(Path::new(to))));
             }
@@ -566,7 +634,7 @@ impl Provider for FtpProvider {
     /// una cartella vera fallisce; poi `RMD`. Mai ricorsione.
     fn delete(&self, path: &str, is_dir: bool) -> Result<(), AppError> {
         let p = checked(path)?;
-        self.with(|ftp| {
+        self.change(|ftp| {
             match ftp.rm(p) {
                 Err(FtpError::UnexpectedResponse(_)) if is_dir => ftp.rmdir(p),
                 r => r,
@@ -577,7 +645,7 @@ impl Provider for FtpProvider {
 
     fn mkdir(&self, path: &str) -> Result<(), AppError> {
         let p = checked(path)?;
-        self.with(|ftp| {
+        self.change(|ftp| {
             let Err(e) = ftp.mkdir(p) else { return Ok(()) };
             match self.exists(ftp, p) {
                 Ok(true) => Err(AppError::new(ErrorCode::AlreadyExists, Some(Path::new(path)))),
@@ -595,7 +663,7 @@ impl Provider for FtpProvider {
             return Ok(());
         };
         let cmd = format!("MFMT {} {p}", t.format("%Y%m%d%H%M%S"));
-        self.with(|ftp| ftp.custom_command(cmd, &[Status::File]).map(|_| ()).map_err(fe(path)))
+        self.change(|ftp| ftp.custom_command(cmd, &[Status::File]).map(|_| ()).map_err(fe(path)))
     }
 
     fn is_broken(&self) -> bool {
@@ -642,6 +710,19 @@ mod tests {
             let s = m(l).unwrap();
             assert_eq!((s.name.as_str(), s.is_dir, s.dir_link), ("current", true, true), "{l}");
         }
+    }
+
+    #[test]
+    fn listing_lines_are_capped() {
+        let lines = read_lines(&b"total 8\r\n\r\n-rw-r--r-- 1 u g 1 Oct 21 10:00 a\n caf\xe9"[..], "/d").unwrap();
+        assert_eq!(lines, ["total 8", "-rw-r--r-- 1 u g 1 Oct 21 10:00 a", " caf\u{FFFD}"]);
+        let many = "a\n".repeat(crate::net::MAX_ENTRIES);
+        assert_eq!(read_lines(many.as_bytes(), "/d").unwrap().len(), crate::net::MAX_ENTRIES);
+        let too_many = many + "a\n";
+        assert_eq!(read_lines(too_many.as_bytes(), "/d").unwrap_err().code, ErrorCode::TooLarge);
+        // Una riga senza fine non riempie la memoria.
+        let endless = io::repeat(b'x').take(LISTING_BYTES + 10);
+        assert_eq!(read_lines(endless, "/d").unwrap_err().code, ErrorCode::TooLarge);
     }
 
     #[test]

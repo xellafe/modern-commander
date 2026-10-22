@@ -3,7 +3,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { ConnectionView } from "../ipc/types";
-import { ensureConnected, isTypedAddress, resolveTypedAddress, useConnections } from "./connections";
+import { ensureConnected, isTypedAddress, resolveTypedAddress, useConnections, validHost } from "./connections";
 import { useUi, type DialogRequest } from "./ui";
 
 const conn = (id: string, scheme: ConnectionView["scheme"], host: string, port: number, user: string): ConnectionView => ({
@@ -119,6 +119,23 @@ test("IPv6 literals match without brackets", () => {
   const list = [...LIST, conn("v6", "sftp", "::1", 22, "")];
   expect(resolveTypedAddress("sftp://[::1]/x", list)).toEqual({ open: "sftp://v6/x" });
   expect(resolveTypedAddress("sftp://[fe80::2]:2222/", list)).toMatchObject({ create: { host: "fe80::2", port: 2222 } });
+});
+
+test("a password in the typed address never reaches the connection", () => {
+  const r = resolveTypedAddress("sftp://bob:segreto@server/x", LIST);
+  expect(r).toEqual({
+    create: { name: "server", scheme: "sftp", host: "server", port: 22, user: "bob", startDir: "/x", ftpsImplicit: false },
+  });
+  expect(JSON.stringify(r)).not.toContain("segreto");
+  // L'utente prima dei `:` trova la connessione salvata.
+  expect(resolveTypedAddress("sftp://bob:segreto@srv/x", LIST)).toEqual({ open: "sftp://c1/x" });
+  expect(resolveTypedAddress("ftps://me@corp.it:pw@files/", LIST)).toMatchObject({ create: { user: "me@corp.it" } });
+});
+
+test("a host with spaces or URL characters is not resolved", () => {
+  for (const a of ["sftp://my host/x", "http://a?b/", "http://a#b/", "http://a\\b/"]) expect(resolveTypedAddress(a, LIST)).toBeNull();
+  expect(validHost("example.org") && validHost("10.0.0.1") && validHost("::1")).toBe(true);
+  for (const h of ["", " h", "a/b", "a@b", "[::1]", "a\tb"]) expect(validHost(h)).toBe(false);
 });
 
 test("an address with no host is not resolved", () => {

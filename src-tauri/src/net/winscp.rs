@@ -24,7 +24,7 @@ pub struct ImportCandidate {
     pub user: String,
     pub start_dir: String,
     pub ftps_implicit: bool,
-    /// Codice del motivo per cui non si importa (`webdav`, `s3`, `nohost`, `unknown`); il testo lo dà il frontend.
+    /// Codice del motivo per cui non si importa (`webdav`, `s3`, `nohost`, `badhost`, `unknown`); il testo lo dà il frontend.
     pub skipped: Option<String>,
 }
 
@@ -66,7 +66,10 @@ fn build(raw_name: &str, get: impl Fn(&str) -> Option<String>) -> Option<ImportC
         7 => (None, false, 0, Some("s3")),
         _ => (None, false, 0, Some("unknown")),
     };
-    let skipped = skipped.or(host.is_empty().then_some("nohost"));
+    // Un host che il salvataggio rifiuterebbe interromperebbe l'importazione degli altri siti.
+    let skipped = skipped
+        .or(host.is_empty().then_some("nohost"))
+        .or((!super::connections::valid_host(&host)).then_some("badhost"));
     let port = num("PortNumber").and_then(|p| u16::try_from(p).ok()).filter(|&p| p > 0).unwrap_or(default_port);
     let dir = text("RemoteDirectory");
     Some(ImportCandidate {
@@ -256,5 +259,14 @@ mod tests {
         // Le password non si leggono: non c'è un campo che le porti e il JSON non le contiene.
         let json = serde_json::to_string(&got).unwrap();
         assert!(!json.contains("A35C4D1F") && !json.contains("Segreto-Da-Non-Importare"));
+    }
+
+    /// Un host che il salvataggio rifiuterebbe si salta, così non interrompe l'importazione degli altri.
+    #[test]
+    fn invalid_host_is_skipped() {
+        let got = from_ini("[Sessions\\Bad]\nHostName=intranet/logs\n");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].skipped.as_deref(), Some("badhost"));
+        assert!(got[0].clone().into_connection().is_none());
     }
 }

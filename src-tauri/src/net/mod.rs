@@ -22,6 +22,10 @@ use winscp::ImportCandidate;
 
 type Net<'a> = State<'a, Arc<Sessions>>;
 
+/// Voci al massimo in un elenco remoto, per tutti i provider: oltre, `TOO_LARGE` (un server ostile non riempie la
+/// memoria).
+pub(crate) const MAX_ENTRIES: usize = 200_000;
+
 #[tauri::command]
 pub async fn list_connections(net: Net<'_>) -> Result<Vec<ConnectionView>, AppError> {
     let s = net.inner().clone();

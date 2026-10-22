@@ -16,6 +16,7 @@
 //! ponytail: `ureq` scrive le intestazioni senza oscurarle (`Authorization` compresa) solo nel log a livello trace,
 //! che nelle build di rilascio è tolto (`log` con `release_max_level_debug`); come per `suppaftp`.
 
+use super::MAX_ENTRIES;
 use super::connections::Connection;
 use super::http_auth::Credentials;
 use super::sessions::ProviderFactory;
@@ -299,25 +300,60 @@ pub fn parse_index(html: &str, dir_path: &str) -> Vec<Stat> {
     out
 }
 
-/// L'URL di `path` sull'origine di `base` (schema, host e porta): ogni segmento in percent-encoding, tranne i
-/// caratteri non riservati. Una barra finale resta.
-pub fn url_for(base: &str, path: &str) -> String {
-    let host_start = base.find("://").map_or(0, |i| i + 3);
-    let origin = &base[..base[host_start..].find('/').map_or(base.len(), |i| host_start + i)];
-    let mut url = origin.to_owned();
+/// Il percorso della richiesta per `path` (da mettere dopo l'origine): ogni segmento in percent-encoding, tranne i
+/// caratteri non riservati. Una barra finale resta; la radice è `/`.
+pub fn request_path(path: &str) -> String {
+    let mut out = String::new();
     for seg in segments(path) {
-        url.push('/');
+        out.push('/');
         for b in seg.bytes() {
             match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => url.push(b as char),
-                _ => url.push_str(&format!("%{b:02X}")),
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+                _ => out.push_str(&format!("%{b:02X}")),
             }
         }
     }
-    if url.len() == origin.len() || path.ends_with('/') {
-        url.push('/');
+    if out.is_empty() || path.ends_with('/') {
+        out.push('/');
     }
-    url
+    out
+}
+
+/// L'ultimo elenco letto da un provider (cartella, quando, voci): `stat` lo riusa per `LISTING_TTL`, così la copia
+/// di una cartella (uno `stat` per file) non rielenca la cartella a ogni file. Chi cambia il server lo dimentica.
+#[derive(Default)]
+pub(crate) struct LastListing(Mutex<Option<(String, Instant, Vec<Stat>)>>);
+
+impl LastListing {
+    /// La cartella senza barra finale; la radice è `/`.
+    fn key(dir: &str) -> &str {
+        match dir.trim_end_matches('/') {
+            "" => "/",
+            d => d,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<(String, Instant, Vec<Stat>)>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Con l'elenco recente di `dir`: la voce `name`, o `Some(None)` se non c'è. `None`: l'elenco va letto.
+    pub(crate) fn find(&self, dir: &str, name: &str) -> Option<Option<Stat>> {
+        match &*self.lock() {
+            Some((d, at, items)) if d == Self::key(dir) && at.elapsed() < LISTING_TTL => {
+                Some(items.iter().find(|s| s.name == name).cloned())
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn put(&self, dir: &str, items: &[Stat]) {
+        *self.lock() = Some((Self::key(dir).to_owned(), Instant::now(), items.to_vec()));
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.lock() = None;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -484,9 +520,8 @@ pub(crate) struct HttpProvider {
     slot: Option<Slot>,
     /// L'ultima richiesta con `Range` ha avuto `206`.
     ranged: AtomicBool,
-    /// L'ultimo elenco letto (cartella, quando, voci): `stat` lo riusa per `LISTING_TTL`, così la copia di una
-    /// cartella (uno `stat` per file) non riscarica l'indice a ogni file. `list` lo rinnova sempre.
-    last: Mutex<Option<(String, Instant, Vec<Stat>)>>,
+    /// Per `stat`; `list` lo rinnova sempre.
+    last: LastListing,
 }
 
 /// Prepara il client e prova cartella iniziale, certificato e credenziali con una richiesta `Range: bytes=0-0`.
@@ -509,7 +544,7 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls
     } else {
         (agent(None), None)
     };
-    let p = HttpProvider { agent, base, creds, slot, ranged: AtomicBool::new(false), last: Mutex::new(None) };
+    let p = HttpProvider { agent, base, creds, slot, ranged: AtomicBool::new(false), last: LastListing::default() };
     let start = if conn.start_dir.is_empty() { "/" } else { conn.start_dir.as_str() };
     let resp = p.get(start, true, Some((0, 1)))?;
     p.ranged.store(resp.status().as_u16() == 206, Ordering::Relaxed);
@@ -518,10 +553,6 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls
 }
 
 impl HttpProvider {
-    fn last(&self) -> std::sync::MutexGuard<'_, Option<(String, Instant, Vec<Stat>)>> {
-        self.last.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Un errore di `ureq`; un certificato rifiutato diventa `CERT_UNTRUSTED` con l'impronta.
     fn error(&self, e: ureq::Error, path: &str) -> AppError {
         if let Some(fp) = self.slot.as_ref().and_then(|s| s.lock().unwrap_or_else(|e| e.into_inner()).take()) {
@@ -537,16 +568,17 @@ impl HttpProvider {
         if path.contains('\u{FFFD}') {
             return Err(AppError::new(ErrorCode::InvalidName, Some(Path::new(path))));
         }
-        let mut url = url_for(&self.base, path);
-        if dir && !url.ends_with('/') {
-            url.push('/');
+        // Il percorso della richiesta si costruisce a parte: niente tagli dell'URL che un host strano sposterebbe.
+        let mut uri = request_path(path);
+        if dir && !uri.ends_with('/') {
+            uri.push('/');
         }
-        let uri = &url[self.base.len()..];
+        let url = format!("{}{uri}", self.base);
         let with_path = |e: AppError| AppError { path: Some(path.to_owned()), ..e };
         let mut retried = false;
         loop {
             let auth = match &self.creds {
-                Some(c) => c.header("GET", uri)?,
+                Some(c) => c.header("GET", &uri)?,
                 None => None,
             };
             let mut req = self.agent.get(&url);
@@ -554,7 +586,7 @@ impl HttpProvider {
                 req = req.header("Authorization", a);
             }
             if let Some((from, len)) = range {
-                req = req.header("Range", format!("bytes={from}-{}", from + u64::from(len.max(1)) - 1));
+                req = req.header("Range", format!("bytes={from}-{}", from.saturating_add(u64::from(len.max(1)) - 1)));
             }
             let resp = req.call().map_err(|e| self.error(e, path))?;
             if resp.status().as_u16() != 401 {
@@ -597,13 +629,7 @@ impl Provider for HttpProvider {
             return Ok(Stat { name: String::new(), is_dir: true, dir_link: false, size: 0, modified_ms: None, mode: None });
         }
         let parent = if parent.is_empty() { "/" } else { parent };
-        let cached = match &*self.last() {
-            Some((dir, at, items)) if dir == parent && at.elapsed() < LISTING_TTL => {
-                Some(items.iter().find(|s| s.name == name).cloned())
-            }
-            _ => None,
-        };
-        let found = match cached {
+        let found = match self.last.find(parent, name) {
             Some(found) => found,
             None => self.list(parent)?.into_iter().find(|s| s.name == name),
         };
@@ -614,11 +640,10 @@ impl Provider for HttpProvider {
         let mut resp = ok(self.get(path, true, None)?, path)?;
         let html = resp.body_mut().with_config().limit(INDEX_LIMIT).read_to_vec().map_err(|e| self.error(e, path))?;
         let items = parse_index(&String::from_utf8_lossy(&html), path);
-        let dir = match path.trim_end_matches('/') {
-            "" => "/",
-            d => d,
-        };
-        *self.last() = Some((dir.to_owned(), Instant::now(), items.clone()));
+        if items.len() > MAX_ENTRIES {
+            return Err(AppError::new(ErrorCode::TooLarge, Some(Path::new(path))));
+        }
+        self.last.put(path, &items);
         Ok(items)
     }
 
@@ -725,7 +750,34 @@ mod tests {
 
     #[test]
     fn http_url_encodes_segments() {
-        assert_eq!(url_for("https://h/logs/", "/logs/my app/è#1.log"), "https://h/logs/my%20app/%C3%A8%231.log");
+        assert_eq!(request_path("/logs/my app/è#1.log"), "/logs/my%20app/%C3%A8%231.log");
+        assert_eq!(request_path("/a%b.log"), "/a%25b.log");
+        assert_eq!(request_path("/logs/"), "/logs/");
+        assert_eq!(request_path(""), "/");
+    }
+
+    /// Una connessione salvata prima della verifica dell'host, con una `/` nell'host: errore, mai un panic.
+    #[test]
+    fn host_with_a_slash_does_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Connection { host: "127.0.0.1/logs".into(), ..conn(1, "") };
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open_in(dir.path(), &c, None, false).is_err()));
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn last_listing_is_kept_per_folder_until_cleared() {
+        let last = LastListing::default();
+        let a = entry("a", false, 1, 0);
+        assert_eq!(last.find("/d", "a"), None);
+        last.put("/d/", &[a.clone()]);
+        assert_eq!(last.find("/d", "a"), Some(Some(a)));
+        assert_eq!(last.find("/d/", "x"), Some(None));
+        assert_eq!(last.find("/e", "a"), None);
+        last.put("", &[]);
+        assert_eq!(last.find("/", "a"), Some(None));
+        last.clear();
+        assert_eq!(last.find("/", "a"), None);
     }
 
     /// Nomi pericolosi scartati, `./a:b` di Apache e un `href` senza virgolette tenuti; testo strano senza panic.
@@ -845,6 +897,7 @@ mod tests {
         assert_eq!(p.read_at("/a.txt", 2, 3).unwrap(), b"234");
         assert_eq!(p.read_at("/a.txt", 8, 100).unwrap(), b"89");
         assert_eq!(p.read_at("/a.txt", 10, 4).unwrap(), b"");
+        assert_eq!(p.read_at("/a.txt", u64::MAX, 4).unwrap(), b"");
         assert!(p.caps().ranged_read);
         assert_eq!(p.read_at("/n.txt", 0, 4).unwrap_err().code, ErrorCode::RangeUnsupported);
         assert!(!p.caps().ranged_read);
