@@ -56,7 +56,9 @@ async fn on_remote<T: Send + 'static>(
 pub async fn list_dir(vfs: State<'_, Arc<Vfs>>, path: String) -> Result<Vec<listing::Entry>, AppError> {
     match Loc::parse(&path)? {
         Loc::Local(p) => match shares::is_server_root(&p) {
-            Some(server) => blocking(move || shares::list_shares(&server)).await?,
+            // Server non SMB (`\\wsl$`, `\\wsl.localhost`): se l'elenco delle condivisioni fallisce vale il listing di sempre,
+            // e solo se fallisce anche quello si restituisce l'errore delle condivisioni.
+            Some(server) => blocking(move || shares::list_shares(&server).or_else(|e| listing::list_dir(&p).map_err(|_| e))).await?,
             None => blocking(move || listing::list_dir(&p)).await?,
         },
         loc => on_remote(&vfs, loc, |p, path| Ok(p.list(path)?.into_iter().map(listing::Entry::from).collect())).await,

@@ -15,9 +15,13 @@ export function normalizePath(input: string): string {
   return /^[A-Za-z]:$/.test(body) ? `${body}\\` : body;
 }
 
+/** Radice dell'unità o della condivisione UNC (`\\server` da solo è l'elenco delle condivisioni, non una radice). */
 export function rootPath(path: string): string {
   let p = path;
-  for (let up = parentPath(p); up !== null; up = parentPath(p)) p = up;
+  for (let up = parentPath(p); up !== null; up = parentPath(p)) {
+    if (up.startsWith("\\\\") && parentPath(up) === null) break;
+    p = up;
+  }
   return p;
 }
 

@@ -23,6 +23,7 @@ pub fn is_server_root(path: &Path) -> Option<String> {
 }
 
 /// Condivisioni disco di `server` come cartelle; quelle amministrative (`C$`) sono nascoste.
+// ponytail: nessun timeout nostro, vale quello di sistema di SMB (gira fuori dal thread principale); se serve, thread con attesa limitata.
 pub fn list_shares(server: &str) -> Result<Vec<Entry>, AppError> {
     let unc = format!("\\\\{server}");
     let host = HSTRING::from(&unc);

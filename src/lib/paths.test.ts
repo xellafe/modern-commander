@@ -7,10 +7,12 @@ test("joinPath handles roots and UNC", () => {
   expect(joinPath("\\\\srv\\share", "x")).toBe("\\\\srv\\share\\x");
 });
 
-test("rootPath climbs to the drive or the UNC server", () => {
+test("rootPath climbs to the drive or the UNC share", () => {
   expect(rootPath("C:\\a\\b")).toBe("C:\\");
   expect(rootPath("C:\\")).toBe("C:\\");
-  expect(rootPath("\\\\srv\\share\\a\\b")).toBe("\\\\srv");
+  expect(rootPath("\\\\srv\\share\\a\\b")).toBe("\\\\srv\\share");
+  expect(rootPath("\\\\srv\\share")).toBe("\\\\srv\\share");
+  expect(rootPath("\\\\srv")).toBe("\\\\srv");
   expect(rootPath(DRIVES)).toBe(DRIVES);
 });
 
