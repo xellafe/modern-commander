@@ -24,9 +24,26 @@ pub fn client_config(host: &str, port: u16) -> Result<(Arc<ClientConfig>, Slot),
 }
 
 pub(crate) fn client_config_in(dir: &Path, host: &str, port: u16) -> Result<(Arc<ClientConfig>, Slot), AppError> {
+    build(dir, host, port, rustls::DEFAULT_VERSIONS)
+}
+
+/// Per FTPS: solo TLS 1.2. I canali dati riprendono la sessione TLS del controllo, e molti server la esigono
+/// (vsftpd: `require_ssl_reuse`, attivo di default). In TLS 1.3 ogni ticket vale una volta sola e il server ne manda
+/// di nuovi solo a chi legge dopo l'handshake: dopo un paio di upload non ne restano e il server rifiuta il canale
+/// ("522 session reuse required"). La sessione TLS 1.2 invece si riprende quante volte serve.
+pub(crate) fn ftps_config_in(dir: &Path, host: &str, port: u16) -> Result<(Arc<ClientConfig>, Slot), AppError> {
+    build(dir, host, port, &[&rustls::version::TLS12])
+}
+
+fn build(
+    dir: &Path,
+    host: &str,
+    port: u16,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> Result<(Arc<ClientConfig>, Slot), AppError> {
     let (v, seen) = verifier(dir, host, port)?;
     let config = ClientConfig::builder_with_provider(v.provider.clone())
-        .with_safe_default_protocol_versions()
+        .with_protocol_versions(versions)
         .map_err(tls_error)?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(v))

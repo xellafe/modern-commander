@@ -289,7 +289,7 @@ struct Feat {
 
 /// Collega, verifica il certificato (FTPS) con le impronte di `dir/known_hosts` e accede.
 pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>, tls: bool) -> Result<FtpProvider, AppError> {
-    let secure = if tls { Some(super::tls::client_config_in(dir, &conn.host, conn.port)?) } else { None };
+    let secure = if tls { Some(super::tls::ftps_config_in(dir, &conn.host, conn.port)?) } else { None };
     // Un certificato rifiutato fa fallire l'handshake con un errore di I/O: l'impronta nello slot dice il perché.
     let untrusted = |e: AppError| match secure.as_ref().and_then(|(_, slot)| lock(slot).take()) {
         Some(fp) => AppError { detail: Some(fp), ..AppError::new(ErrorCode::CertUntrusted, None) },
@@ -328,7 +328,13 @@ fn connect(conn: &Connection, tls: Option<&Arc<ClientConfig>>) -> Result<Ftp, Ap
             // prima con il timeout di 15 s, e la connessione di prova si chiude subito.
             // ponytail: una connessione in più verso il server; si toglie se `suppaftp` accetta un socket già aperto.
             let addr = tcp(&conn.host, conn.port)?.peer_addr().map_err(io)?;
-            Ftp::connect_secure_implicit(addr, tls_for(c), &conn.host).map_err(err)?
+            let mut ftp = Ftp::connect_secure_implicit(addr, tls_for(c), &conn.host).map_err(err)?;
+            timeouts(&ftp.get_ref()).map_err(io)?;
+            // A differenza di `into_secure`, `suppaftp` qui non chiede la protezione dei dati: senza `PROT P` un server
+            // che la esige rifiuta ogni elenco e trasferimento (vsftpd: "522 Data connections must be encrypted").
+            ftp.custom_command("PBSZ 0", &[Status::CommandOk]).map_err(err)?;
+            ftp.custom_command("PROT P", &[Status::CommandOk]).map_err(err)?;
+            ftp
         }
         _ => {
             let s = tcp(&conn.host, conn.port)?;
@@ -768,7 +774,7 @@ mod tests {
             port,
             user: user.into(),
             start_dir: dir.into(),
-            ftps_implicit: tls && port == 990,
+            ftps_implicit: tls && (port == 990 || std::env::var_os("MC_TEST_FTPS_IMPLICIT").is_some()),
         };
         let cfg = tempfile::tempdir().unwrap();
         let code = |r: Result<FtpProvider, AppError>| r.err().map(|e| e.code);
