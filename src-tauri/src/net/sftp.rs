@@ -145,6 +145,7 @@ pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>) -> 
         Trust::Changed => Some(ErrorCode::HostKeyChanged),
     };
     if let Some(code) = refused {
+        trust::presented(&conn.host, conn.port, &fp, "ssh-rsa");
         return Err(AppError { detail: Some(fp), ..AppError::new(code, None) });
     }
     // Chiede i metodi con l'autenticazione "none": se il server la accetta si è già dentro.

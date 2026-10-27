@@ -172,6 +172,7 @@ mod tests {
         assert_eq!(json["host"], "example.org");
 
         // Cambiando host si dimentica l'impronta del vecchio; senza password nuova quella salvata resta.
+        trust::presented("example.org", 22, "SHA256:a", "ssh-ed25519");
         trust::accept_in(d, "ssh", "example.org", 22, "SHA256:a").unwrap();
         let moved = Connection { host: "other.org".into(), ..view.conn.clone() };
         let view = save(d, &creds, moved, None, false).unwrap();
@@ -184,6 +185,7 @@ mod tests {
         assert_eq!(save(d, &creds, ghost, None, false).unwrap_err().code, crate::error::ErrorCode::NotFound);
 
         // Eliminando la connessione se ne vanno anche password e impronta.
+        trust::presented("other.org", 22, "SHA256:a", "ssh-ed25519");
         trust::accept_in(d, "ssh", "other.org", 22, "SHA256:a").unwrap();
         delete(d, &creds, &view.conn.id).unwrap();
         assert!(list(d, &creds).unwrap().is_empty());
