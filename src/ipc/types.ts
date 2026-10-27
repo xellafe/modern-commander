@@ -25,6 +25,7 @@ export type ErrorCode =
   | "TIMEOUT"
   | "HOST_KEY_UNKNOWN"
   | "HOST_KEY_CHANGED"
+  | "HOST_KEY_UNSUPPORTED"
   | "CERT_UNTRUSTED"
   | "UNSAFE_WRITE"
   | "READ_ONLY_SOURCE"

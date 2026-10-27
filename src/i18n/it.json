@@ -289,6 +289,7 @@
     "TIMEOUT": "Il server non ha risposto in tempo.",
     "HOST_KEY_UNKNOWN": "L'impronta del server è sconosciuta.",
     "HOST_KEY_CHANGED": "L'impronta del server è cambiata rispetto a quella accettata.",
+    "HOST_KEY_UNSUPPORTED": "Il server usa solo tipi di chiave dell'host non supportati.",
     "CERT_UNTRUSTED": "Il certificato del server non è attendibile.",
     "UNSAFE_WRITE": "Il server non permette il salvataggio sicuro: se la connessione cade il file può restare incompleto.",
     "READ_ONLY_SOURCE": "Questa sorgente è in sola lettura.",

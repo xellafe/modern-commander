@@ -43,6 +43,8 @@ pub enum ErrorCode {
     HostKeyUnknown,
     /// Impronta dell'host SSH diversa da quella accettata: `detail` porta `SHA256:<base64>`.
     HostKeyChanged,
+    /// Il server offre solo tipi di chiave dell'host che l'app non gestisce: `detail` porta quelli offerti.
+    HostKeyUnsupported,
     /// Certificato TLS che Windows non accetta: `detail` porta `SHA256:<base64>`.
     CertUntrusted,
     /// Il server non permette la scrittura sicura (temporaneo e rinomina): serve la conferma dell'utente.
@@ -143,6 +145,7 @@ mod tests {
         assert_eq!(s(ErrorCode::Timeout), "TIMEOUT");
         assert_eq!(s(ErrorCode::HostKeyUnknown), "HOST_KEY_UNKNOWN");
         assert_eq!(s(ErrorCode::HostKeyChanged), "HOST_KEY_CHANGED");
+        assert_eq!(s(ErrorCode::HostKeyUnsupported), "HOST_KEY_UNSUPPORTED");
         assert_eq!(s(ErrorCode::CertUntrusted), "CERT_UNTRUSTED");
         assert_eq!(s(ErrorCode::UnsafeWrite), "UNSAFE_WRITE");
         assert_eq!(s(ErrorCode::ReadOnlySource), "READ_ONLY_SOURCE");

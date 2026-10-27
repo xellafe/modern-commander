@@ -27,6 +27,7 @@ use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::sync::Arc;
 
+mod errors;
 mod raw;
 mod rt;
 
