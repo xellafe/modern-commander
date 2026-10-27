@@ -127,11 +127,12 @@ impl SftpProvider {
         self.block(path, async { fut.await.map_err(|e| sftp_error(e, None)) })
     }
 
-    /// Chiude `handle` sul runtime, senza aspettare.
+    /// Chiude `handle` sul runtime, senza aspettare: dopo un errore o un timeout. Dopo un successo la chiusura si
+    /// aspetta nello stesso `block`, così un `rmdir` o `delete` subito dopo non trova l'handle ancora aperto.
     fn close(&self, handle: String) {
-        let sftp = self.link.sftp.clone();
+        let link = self.link.clone();
         rt::spawn(async move {
-            let _ = sftp.close(handle).await;
+            let _ = link.sftp.close(handle).await;
         });
     }
 
@@ -185,25 +186,37 @@ impl Provider for SftpProvider {
         let sftp = &self.link.sftp;
         let handle = self.run(checked(path)?, sftp.opendir(path))?.handle;
         let mut files = Vec::new();
-        let read = loop {
+        loop {
             let page = self.run(path, async {
                 match sftp.readdir(handle.as_str()).await {
-                    Err(SftpError::Status(s)) if s.status_code == StatusCode::Eof => Ok(None),
+                    // Fine dell'elenco: la chiusura si aspetta qui, il suo esito non conta.
+                    Err(SftpError::Status(s)) if s.status_code == StatusCode::Eof => {
+                        let _ = sftp.close(handle.as_str()).await;
+                        Ok(None)
+                    }
                     r => r.map(|n| Some(n.files)),
                 }
             });
-            match page {
-                Ok(Some(page)) => files.extend(page.into_iter().filter(|f| f.filename != "." && f.filename != "..")),
-                Ok(None) => break Ok(()),
-                Err(e) => break Err(e),
-            }
-            // Un server ostile non riempie la memoria.
-            if files.len() > MAX_ENTRIES {
-                break Err(AppError::new(ErrorCode::TooLarge, Some(Path::new(path))));
-            }
-        };
-        self.close(handle);
-        read?;
+            let fail = match page {
+                Ok(None) => break,
+                // Una pagina vuota non fa avanzare: un server che ne manda all'infinito non blocca l'elenco.
+                Ok(Some(page)) if page.is_empty() => AppError {
+                    detail: Some("readdir senza fine".into()),
+                    ..AppError::new(ErrorCode::Io, Some(Path::new(path)))
+                },
+                Ok(Some(page)) => {
+                    files.extend(page.into_iter().filter(|f| f.filename != "." && f.filename != ".."));
+                    // Un server ostile non riempie la memoria.
+                    if files.len() <= MAX_ENTRIES {
+                        continue;
+                    }
+                    AppError::new(ErrorCode::TooLarge, Some(Path::new(path)))
+                }
+                Err(e) => e,
+            };
+            self.close(handle);
+            return Err(fail);
+        }
         Ok(files
             .into_iter()
             .map(|f| {
@@ -220,25 +233,32 @@ impl Provider for SftpProvider {
         let handle = self.run(checked(path)?, sftp.open(path, OpenFlags::READ, FileAttributes::default()))?.handle;
         let segment = self.chunk.max(1).saturating_mul(IN_FLIGHT as u32);
         let mut out = Vec::new();
-        let read = loop {
+        loop {
             let done = out.len() as u32;
-            if done >= len {
-                break Ok(());
-            }
             let want = (len - done).min(segment);
-            match self.block(path, read_range(sftp, &handle, offset.saturating_add(done as u64), want, self.chunk)) {
-                Ok(part) => {
-                    let short = (part.len() as u32) < want;
+            let at = offset.saturating_add(done as u64);
+            let r = self.block(path, async {
+                let part = read_range(sftp, &handle, at, want, self.chunk).await?;
+                // Ultimo segmento, o corto a fine file: la chiusura si aspetta qui, il suo esito non conta.
+                let last = want == len - done || (part.len() as u32) < want;
+                if last {
+                    let _ = sftp.close(handle.as_str()).await;
+                }
+                Ok::<_, AppError>((part, last))
+            });
+            match r {
+                Ok((part, last)) => {
                     out.extend(part);
-                    if short {
-                        break Ok(());
+                    if last {
+                        return Ok(out);
                     }
                 }
-                Err(e) => break Err(e),
+                Err(e) => {
+                    self.close(handle);
+                    return Err(e);
+                }
             }
-        };
-        self.close(handle);
-        read.map(|()| out)
+        }
     }
 
     fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
@@ -483,6 +503,31 @@ mod tests {
         fake.put("/big", &data);
         assert!(p.read_at("/big", 1000, 1_100_000).unwrap() == data[1000..1_101_000]);
         assert!(p.read_at("/big", 1_199_990, 100).unwrap() == data[1_199_990..]);
+    }
+
+    /// Dopo un `list` o un `read_at` riusciti l'handle è già chiuso: un `rmdir` o `delete` subito dopo non lo trova
+    /// aperto.
+    #[test]
+    fn list_and_read_at_close_before_returning() {
+        let (fake, p) = on_fake("closed-handles.test", FakeOptions::default(), &Options::DEFAULT);
+        p.mkdir("/d").unwrap();
+        fake.put("/d/f", b"0123456789");
+        assert_eq!(p.list("/d").unwrap().len(), 1);
+        assert_eq!(fake.open_handles(), 0);
+        assert_eq!(p.read_at("/d/f", 2, 3).unwrap(), b"234");
+        assert_eq!(fake.open_handles(), 0);
+        assert_eq!(p.read_at("/d/f", 0, 0).unwrap(), b"");
+        assert_eq!(fake.open_handles(), 0);
+        p.delete("/d/f", false).unwrap();
+        p.delete("/d", true).unwrap();
+    }
+
+    /// Un server che manda pagine vuote all'infinito non blocca `list`.
+    #[test]
+    fn endless_empty_pages_fail() {
+        let (_fake, p) = on_fake("empty-pages.test", FakeOptions { empty_pages: true, ..Default::default() }, &Options::DEFAULT);
+        let e = p.list("/").unwrap_err();
+        assert_eq!((e.code, e.path.as_deref(), e.detail.as_deref()), (ErrorCode::Io, Some("/"), Some("readdir senza fine")));
     }
 
     /// Server fermo: `TIMEOUT` con il percorso, presto.

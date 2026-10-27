@@ -45,6 +45,8 @@ pub(super) struct FakeOptions {
     pub legacy_only: bool,
     /// Rifiuta il sottosistema `sftp`.
     pub reject_subsystem: bool,
+    /// `readdir` risponde sempre con una pagina vuota, mai `EOF`.
+    pub empty_pages: bool,
 }
 
 impl Default for FakeOptions {
@@ -57,6 +59,7 @@ impl Default for FakeOptions {
             short_reads: false,
             legacy_only: false,
             reject_subsystem: false,
+            empty_pages: false,
         }
     }
 }
@@ -560,6 +563,9 @@ impl russh_sftp::server::Handler for Sftp {
     async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, StatusCode> {
         self.gate().await;
         let Some(Open::Dir(path, sent)) = self.handles.get_mut(&handle) else { return Err(StatusCode::Failure) };
+        if self.shared.opts.empty_pages {
+            return Ok(Name { id, files: Vec::new() });
+        }
         if std::mem::replace(sent, true) {
             return Err(StatusCode::Eof);
         }

@@ -396,7 +396,7 @@ impl Provider for Lent {
 /// sessione dalla cache; se la sessione aveva già risposto (caduta "vecchia") e l'operazione è idempotente (`stat`,
 /// `list`, `read_at`, `reader`), si riapre e si riprova una volta. Le altre restituiscono l'errore e la richiesta
 /// successiva riconnette. Una sessione appena aperta che fallisce non si riapre: il server è giù, inutile aspettare
-/// due volte. La sessione tolta si chiude su un altro thread (vedi `Drop` di `SftpProvider`).
+/// due volte. La sessione tolta si chiude su un altro thread (vedi `Drop` di `Link` in `sftp/connect.rs`).
 /// ponytail: gli errori a metà degli stream di `reader`/`writer` non si guardano.
 struct Watched {
     shared: Arc<Shared>,
