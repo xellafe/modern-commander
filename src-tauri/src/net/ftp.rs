@@ -21,7 +21,7 @@ use super::connections::Connection;
 use super::sessions::ProviderFactory;
 use super::MAX_ENTRIES;
 use super::http_index::LastListing;
-use super::sftp::{CONNECT_TIMEOUT, IO_TIMEOUT_MS, drop_in_background, tcp};
+use super::{CONNECT_TIMEOUT, IO_TIMEOUT_MS, drop_in_background, tcp};
 use crate::error::{AppError, ErrorCode};
 use crate::vfs::provider::{Caps, Provider, Stat};
 use rustls::ClientConfig;

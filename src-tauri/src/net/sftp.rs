@@ -11,6 +11,7 @@
 //! sblocca spostando tutte le operazioni sul canale grezzo.
 
 use super::connections::Connection;
+use super::{CONNECT_TIMEOUT, IO_TIMEOUT_MS, drop_in_background, tcp};
 use super::sessions::ProviderFactory;
 use super::trust::{self, Trust};
 use raw::RawSftp;
@@ -23,16 +24,11 @@ use libssh2_sys as sys;
 use ssh2::{FileStat, KeyboardInteractivePrompt, OpenFlags, OpenType, Prompt, RenameFlags, Session, Sftp};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::mem::ManuallyDrop;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 mod raw;
-
-pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// Attesa massima di una risposta dopo il collegamento: con la VPN caduta si ha `TIMEOUT`, non un'attesa infinita.
-pub(crate) const IO_TIMEOUT_MS: u32 = 30_000;
+mod rt;
 
 /// Lo stato di una risposta SFTP; quelli generici (`SSH_FX_FAILURE`, per esempio un file che c'è già in SFTP v3)
 /// danno `IO`.
@@ -134,20 +130,6 @@ impl KeyboardInteractivePrompt for Answer<'_> {
     }
 }
 
-pub(crate) fn tcp(host: &str, port: u16) -> Result<TcpStream, AppError> {
-    let fail = |code, e: io::Error| AppError { detail: Some(e.to_string()), ..AppError::new(code, None) };
-    let addrs = (host, port).to_socket_addrs().map_err(|e| fail(ErrorCode::ConnectionFailed, e))?;
-    let mut last = io::Error::from(io::ErrorKind::AddrNotAvailable);
-    for addr in addrs {
-        match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
-            Ok(s) => return Ok(s),
-            Err(e) => last = e,
-        }
-    }
-    let code = if last.kind() == io::ErrorKind::TimedOut { ErrorCode::Timeout } else { ErrorCode::ConnectionFailed };
-    Err(fail(code, last))
-}
-
 /// Apre una sessione SFTP verificando l'impronta in `dir/known_hosts`.
 pub(crate) fn open_in(dir: &Path, conn: &Connection, password: Option<&str>) -> Result<SftpProvider, AppError> {
     let err = |e: ssh2::Error| app_error(&e, None);
@@ -218,13 +200,6 @@ impl Drop for SftpProvider {
         };
         drop_in_background(parts);
     }
-}
-
-/// Lascia cadere `v` su un thread a parte. Con la rete bloccata (VPN caduta) libssh2 crede ancora la connessione
-/// viva e ogni chiusura di canale aspetta il timeout (30 s per canale, poi la sessione): chi lascia cadere il provider,
-/// spesso il thread di una richiesta dopo un `TIMEOUT`, non deve aspettare. Se il thread non parte, si chiude qui.
-pub(crate) fn drop_in_background<T: Send + 'static>(v: T) {
-    let _ = std::thread::Builder::new().name("sftp-close".into()).spawn(move || drop(v));
 }
 
 /// Lettura o scrittura di un file remoto; gli errori portano l'`AppError` dentro `io::Error::other`.
@@ -456,27 +431,6 @@ mod tests {
         assert!(ask(&mut a, &[("Password:", false)]) == ["pw"]);
         // Una seconda domanda nascosta (per esempio un codice OTP) non riceve la password.
         assert!(ask(&mut a, &[("Codice di verifica:", false)]).is_empty());
-    }
-
-    #[test]
-    fn closing_happens_off_the_calling_thread() {
-        use std::sync::mpsc::{Sender, channel};
-        use std::time::Duration;
-        // Chiusura lenta che aspetta il via del test: eseguita sul thread del chiamante, il via arriverebbe tardi.
-        struct Slow(std::sync::mpsc::Receiver<()>, Sender<(std::thread::ThreadId, bool)>);
-        impl Drop for Slow {
-            fn drop(&mut self) {
-                let go = self.0.recv_timeout(Duration::from_secs(2)).is_ok();
-                self.1.send((std::thread::current().id(), go)).unwrap();
-            }
-        }
-        let (go_tx, go_rx) = channel();
-        let (done_tx, done_rx) = channel();
-        drop_in_background(Slow(go_rx, done_tx));
-        go_tx.send(()).unwrap();
-        let (id, go) = done_rx.recv().unwrap();
-        assert!(go);
-        assert_ne!(id, std::thread::current().id());
     }
 
     #[test]

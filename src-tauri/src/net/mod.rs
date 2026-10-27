@@ -12,11 +12,14 @@ pub mod tls;
 pub mod trust;
 pub mod winscp;
 
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::fs::blocking;
 use connections::{Connection, ConnectionView};
 use sessions::Sessions;
+use std::io;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::State;
 use winscp::ImportCandidate;
 
@@ -26,6 +29,31 @@ type Net<'a> = State<'a, Arc<Sessions>>;
 /// memoria).
 pub(crate) const MAX_ENTRIES: usize = 200_000;
 
+/// Attesa massima per collegarsi, per SFTP, FTP e HTTP.
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Attesa massima di una risposta dopo il collegamento: con la VPN caduta si ha `TIMEOUT`, non un'attesa infinita.
+pub(crate) const IO_TIMEOUT_MS: u32 = 30_000;
+
+pub(crate) fn tcp(host: &str, port: u16) -> Result<TcpStream, AppError> {
+    let fail = |code, e: io::Error| AppError { detail: Some(e.to_string()), ..AppError::new(code, None) };
+    let addrs = (host, port).to_socket_addrs().map_err(|e| fail(ErrorCode::ConnectionFailed, e))?;
+    let mut last = io::Error::from(io::ErrorKind::AddrNotAvailable);
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
+            Ok(s) => return Ok(s),
+            Err(e) => last = e,
+        }
+    }
+    let code = if last.kind() == io::ErrorKind::TimedOut { ErrorCode::Timeout } else { ErrorCode::ConnectionFailed };
+    Err(fail(code, last))
+}
+
+/// Lascia cadere `v` su un thread a parte. Con la rete bloccata (VPN caduta) libssh2 crede ancora la connessione
+/// viva e ogni chiusura di canale aspetta il timeout (30 s per canale, poi la sessione): chi lascia cadere il provider,
+/// spesso il thread di una richiesta dopo un `TIMEOUT`, non deve aspettare. Se il thread non parte, si chiude qui.
+pub(crate) fn drop_in_background<T: Send + 'static>(v: T) {
+    let _ = std::thread::Builder::new().name("sftp-close".into()).spawn(move || drop(v));
+}
 #[tauri::command]
 pub async fn list_connections(net: Net<'_>) -> Result<Vec<ConnectionView>, AppError> {
     let s = net.inner().clone();
@@ -90,4 +118,30 @@ pub async fn trust_host(net: Net<'_>, id: String, fingerprint: String) -> Result
 pub async fn forget_host(net: Net<'_>, id: String) -> Result<(), AppError> {
     let s = net.inner().clone();
     blocking(move || s.forget_host(&id)).await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_happens_off_the_calling_thread() {
+        use std::sync::mpsc::{Sender, channel};
+        use std::time::Duration;
+        // Chiusura lenta che aspetta il via del test: eseguita sul thread del chiamante, il via arriverebbe tardi.
+        struct Slow(std::sync::mpsc::Receiver<()>, Sender<(std::thread::ThreadId, bool)>);
+        impl Drop for Slow {
+            fn drop(&mut self) {
+                let go = self.0.recv_timeout(Duration::from_secs(2)).is_ok();
+                self.1.send((std::thread::current().id(), go)).unwrap();
+            }
+        }
+        let (go_tx, go_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        drop_in_background(Slow(go_rx, done_tx));
+        go_tx.send(()).unwrap();
+        let (id, go) = done_rx.recv().unwrap();
+        assert!(go);
+        assert_ne!(id, std::thread::current().id());
+    }
 }

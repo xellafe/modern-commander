@@ -20,7 +20,7 @@ use super::MAX_ENTRIES;
 use super::connections::Connection;
 use super::http_auth::Credentials;
 use super::sessions::ProviderFactory;
-use super::sftp::{CONNECT_TIMEOUT, IO_TIMEOUT_MS};
+use super::{CONNECT_TIMEOUT, IO_TIMEOUT_MS};
 use super::tls::Slot;
 use crate::error::{AppError, ErrorCode};
 use crate::vfs::provider::{Caps, Provider, Stat};
