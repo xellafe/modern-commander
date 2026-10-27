@@ -22,17 +22,22 @@ pub(super) fn status_code(code: StatusCode) -> ErrorCode {
     }
 }
 
-/// Errore del client SFTP. `russh-sftp` produce `UnexpectedBehavior("SendError: ..")` e `("RecvError: ..")` dalle
-/// `From` di `mpsc::SendError` e `oneshot::RecvError`: il canale verso il task della sessione non c'è più, quindi
-/// la connessione è caduta (il prefisso è l'unico modo di distinguerli dagli altri `UnexpectedBehavior`).
+/// `UnexpectedBehavior` di `russh-sftp` che dicono che il canale non c'è più (il testo è l'unico modo di
+/// distinguerli): `SendError: ..`/`RecvError: ..` dalle `From` di `mpsc::SendError` e `oneshot::RecvError`,
+/// `sender dropped` (risposta mai arrivata, `rawsession.rs`), `session closed` (invio a canale chiuso), `I/O: ..` e
+/// `Unexpected EOF on stream` (il `crate::error::Error` interno convertito).
+fn channel_gone(m: &str) -> bool {
+    ["SendError: ", "RecvError: ", "I/O: "].iter().any(|p| m.starts_with(p))
+        || ["sender dropped", "session closed", "Unexpected EOF on stream"].contains(&m)
+}
+
+/// Errore del client SFTP; un canale chiuso è `ConnectionFailed` (`Sessions` riapre la sessione).
 pub(super) fn sftp_error(e: SftpError, path: Option<&str>) -> AppError {
     let code = match &e {
         SftpError::Status(s) => return app_error(status_code(s.status_code), path, s.error_message.clone()),
         SftpError::Timeout => ErrorCode::Timeout,
         SftpError::IO(_) => ErrorCode::ConnectionFailed,
-        SftpError::UnexpectedBehavior(m) if m.starts_with("SendError: ") || m.starts_with("RecvError: ") => {
-            ErrorCode::ConnectionFailed
-        }
+        SftpError::UnexpectedBehavior(m) if channel_gone(m) => ErrorCode::ConnectionFailed,
         _ => ErrorCode::Io,
     };
     app_error(code, path, e.to_string())
@@ -88,6 +93,47 @@ mod tests {
         assert_eq!(sftp_error(recv, None).code, ErrorCode::ConnectionFailed);
         assert_eq!(sftp_error(SftpError::UnexpectedBehavior("altro".into()), None).code, ErrorCode::Io);
         assert_eq!(sftp_error(SftpError::UnexpectedPacket, None).code, ErrorCode::Io);
+    }
+
+    /// Il `crate::error::Error` di russh-sftp è privato: lo si raggiunge come errore di `de::from_bytes`.
+    fn internal(e: std::io::Error) -> SftpError {
+        fn conv<B, E: From<std::io::Error>>(_: impl FnOnce(&mut B) -> Result<u8, E>, e: std::io::Error) -> E {
+            E::from(e)
+        }
+        conv(|b| russh_sftp::de::from_bytes::<u8>(b), e).into()
+    }
+
+    #[test]
+    fn closed_channel_is_connection_failed() {
+        use std::io::ErrorKind;
+        let eof = internal(ErrorKind::UnexpectedEof.into());
+        assert_eq!(eof.to_string(), "Unexpected EOF on stream");
+        let io = internal(ErrorKind::BrokenPipe.into());
+        assert!(io.to_string().starts_with("I/O: "));
+        // `rawsession.rs`: invio con il canale già chiuso.
+        let closed = SftpError::UnexpectedBehavior("session closed".into());
+        for e in [eof, io, closed] {
+            assert!(matches!(e, SftpError::UnexpectedBehavior(_)));
+            assert_eq!(sftp_error(e, None).code, ErrorCode::ConnectionFailed);
+        }
+    }
+
+    /// Il server chiude il canale dopo aver ricevuto la richiesta: la risposta non arriva più.
+    #[test]
+    fn sender_dropped_is_connection_failed() {
+        use russh_sftp::client::RawSftpSession;
+        use tokio::io::AsyncReadExt;
+        let e = super::super::rt::block(std::time::Duration::from_secs(5), async {
+            let (client, mut server) = tokio::io::duplex(1024);
+            let sftp = RawSftpSession::new(client);
+            let hang_up = async move {
+                let _ = server.read(&mut [0; 64]).await;
+            };
+            Ok(tokio::join!(sftp.init(), hang_up).0.unwrap_err())
+        })
+        .unwrap();
+        assert_eq!(e.to_string(), "sender dropped");
+        assert_eq!(sftp_error(e, None).code, ErrorCode::ConnectionFailed);
     }
 
     fn no_common(kind: AlgorithmKind) -> russh::Error {

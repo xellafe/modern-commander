@@ -3,6 +3,7 @@
 
 use super::rt;
 use crate::net::connections::Connection;
+use crate::net::trust;
 use crate::vfs::loc::Scheme;
 use getrandom::SysRng;
 use getrandom::rand_core::UnwrapErr;
@@ -13,6 +14,7 @@ use russh::{Channel, ChannelId, Disconnect, MethodKind, MethodSet, Preferred, ci
 use russh_sftp::protocol::{StatusCode, Version};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -145,17 +147,28 @@ impl FakeServer {
     }
 }
 
-pub(super) fn conn() -> Connection {
+/// `host` diverso per ogni test: `trust::presented` tiene poche voci per tutto il processo e i test girano in
+/// parallelo.
+pub(super) fn conn(host: &str) -> Connection {
     Connection {
         id: "fake".into(),
         name: "fake".into(),
         scheme: Scheme::Sftp,
-        host: "fake.test".into(),
+        host: host.into(),
         port: 22,
         user: "u".into(),
         start_dir: "/".into(),
         ftps_implicit: false,
     }
+}
+
+/// Un finto con la chiave ed25519 già accettata in `dir` per `host`, come dopo il dialogo dell'impronta.
+pub(super) fn trusted(dir: &Path, host: &str, opts: FakeOptions) -> (FakeServer, DuplexStream) {
+    let (fake, s) = start(opts);
+    let fp = fake.fingerprint(Algorithm::Ed25519);
+    trust::presented(host, 22, &fp, "ssh-ed25519");
+    trust::accept_in(dir, "ssh", host, 22, &fp).unwrap();
+    (fake, s)
 }
 
 struct Ssh {

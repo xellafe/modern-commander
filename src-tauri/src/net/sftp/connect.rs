@@ -253,47 +253,38 @@ pub(super) async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::sftp::fake::{self, FakeAuth, FakeOptions, FakeServer, conn};
+    use crate::net::sftp::fake::{self, FakeAuth, FakeOptions, conn, trusted};
     use crate::net::sftp::errors::sftp_error;
     use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
     use russh::{Preferred, cipher, kex, mac};
     use tokio::io::DuplexStream;
 
-    fn open_with(dir: &Path, stream: DuplexStream, password: Option<&str>, o: &Options) -> Result<Connected, AppError> {
-        rt::block(o.connect_timeout + o.io_timeout, connect(dir, &conn(), password, stream, o))
+    fn open_with(dir: &Path, host: &str, stream: DuplexStream, password: Option<&str>, o: &Options) -> Result<Connected, AppError> {
+        rt::block(o.connect_timeout + o.io_timeout, connect(dir, &conn(host), password, stream, o))
     }
 
-    fn open(dir: &Path, stream: DuplexStream, password: Option<&str>) -> Result<Connected, AppError> {
-        open_with(dir, stream, password, &Options::DEFAULT)
+    fn open(dir: &Path, host: &str, stream: DuplexStream, password: Option<&str>) -> Result<Connected, AppError> {
+        open_with(dir, host, stream, password, &Options::DEFAULT)
     }
 
     fn code(r: Result<Connected, AppError>) -> Option<ErrorCode> {
         r.err().map(|e| e.code)
     }
 
-    /// Un finto con la chiave ed25519 già accettata, come dopo il dialogo dell'impronta.
-    fn trusted(dir: &Path, opts: FakeOptions) -> (FakeServer, DuplexStream) {
-        let (fake, s) = fake::start(opts);
-        let fp = fake.fingerprint(Algorithm::Ed25519);
-        trust::presented("fake.test", 22, &fp, "ssh-ed25519");
-        trust::accept_in(dir, "ssh", "fake.test", 22, &fp).unwrap();
-        (fake, s)
-    }
-
     #[test]
     fn unknown_then_known_then_changed() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
+        let (d, h) = (dir.path(), "changed.test");
         let (fake, s) = fake::start(FakeOptions::default());
-        let e = open(d, s, Some("pw")).err().expect("impronta sconosciuta");
+        let e = open(d, h, s, Some("pw")).err().expect("impronta sconosciuta");
         assert_eq!(e.code, ErrorCode::HostKeyUnknown);
         let fp = e.detail.unwrap();
         assert_eq!(fp, fake.fingerprint(Algorithm::Ed25519));
-        trust::accept_in(d, "ssh", "fake.test", 22, &fp).unwrap();
-        assert!(open(d, fake.stream(), Some("pw")).is_ok());
+        trust::accept_in(d, "ssh", h, 22, &fp).unwrap();
+        assert!(open(d, h, fake.stream(), Some("pw")).is_ok());
 
         let (other, s) = fake::start(FakeOptions::default());
-        let e = open(d, s, Some("pw")).err().expect("impronta cambiata");
+        let e = open(d, h, s, Some("pw")).err().expect("impronta cambiata");
         assert_eq!(e.code, ErrorCode::HostKeyChanged);
         assert_eq!(e.detail.unwrap(), other.fingerprint(Algorithm::Ed25519));
     }
@@ -303,32 +294,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rsa = Algorithm::Rsa { hash: None };
         let (fake, s) = fake::start(FakeOptions { keys: vec![rsa.clone()], ..Default::default() });
-        let e = open(dir.path(), s, Some("pw")).err().expect("impronta sconosciuta");
+        let e = open(dir.path(), "fingerprint.test", s, Some("pw")).err().expect("impronta sconosciuta");
         assert_eq!(e.detail.unwrap(), fake.fingerprint(rsa));
     }
 
     #[test]
     fn legacy_entry_negotiates_rsa() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
+        let (d, h) = (dir.path(), "legacy-entry.test");
         let (fake, s) = fake::start(FakeOptions { keys: vec![Algorithm::Ed25519, Algorithm::Rsa { hash: None }], ..Default::default() });
         // Voce scritta da libssh2: impronta RSA, nessun `key_type`.
         let fp = fake.fingerprint(Algorithm::Rsa { hash: None });
-        let v = serde_json::json!([{"kind": "ssh", "host": "fake.test", "port": 22, "fingerprint": fp}]);
+        let v = serde_json::json!([{"kind": "ssh", "host": h, "port": 22, "fingerprint": fp}]);
         crate::config::write_internal_in(d, "known_hosts", &v).unwrap();
-        assert!(open(d, s, Some("pw")).is_ok());
+        assert!(open(d, h, s, Some("pw")).is_ok());
     }
 
     #[test]
     fn saved_ed25519_negotiates_ed25519() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
+        let (d, h) = (dir.path(), "saved-ed25519.test");
         let (fake, s) = fake::start(FakeOptions { keys: vec![Algorithm::Ed25519, Algorithm::Rsa { hash: None }], ..Default::default() });
-        let e = open(d, s, Some("pw")).err().expect("impronta sconosciuta");
+        let e = open(d, h, s, Some("pw")).err().expect("impronta sconosciuta");
         assert_eq!(e.detail.as_deref(), Some(fake.fingerprint(Algorithm::Ed25519).as_str()));
-        trust::accept_in(d, "ssh", "fake.test", 22, &e.detail.unwrap()).unwrap();
-        assert_eq!(trust::saved_ssh_key_type_in(d, "fake.test", 22).unwrap().as_deref(), Some("ssh-ed25519"));
-        assert!(open(d, fake.stream(), Some("pw")).is_ok());
+        trust::accept_in(d, "ssh", h, 22, &e.detail.unwrap()).unwrap();
+        assert_eq!(trust::saved_ssh_key_type_in(d, h, 22).unwrap().as_deref(), Some("ssh-ed25519"));
+        assert!(open(d, h, fake.stream(), Some("pw")).is_ok());
     }
 
     #[test]
@@ -355,32 +346,33 @@ mod tests {
     #[test]
     fn legacy_only_server_connects() {
         let dir = tempfile::tempdir().unwrap();
-        let (_fake, s) = trusted(dir.path(), FakeOptions { legacy_only: true, ..Default::default() });
-        assert!(open(dir.path(), s, Some("pw")).is_ok());
+        let (d, h) = (dir.path(), "legacy-only.test");
+        let (_fake, s) = trusted(d, h, FakeOptions { legacy_only: true, ..Default::default() });
+        assert!(open(d, h, s, Some("pw")).is_ok());
     }
 
     #[test]
     fn auth_required_and_failed() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        let (fake, s) = trusted(d, FakeOptions::default());
-        assert_eq!(code(open(d, s, None)), Some(ErrorCode::AuthRequired));
-        assert_eq!(code(open(d, fake.stream(), Some("sbagliata"))), Some(ErrorCode::AuthFailed));
-        assert!(open(d, fake.stream(), Some("pw")).is_ok());
+        let (d, h) = (dir.path(), "auth.test");
+        let (fake, s) = trusted(d, h, FakeOptions::default());
+        assert_eq!(code(open(d, h, s, None)), Some(ErrorCode::AuthRequired));
+        assert_eq!(code(open(d, h, fake.stream(), Some("sbagliata"))), Some(ErrorCode::AuthFailed));
+        assert!(open(d, h, fake.stream(), Some("pw")).is_ok());
 
-        let (_none, s) = trusted(d, FakeOptions { auth: FakeAuth::NoneAccepted, ..Default::default() });
-        assert!(open(d, s, None).is_ok());
-        let (_both, s) = trusted(d, FakeOptions { auth: FakeAuth::Both, ..Default::default() });
-        assert!(open(d, s, Some("pw")).is_ok());
+        let (_none, s) = trusted(d, h, FakeOptions { auth: FakeAuth::NoneAccepted, ..Default::default() });
+        assert!(open(d, h, s, None).is_ok());
+        let (_both, s) = trusted(d, h, FakeOptions { auth: FakeAuth::Both, ..Default::default() });
+        assert!(open(d, h, s, Some("pw")).is_ok());
     }
 
     #[test]
     fn keyboard_interactive_only() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        let (fake, s) = trusted(d, FakeOptions { auth: FakeAuth::Keyboard, ..Default::default() });
-        assert!(open(d, s, Some("pw")).is_ok());
-        assert_eq!(code(open(d, fake.stream(), Some("sbagliata"))), Some(ErrorCode::AuthFailed));
+        let (d, h) = (dir.path(), "keyboard.test");
+        let (fake, s) = trusted(d, h, FakeOptions { auth: FakeAuth::Keyboard, ..Default::default() });
+        assert!(open(d, h, s, Some("pw")).is_ok());
+        assert_eq!(code(open(d, h, fake.stream(), Some("sbagliata"))), Some(ErrorCode::AuthFailed));
     }
 
     #[test]
@@ -401,10 +393,10 @@ mod tests {
     #[test]
     fn auth_failure_never_leaks_the_password() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
+        let (d, h) = (dir.path(), "leak.test");
         for auth in [FakeAuth::Password, FakeAuth::Keyboard] {
-            let (_fake, s) = trusted(d, FakeOptions { auth, ..Default::default() });
-            let e = open(d, s, Some("pässwörd:ü")).err().expect("password rifiutata");
+            let (_fake, s) = trusted(d, h, FakeOptions { auth, ..Default::default() });
+            let e = open(d, h, s, Some("pässwörd:ü")).err().expect("password rifiutata");
             assert_eq!(e.code, ErrorCode::AuthFailed);
             assert!(!e.detail.as_deref().unwrap_or_default().contains("pässwörd"));
             assert!(!format!("{e:?}").contains("pässwörd"));
@@ -414,13 +406,13 @@ mod tests {
     #[test]
     fn posix_rename_detected() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        let (_fake, s) = trusted(d, FakeOptions::default());
-        let c = open(d, s, Some("pw")).ok().unwrap();
+        let (d, h) = (dir.path(), "posix-rename.test");
+        let (_fake, s) = trusted(d, h, FakeOptions::default());
+        let c = open(d, h, s, Some("pw")).ok().unwrap();
         assert!(c.atomic);
         assert_eq!(c.chunk, 32 * 1024);
-        let (_fake, s) = trusted(d, FakeOptions { posix_rename: false, ..Default::default() });
-        assert!(!open(d, s, Some("pw")).ok().unwrap().atomic);
+        let (_fake, s) = trusted(d, h, FakeOptions { posix_rename: false, ..Default::default() });
+        assert!(!open(d, h, s, Some("pw")).ok().unwrap().atomic);
     }
 
     #[test]
@@ -435,26 +427,25 @@ mod tests {
     #[test]
     fn stalled_server_times_out() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        let (fake, s) = trusted(d, FakeOptions::default());
+        let (d, h) = (dir.path(), "stalled-init.test");
+        let (fake, s) = trusted(d, h, FakeOptions::default());
         fake.stall();
         let o = Options { io_timeout: Duration::from_secs(1), ..Options::DEFAULT };
-        assert_eq!(code(open_with(d, s, Some("pw"), &o)), Some(ErrorCode::Timeout));
+        assert_eq!(code(open_with(d, h, s, Some("pw"), &o)), Some(ErrorCode::Timeout));
     }
 
-    /// Canale e sessione chiusi dal finto: la richiesta successiva fallisce. Oggi russh-sftp dà
-    /// `UnexpectedBehavior("sender dropped")`, cioè `IO`: il codice giusto lo decide Task 5.
+    /// Canale e sessione chiusi dal finto: la richiesta successiva dà `CONNECTION_FAILED` (russh-sftp:
+    /// `sender dropped` o `session closed`).
     #[test]
     fn killed_server_fails_the_next_request() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        let (fake, s) = trusted(d, FakeOptions::default());
-        let c = open(d, s, Some("pw")).ok().unwrap();
+        let (d, h) = (dir.path(), "killed.test");
+        let (fake, s) = trusted(d, h, FakeOptions::default());
+        let c = open(d, h, s, Some("pw")).ok().unwrap();
         fake.kill();
         let sftp = c.link.sftp.clone();
         let e = rt::block(Duration::from_secs(5), async move { sftp.realpath("/").await.map_err(|e| sftp_error(e, None)) })
             .unwrap_err();
-        // Prima di `kill` il finto risponde `OpUnsupported`.
-        assert_ne!(e.code, ErrorCode::Unsupported);
+        assert_eq!(e.code, ErrorCode::ConnectionFailed);
     }
 }
