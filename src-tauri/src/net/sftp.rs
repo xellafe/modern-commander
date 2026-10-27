@@ -33,6 +33,7 @@ mod errors;
 mod fake;
 mod raw;
 mod rt;
+mod stream;
 
 /// Lo stato di una risposta SFTP; quelli generici (`SSH_FX_FAILURE`, per esempio un file che c'è già in SFTP v3)
 /// danno `IO`.

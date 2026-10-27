@@ -2666,6 +2666,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "flate2",
+ "futures-util",
  "getrandom 0.4.3",
  "libssh2-sys",
  "log",

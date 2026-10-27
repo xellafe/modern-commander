@@ -43,6 +43,7 @@ ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-pro
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2", "des"] }
 russh-sftp = "3"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "time", "io-util", "macros"] }
+futures-util = "0.3.34"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
