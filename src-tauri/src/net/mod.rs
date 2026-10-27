@@ -48,12 +48,13 @@ pub(crate) fn tcp(host: &str, port: u16) -> Result<TcpStream, AppError> {
     Err(fail(code, last))
 }
 
-/// Lascia cadere `v` su un thread a parte. Con la rete bloccata (VPN caduta) libssh2 crede ancora la connessione
-/// viva e ogni chiusura di canale aspetta il timeout (30 s per canale, poi la sessione): chi lascia cadere il provider,
-/// spesso il thread di una richiesta dopo un `TIMEOUT`, non deve aspettare. Se il thread non parte, si chiude qui.
+/// Lascia cadere `v` su un thread a parte. Con la rete bloccata (VPN caduta) la chiusura di una connessione aspetta il
+/// timeout: chi lascia cadere il provider, spesso il thread di una richiesta dopo un `TIMEOUT`, non deve aspettare. Se
+/// il thread non parte, si chiude qui.
 pub(crate) fn drop_in_background<T: Send + 'static>(v: T) {
-    let _ = std::thread::Builder::new().name("sftp-close".into()).spawn(move || drop(v));
+    let _ = std::thread::Builder::new().name("net-close".into()).spawn(move || drop(v));
 }
+
 #[tauri::command]
 pub async fn list_connections(net: Net<'_>) -> Result<Vec<ConnectionView>, AppError> {
     let s = net.inner().clone();

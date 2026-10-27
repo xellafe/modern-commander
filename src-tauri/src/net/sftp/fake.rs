@@ -18,7 +18,7 @@ use russh_sftp::protocol::{
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::DuplexStream;
@@ -43,6 +43,8 @@ pub(super) struct FakeOptions {
     pub short_reads: bool,
     /// Solo `diffie-hellman-group14-sha1`, `aes128-cbc`, `hmac-sha1`.
     pub legacy_only: bool,
+    /// Rifiuta il sottosistema `sftp`.
+    pub reject_subsystem: bool,
 }
 
 impl Default for FakeOptions {
@@ -54,6 +56,7 @@ impl Default for FakeOptions {
             posix_rename: true,
             short_reads: false,
             legacy_only: false,
+            reject_subsystem: false,
         }
     }
 }
@@ -80,6 +83,8 @@ struct Shared {
     stalled: AtomicBool,
     /// Canali SFTP aperti, per `kill`.
     open: Mutex<Vec<(ChannelId, server::Handle)>>,
+    /// Handle di file e cartelle aperti, su tutte le connessioni.
+    handles: AtomicUsize,
     fs: Mutex<MemFs>,
 }
 
@@ -217,7 +222,13 @@ pub(super) fn start(opts: FakeOptions) -> (FakeServer, DuplexStream) {
             ..Preferred::DEFAULT
         };
     }
-    let shared = Arc::new(Shared { opts, stalled: AtomicBool::new(false), open: Mutex::default(), fs: Mutex::new(MemFs::new()) });
+    let shared = Arc::new(Shared {
+        opts,
+        stalled: AtomicBool::new(false),
+        open: Mutex::default(),
+        handles: AtomicUsize::new(0),
+        fs: Mutex::new(MemFs::new()),
+    });
     let fake = FakeServer { shared, config: Arc::new(config) };
     let stream = fake.stream();
     (fake, stream)
@@ -261,6 +272,11 @@ impl FakeServer {
     pub(super) fn put(&self, path: &str, data: &[u8]) {
         let file = Node::File { data: data.to_vec(), mode: 0o644, mtime: now() };
         self.shared.fs.lock().unwrap().0.insert(path.into(), file);
+    }
+
+    /// Handle aperti e non ancora chiusi.
+    pub(super) fn open_handles(&self) -> usize {
+        self.shared.handles.load(Ordering::SeqCst)
     }
 
     /// Il contenuto del file `path`, se c'è.
@@ -356,7 +372,7 @@ impl server::Handler for Ssh {
 
     async fn subsystem_request(&mut self, id: ChannelId, name: &str, session: &mut Session) -> Result<(), Self::Error> {
         match self.channels.remove(&id) {
-            Some(channel) if name == "sftp" => {
+            Some(channel) if name == "sftp" && !self.shared.opts.reject_subsystem => {
                 session.channel_success(id)?;
                 self.shared.open.lock().unwrap().push((id, session.handle()));
                 let sftp = Sftp { shared: self.shared.clone(), handles: HashMap::new(), next: 0 };
@@ -398,6 +414,7 @@ impl Sftp {
     fn handle(&mut self, id: u32, open: Open) -> Handle {
         self.next += 1;
         self.handles.insert(self.next.to_string(), open);
+        self.shared.handles.fetch_add(1, Ordering::SeqCst);
         Handle { id, handle: self.next.to_string() }
     }
 
@@ -425,7 +442,8 @@ impl russh_sftp::server::Handler for Sftp {
         Ok(v)
     }
 
-    /// Come OpenSSH con SFTP v3: `CREATE | EXCLUDE` su un file che c'è dà `FAILURE`. Sotto `/ro` l'apertura riesce.
+    /// Come OpenSSH con SFTP v3: `CREATE | EXCLUDE` su un file che c'è dà `FAILURE`. Sotto `/ro` l'apertura riesce ma
+    /// non crea né svuota nulla: l'errore arriva da `write`.
     async fn open(&mut self, id: u32, name: String, flags: OpenFlags, attrs: FileAttributes) -> Result<Handle, StatusCode> {
         self.gate().await;
         let path = {
@@ -434,25 +452,33 @@ impl russh_sftp::server::Handler for Sftp {
             match fs.resolve(&path) {
                 Ok(_) if flags.contains(OpenFlags::CREATE | OpenFlags::EXCLUDE) => return Err(StatusCode::Failure),
                 Ok(p) => match fs.0.get_mut(&p) {
-                    Some(Node::File { data, .. }) if flags.contains(OpenFlags::TRUNCATE) => data.clear(),
-                    Some(Node::File { .. }) => {}
+                    Some(Node::File { data, .. }) => {
+                        if flags.contains(OpenFlags::TRUNCATE) && !read_only(&p) {
+                            data.clear();
+                        }
+                        p
+                    }
                     _ => return Err(StatusCode::Failure),
                 },
                 Err(StatusCode::NoSuchFile) if flags.contains(OpenFlags::CREATE) => {
                     fs.vacant(&path)?;
-                    let mode = attrs.permissions.unwrap_or(0o644) & 0o7777;
-                    fs.0.insert(path.clone(), Node::File { data: Vec::new(), mode, mtime: now() });
+                    if !read_only(&path) {
+                        let mode = attrs.permissions.unwrap_or(0o644) & 0o7777;
+                        fs.0.insert(path.clone(), Node::File { data: Vec::new(), mode, mtime: now() });
+                    }
+                    path
                 }
                 Err(e) => return Err(e),
             }
-            fs.resolve(&path)?
         };
         Ok(self.handle(id, Open::File(path)))
     }
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, StatusCode> {
         self.gate().await;
-        self.handles.remove(&handle).map(|_| ok(id)).ok_or(StatusCode::Failure)
+        self.handles.remove(&handle).ok_or(StatusCode::Failure)?;
+        self.shared.handles.fetch_sub(1, Ordering::SeqCst);
+        Ok(ok(id))
     }
 
     async fn read(&mut self, id: u32, handle: String, offset: u64, len: u32) -> Result<Data, StatusCode> {

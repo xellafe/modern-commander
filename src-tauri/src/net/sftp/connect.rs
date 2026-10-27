@@ -12,7 +12,7 @@ use crate::net::trust::{self, Trust};
 use crate::net::{CONNECT_TIMEOUT, IO_TIMEOUT_MS};
 use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse as Kbd, Prompt};
 use russh::keys::{Algorithm, PublicKeyOrCertificate};
-use russh::{Disconnect, Preferred, cipher, kex, mac};
+use russh::{ChannelMsg, Disconnect, Preferred, cipher, kex, mac};
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::rawsession::Limits;
 use russh_sftp::extensions::LIMITS;
@@ -225,8 +225,19 @@ pub(super) async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             refused.unwrap_or_else(|| ssh_error(&e))
         })?;
         authenticate(&mut handle, &conn.user, password).await?;
-        let channel = handle.channel_open_session().await.map_err(|e| ssh_error(&e))?;
+        let mut channel = handle.channel_open_session().await.map_err(|e| ssh_error(&e))?;
         channel.request_subsystem(true, "sftp").await.map_err(|e| ssh_error(&e))?;
+        // La risposta: un rifiuto non deve aspettare `init` fino a `io_timeout`.
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => break,
+                Some(ChannelMsg::Failure) | None => {
+                    let detail = Some("subsystem sftp rejected".into());
+                    return Err(AppError { detail, ..AppError::new(ErrorCode::ConnectionFailed, None) });
+                }
+                Some(_) => {}
+            }
+        }
         Ok::<_, AppError>((handle, channel))
     };
     let (handle, channel) = tokio::time::timeout(opts.connect_timeout, ssh)
@@ -432,6 +443,18 @@ mod tests {
         fake.stall();
         let o = Options { io_timeout: Duration::from_secs(1), ..Options::DEFAULT };
         assert_eq!(code(open_with(d, h, s, Some("pw"), &o)), Some(ErrorCode::Timeout));
+    }
+
+    /// Sottosistema `sftp` rifiutato: `CONNECTION_FAILED` subito, senza aspettare `init` fino a `io_timeout`.
+    #[test]
+    fn rejected_subsystem_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, h) = (dir.path(), "no-subsystem.test");
+        let (_fake, s) = trusted(d, h, FakeOptions { reject_subsystem: true, ..Default::default() });
+        let t = std::time::Instant::now();
+        let e = open(d, h, s, Some("pw")).err().expect("sottosistema rifiutato");
+        assert_eq!((e.code, e.detail.as_deref()), (ErrorCode::ConnectionFailed, Some("subsystem sftp rejected")));
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     }
 
     /// Canale e sessione chiusi dal finto: la richiesta successiva dà `CONNECTION_FAILED` (russh-sftp:

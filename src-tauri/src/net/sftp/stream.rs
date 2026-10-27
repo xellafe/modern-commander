@@ -44,7 +44,7 @@ struct Window<'a, S> {
 
 impl<'a, S: Deref<Target = RawSftpSession> + Clone + Send + Sync + 'a> Window<'a, S> {
     fn new(sftp: S, handle: String, chunk: u32, offset: u64, end: u64) -> Self {
-        Self { sftp, handle, chunk, ahead: offset, end, queue: FuturesOrdered::new() }
+        Self { sftp, handle, chunk: chunk.max(1), ahead: offset, end, queue: FuturesOrdered::new() }
     }
 
     fn request(&self, offset: u64, len: u32) -> BoxFuture<'a, Reply> {
@@ -104,7 +104,8 @@ pub(super) struct Reader {
     data: Vec<u8>,
     pos: usize,
     eof: bool,
-    /// Il primo errore, ripetuto: dopo un errore le letture anticipate non sono più in ordine.
+    /// Il primo errore, ripetuto: il blocco fallito non si richiede più, quindi una lettura successiva salterebbe i
+    /// suoi byte.
     error: Option<AppError>,
 }
 
@@ -319,9 +320,22 @@ mod tests {
         Writer::new(c.link.clone(), h, path.into(), c.chunk, io_timeout)
     }
 
-    fn range(c: &Connected, handle: &str, offset: u64, len: u32) -> Vec<u8> {
-        let (sftp, h, chunk) = (c.link.sftp.clone(), handle.to_owned(), c.chunk);
+    fn range_by(c: &Connected, handle: &str, offset: u64, len: u32, chunk: u32) -> Vec<u8> {
+        let (sftp, h) = (c.link.sftp.clone(), handle.to_owned());
         rt::block(IO, async move { read_range(&sftp, &h, offset, len, chunk).await }).unwrap()
+    }
+
+    fn range(c: &Connected, handle: &str, offset: u64, len: u32) -> Vec<u8> {
+        range_by(c, handle, offset, len, c.chunk)
+    }
+
+    /// Le chiusure di `Drop` girano sul runtime: si aspetta (poco) che il finto non abbia più handle aperti.
+    fn all_closed(fake: &fake::FakeServer) -> bool {
+        let t = Instant::now();
+        while fake.open_handles() > 0 && t.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        fake.open_handles() == 0
     }
 
     fn read_all(opts: FakeOptions, host: &str) {
@@ -351,6 +365,8 @@ mod tests {
         let h = open(&c, "/f", OpenFlags::READ);
         assert!(range(&c, &h, 100_000, 70_000) == d[100_000..170_000]);
         assert_eq!(range(&c, &h, d.len() as u64 - 10, 100), d[d.len() - 10..]);
+        // Un blocco da 0 byte vale 1: mai richieste vuote scambiate per la fine del file.
+        assert_eq!(range_by(&c, &h, 5, 3, 0), d[5..8]);
     }
 
     #[test]
@@ -374,6 +390,7 @@ mod tests {
         }
         w.flush().unwrap();
         assert!(fake.get("/out") == Some(d));
+        assert_eq!(fake.open_handles(), 0);
         w.flush().unwrap();
         assert_eq!(stream_error(w.write(b"x").unwrap_err(), "/out").code, ErrorCode::InvalidRequest);
     }
@@ -388,6 +405,30 @@ mod tests {
         assert_eq!((e.code, e.path.as_deref()), (ErrorCode::AccessDenied, Some("/ro/x")));
         assert_eq!(stream_error(w.flush().unwrap_err(), "").code, ErrorCode::AccessDenied);
         assert_eq!(stream_error(w.write(b"x").unwrap_err(), "").code, ErrorCode::AccessDenied);
+    }
+
+    /// Sotto `/ro` l'apertura con `CREATE | TRUNCATE` riesce ma non cambia nulla: l'errore arriva da `write`.
+    #[test]
+    fn read_only_open_changes_nothing() {
+        let (fake, c) = fake::connected("ro-open.test", FakeOptions::default());
+        fake.put("/ro/f", b"abc");
+        drop(writer(&c, "/ro/f", IO));
+        drop(writer(&c, "/ro/new", IO));
+        assert_eq!(fake.get("/ro/f").as_deref(), Some(&b"abc"[..]));
+        assert_eq!(fake.get("/ro/new"), None);
+    }
+
+    #[test]
+    fn dropped_reader_and_writer_close_their_handles() {
+        let (fake, c) = fake::connected("drop-close.test", FakeOptions::default());
+        fake.put("/f", &data());
+        let mut r = reader(&c, "/f");
+        r.read_exact(&mut [0; 1000]).unwrap();
+        let mut w = writer(&c, "/out", IO);
+        w.write_all(&data()).unwrap();
+        assert_eq!(fake.open_handles(), 2);
+        drop((r, w));
+        assert!(all_closed(&fake), "{} handle aperti", fake.open_handles());
     }
 
     #[test]
