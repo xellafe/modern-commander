@@ -293,6 +293,7 @@
     "UNSAFE_WRITE": "Il server non permette il salvataggio sicuro: se la connessione cade il file può restare incompleto.",
     "READ_ONLY_SOURCE": "Questa sorgente è in sola lettura.",
     "RANGE_UNSUPPORTED": "Il server non permette di leggere il file a blocchi.",
+    "ALGORITHM_UNSUPPORTED": "Il server non offre algoritmi supportati: di solito ha solo chiavi ed25519 o ECDSA, e per ora serve una chiave RSA.",
     "IO": "Errore di input/output."
   },
   "ops": {
@@ -303,6 +304,8 @@
     "oneItem": "«{{name}}»",
     "items_one": "{{count}} elemento",
     "items_other": "{{count}} elementi",
+    "dragCopy": "Copia {{what}}",
+    "dragMove": "Sposta {{what}}",
     "copyTitle": "Copia",
     "moveTitle": "Sposta",
     "copyTo": "Copia {{what}} in:",
@@ -419,6 +422,10 @@
         "label": "Conferma prima di eliminare",
         "desc": "Chiede conferma prima di spostare gli elementi nel Cestino o di eliminarli."
       },
+      "windowsSelection": {
+        "label": "Selezione col mouse come in Windows",
+        "desc": "Un click seleziona solo quel file e toglie le altre marcature, Shift+click seleziona l'intervallo, un click nello spazio vuoto toglie tutto. Altrimenti come Total Commander: il click sposta solo il cursore."
+      },
       "jumpInNewTab": {
         "label": "Apri sempre la ricerca in una nuova scheda",
         "desc": "Il salto rapido (Ctrl+P) apre la voce scelta in una nuova scheda dello stesso gruppo. Ctrl+Invio fa il contrario."
@@ -527,7 +534,8 @@
     "accept": "Accetta",
     "keyChangedTitle": "Impronta del server cambiata",
     "keyChanged": "La chiave del server di «{{name}}» è diversa da quella accettata ({{fingerprint}}). Può essere una reinstallazione del server oppure un tentativo di intercettazione: la connessione è bloccata. Se il cambio è atteso, apri le connessioni (Ctrl+F), seleziona «{{name}}» e usa «Dimentica impronta»; al prossimo collegamento ti verrà chiesta quella nuova.",
-    "import": "Importa da WinSCP…",
+    "import": "Importa",
+    "importWinscp": "WinSCP…",
     "importTitle": "Importa da WinSCP",
     "importAction": "Importa",
     "importNone": "Nessun sito di WinSCP trovato.",

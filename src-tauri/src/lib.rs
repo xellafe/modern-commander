@@ -83,6 +83,7 @@ pub fn run() {
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
             shell::drag::start_drag,
+            shell::drag::shift_pressed,
             shell::open::open_path,
             shell::open::open_with,
             shell::thumbnail::get_thumbnail,

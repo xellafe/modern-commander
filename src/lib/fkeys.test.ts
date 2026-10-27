@@ -1,4 +1,6 @@
 import { expect, test } from "vitest";
+import { buildKeymap } from "../commands/keymap";
+import { DEFAULT_KEYMAP } from "../commands/tcKeymap";
 import en from "../i18n/en.json";
 import it from "../i18n/it.json";
 import { fkeyLabels } from "./fkeys";
@@ -9,8 +11,11 @@ const ALL = new Set([
   "cm_SrcShort", "cm_SrcLong", "cm_SrcByName", "cm_SrcByExt", "cm_SrcByDateTime", "cm_SrcBySize", "cm_SrcUnsorted",
   "cm_SrcOpenDrives", "cm_SrcThumbs",
 ]);
+const DEFAULTS = buildKeymap(DEFAULT_KEYMAP, []);
+const titles = (registered: Set<string>) => (id: string) => (registered.has(id) ? `commands.${id}` : undefined);
 const none = { shift: false, ctrl: false, alt: false };
-const pairs = (m: Parameters<typeof fkeyLabels>[0], a = ALL) => fkeyLabels(m, a).map((s) => [s.key, s.commandId]);
+const pairs = (m: Parameters<typeof fkeyLabels>[0], a = ALL, keymap = DEFAULTS) =>
+  fkeyLabels(m, keymap, titles(a)).map((s) => [s.key, s.commandId]);
 
 test("senza modificatori: livello base con Alt+F4", () => {
   expect(pairs(none)).toEqual([
@@ -48,16 +53,29 @@ test("combinazione senza livello (Ctrl+Alt, Alt+Shift): barra vuota", () => {
 test("un comando non registrato non compare", () => {
   const without = new Set(["cm_Copy", "cm_Delete"]);
   expect(pairs(none, without)).toEqual([["F5", "cm_Copy"], ["F8", "cm_Delete"]]);
-  expect(fkeyLabels({ ...none, shift: true }, without)).toEqual([]);
+  expect(pairs({ ...none, shift: true }, without)).toEqual([]);
 });
 
 test("ogni etichetta dei cinque livelli esiste in en.json e it.json", () => {
   const all = [none, { ...none, shift: true }, { ...none, alt: true }, { ...none, ctrl: true }, { ...none, ctrl: true, shift: true }]
-    .flatMap((m) => fkeyLabels(m, ALL));
+    .flatMap((m) => fkeyLabels(m, DEFAULTS, titles(ALL)));
   expect(all.length).toBe(8 + 3 + 2 + 7 + 1);
   const lookup = (res: object, key: string) => key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], res);
   for (const { labelKey } of all) {
     expect(typeof lookup(en, labelKey), `en ${labelKey}`).toBe("string");
     expect(typeof lookup(it, labelKey), `it ${labelKey}`).toBe("string");
   }
+});
+
+test("la barra segue la mappa dell'utente: tasti tolti, spostati e comandi senza etichetta breve", () => {
+  const keymap = buildKeymap(DEFAULT_KEYMAP, [
+    { key: "Ctrl+F1", command: "-cm_SrcShort" },
+    { key: "Ctrl+Shift+F1", command: "-cm_SrcThumbs" },
+    { key: "Ctrl+Shift+F2", command: "cm_SrcThumbs" },
+    { key: "F9", command: "cm_PackFiles" },
+  ]);
+  expect(pairs({ ...none, ctrl: true }, ALL, keymap)[0]).toEqual(["F2", "cm_SrcLong"]);
+  expect(pairs({ shift: true, ctrl: true, alt: false }, ALL, keymap)).toEqual([["F2", "cm_SrcThumbs"]]);
+  const f9 = fkeyLabels(none, keymap, titles(ALL)).find((s) => s.key === "F9");
+  expect(f9).toEqual({ key: "F9", commandId: "cm_PackFiles", labelKey: "commands.cm_PackFiles" });
 });

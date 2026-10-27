@@ -293,6 +293,7 @@
     "UNSAFE_WRITE": "This server does not allow safe saving: if the connection drops, the file may be left incomplete.",
     "READ_ONLY_SOURCE": "This source is read-only.",
     "RANGE_UNSUPPORTED": "The server does not allow reading the file in blocks.",
+    "ALGORITHM_UNSUPPORTED": "The server offers no supported algorithms: it usually has only ed25519 or ECDSA keys, and an RSA key is needed for now.",
     "IO": "Input/output error."
   },
   "ops": {
@@ -303,6 +304,8 @@
     "oneItem": "“{{name}}”",
     "items_one": "{{count}} item",
     "items_other": "{{count}} items",
+    "dragCopy": "Copy {{what}}",
+    "dragMove": "Move {{what}}",
     "copyTitle": "Copy",
     "moveTitle": "Move",
     "copyTo": "Copy {{what}} to:",
@@ -419,6 +422,10 @@
         "label": "Confirm before deleting",
         "desc": "Ask for confirmation before moving items to the Recycle Bin or deleting them."
       },
+      "windowsSelection": {
+        "label": "Windows-style mouse selection",
+        "desc": "A click selects only that file and clears other marks, Shift+click selects the range, a click on empty space clears everything. Otherwise like Total Commander: a click only moves the cursor."
+      },
       "jumpInNewTab": {
         "label": "Always open search results in a new tab",
         "desc": "Quick jump (Ctrl+P) opens the chosen item in a new tab of the same group. Ctrl+Enter does the opposite."
@@ -527,7 +534,8 @@
     "accept": "Accept",
     "keyChangedTitle": "Server fingerprint changed",
     "keyChanged": "The server key of “{{name}}” differs from the accepted one ({{fingerprint}}). It may be a server reinstall or an interception attempt: the connection is blocked. If the change is expected, open Connections (Ctrl+F), select “{{name}}” and use “Forget fingerprint”; the next connection will ask for the new one.",
-    "import": "Import from WinSCP…",
+    "import": "Import",
+    "importWinscp": "WinSCP…",
     "importTitle": "Import from WinSCP",
     "importAction": "Import",
     "importNone": "No WinSCP sites found.",

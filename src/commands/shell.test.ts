@@ -193,6 +193,7 @@ test("rows dragged onto another group open the copy dialog from the origin folde
   let finish!: () => void;
   vi.mocked(api.startDrag).mockReturnValue(new Promise<void>((r) => (finish = r)));
   vi.mocked(api.normalizePaths).mockImplementation(async (p) => p);
+  vi.mocked(api.shiftPressed).mockResolvedValue(false);
   mark("a.txt", "b.txt");
   const drag = dragOut("t1", "a.txt");
   await dropOnGroup("g1", ["C:\\x\\a.txt", "C:\\x\\b.txt"]); // sullo stesso gruppo: niente
@@ -202,6 +203,15 @@ test("rows dragged onto another group open the copy dialog from the origin folde
     kind: "copyMove", move: false, sources: ["C:\\x\\a.txt", "C:\\x\\b.txt"], from: "C:\\x", dest: "D:\\y",
     requireChange: false, targets: [], policy: "ask",
   });
+  // Con Maiusc al rilascio (letto dal sistema, o passato dal drag interno) è uno spostamento.
+  const paths = ["C:\\x\\a.txt", "C:\\x\\b.txt"];
+  useUi.setState({ dialog: null });
+  vi.mocked(api.shiftPressed).mockResolvedValue(true);
+  await dropOnGroup("g2", paths);
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", move: true });
+  useUi.setState({ dialog: null });
+  await dropOnGroup("g2", paths, false);
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", move: false });
   finish();
   await drag;
 });

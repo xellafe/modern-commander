@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { dropOnGroup, nameError, renameInPlace } from "../../commands/fileOps";
 import { setGridColumns, setPageSize } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
-import { rowContextMenu, trackDragOut } from "../../commands/shell";
+import { pastDragThreshold, rowContextMenu, trackDragOut } from "../../commands/shell";
 import { driveSpan, gridTemplate, typeKey, visibleColumns, type ColumnId } from "../../lib/columns";
 import { formatAttrs, formatDate, formatMode, formatSize, splitName } from "../../lib/format";
 import { joinPath, sourceCaps } from "../../lib/paths";
@@ -50,15 +50,40 @@ function useSize(ref: RefObject<HTMLElement | null>) {
 }
 const useHeight = (ref: RefObject<HTMLElement | null>) => useSize(ref).height;
 
-// Mouse come in TC: click = cursore, Ctrl+click = marca, Shift+click = intervallo.
+const clearMarks = (tabId: string) =>
+  useTabViews.getState().update(tabId, (v) => (v.marked.size ? { ...v, marked: new Set<string>() } : v));
+
+// Mouse come in TC: click = cursore, Ctrl+click = marca, Shift+click = intervallo dal cursore.
+// Con "Selezione come Windows": click = solo quel file (le marcature si tolgono), Shift+click = solo l'intervallo
+// dal cursore, che resta fermo come àncora.
 function clickRow(tabId: string, i: number, e: MouseEvent) {
   if (e.button !== 0) return;
+  const windows = useSettings.getState().windowsSelection;
+  const v = useTabViews.getState().views[tabId];
+  // Click su una riga marcata: le marcature servono a un eventuale trascinamento, si tolgono al rilascio se non parte.
+  if (windows && !e.ctrlKey && !e.shiftKey && v?.marked.has(v.rows[i]?.name)) clearOnRelease(tabId, e);
   useTabViews.getState().update(tabId, (v) => {
     if (e.ctrlKey) return { ...toggleMark(v, v.rows[i].name), cursor: i };
-    if (e.shiftKey) return { ...markRange(v, v.cursor, i), cursor: i };
+    if (e.shiftKey) return windows ? markRange({ ...v, marked: new Set() }, v.cursor, i) : { ...markRange(v, v.cursor, i), cursor: i };
+    if (windows && v.marked.size && !v.marked.has(v.rows[i].name)) return { ...v, marked: new Set(), cursor: i };
     return v.cursor === i ? v : { ...v, cursor: i };
   });
 }
+
+function clearOnRelease(tabId: string, e: MouseEvent) {
+  const { clientX: x0, clientY: y0 } = e;
+  window.addEventListener("mouseup", (ev) => {
+    if (!pastDragThreshold(ev.clientX - x0, ev.clientY - y0)) clearMarks(tabId);
+  }, { once: true });
+}
+
+// "Selezione come Windows": un click nello spazio vuoto della lista toglie tutte le marcature.
+const emptyHandlers = (tabId: string) => ({
+  onMouseDown: (e: MouseEvent) => {
+    if (e.button === 0 && useSettings.getState().windowsSelection && !(e.target as Element).closest(".mc-row")) clearMarks(tabId);
+  },
+  onContextMenu: (e: MouseEvent) => rowContextMenu(tabId, null, e),
+});
 const openRow = () => void executeCommand("cm_Return");
 
 // Click, doppio click, tasto destro (menu della shell) e drag in uscita verso Explorer.
@@ -173,7 +198,7 @@ function FullList({ tabId, view, active, rowHeight }: ListProps) {
   return (
     <div className="mc-list mc-list-full">
       <ColumnHeader tabId={tabId} sort={view.sort} visible={visible} template={template} onLiveTemplate={setLiveTemplate} />
-      <div className="mc-list-scroll" ref={ref} onContextMenu={(e) => rowContextMenu(tabId, null, e)}>
+      <div className="mc-list-scroll" ref={ref} {...emptyHandlers(tabId)}>
         <div className="mc-list-canvas" style={{ height: virt.getTotalSize() }}>
           {virt.getVirtualItems().map(({ index: i, start }) => {
             const row = view.rows[i];
@@ -317,7 +342,7 @@ function BriefList({ tabId, view, active, rowHeight }: ListProps) {
         className="mc-list-scroll"
         ref={ref}
         onWheel={(e) => (e.currentTarget.scrollLeft += e.deltaY)}
-        onContextMenu={(e) => rowContextMenu(tabId, null, e)}
+        {...emptyHandlers(tabId)}
       >
         <div className="mc-list-canvas" style={{ width: virt.getTotalSize() }}>
           {virt.getVirtualItems().map(({ index: c, start }) => (
@@ -373,7 +398,7 @@ function ThumbList({ tabId, view, active }: ListProps) {
 
   return (
     <div className="mc-list mc-list-thumbs">
-      <div className="mc-list-scroll" ref={ref} onContextMenu={(e) => rowContextMenu(tabId, null, e)}>
+      <div className="mc-list-scroll" ref={ref} {...emptyHandlers(tabId)}>
         <div className="mc-list-canvas" style={{ height: virt.getTotalSize() }}>
           {virt.getVirtualItems().map(({ index: r, start }) => (
             <div key={r} className="mc-thumb-row" style={{ transform: `translateY(${start}px)`, height: THUMB_TILE_H }}>

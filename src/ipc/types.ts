@@ -29,6 +29,7 @@ export type ErrorCode =
   | "UNSAFE_WRITE"
   | "READ_ONLY_SOURCE"
   | "RANGE_UNSUPPORTED"
+  | "ALGORITHM_UNSUPPORTED"
   | "IO";
 
 export interface AppError {

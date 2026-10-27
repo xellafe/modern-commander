@@ -4,7 +4,7 @@ Data: 2026-10-23 · Branch: `claude/fase-3a-rete-d97c31` (spec: `docs/superpower
 
 ## Verifiche manuali da fare
 
-Nessuna è stata eseguita: richiedono la GUI o server veri. I test automatici coprono la logica pura, i parser (indici HTML, siti di WinSCP) e i provider con un server finto in memoria.
+Eseguite il 2026-10-27 sulla build di debug, con i server di prova in WSL (vedi "Difetti trovati durante le verifiche" per l'esito e per quelle che richiedono un server reale). I test automatici coprono la logica pura, i parser (indici HTML, siti di WinSCP) e i provider con un server finto in memoria.
 
 **Prima di tutto: CSP** (Task 14). La CSP vale solo per le pagine servite da Tauri: in `npm run tauri dev` la WebView carica `http://localhost:1420` direttamente da Vite e **nessuna CSP si applica** (né `csp` né `devCsp`; il proxy del dev server con CSP esiste solo su mobile). Quindi le prove vanno fatte su `npm run tauri build -- --debug` (DevTools disponibili) e poi sulla build release. In DevTools → Console, nessun errore `Refused to …` su:
 - lista; anteprima testo colorata e Markdown dell'ispettore (Ctrl+Q);
@@ -113,6 +113,31 @@ Note:
 - Tauri aggiunge nonce e hash a `script-src`/`style-src` solo per `<script>` e `<style>` scritti in `index.html`. Oggi non ce ne sono. Se se ne aggiunge uno in linea, il nonce in `style-src` fa ignorare `'unsafe-inline'` al browser e Monaco e xterm perdono gli stili: in quel caso serve `dangerousDisableAssetCspModification: ["style-src"]`.
 - I worker ricevono la CSP dalla propria risposta, e Tauri la manda solo per l'HTML: dentro i worker non ci sono restrizioni.
 - `devCsp` non serve: in `tauri dev` su desktop non si applica (vedi sopra), e l'HMR di Vite (`ws://localhost:1420`) non ne risente.
+
+## Difetti trovati durante le verifiche
+
+Tutte le verifiche manuali qui sopra sono state fatte con i server di prova in WSL (sotto), tranne quelle che richiedono un server reale: MLSD con collegamenti, disco pieno (552), EPSV su IPv6, server senza `MDTM` o senza `posix-rename`, IIS. I difetti trovati:
+
+**Corretti**
+- **Barra dei tasti funzione:** gli slot si ricavano dalla mappa attiva (`fkeyLabels` in `src/lib/fkeys.ts`, F1–F12 per livello di modificatori), con l'etichetta breve quando c'è e altrimenti il titolo del comando.
+- **Frecce nei dialoghi:** in `Dialog` le frecce passano al pulsante accanto fra quelli dello stesso gruppo, come nei messaggi di Windows.
+- **SFTP, chiave dell'host non supportata:** la negoziazione fallita (`LIBSSH2_ERROR_KEX_FAILURE`, verificata con un sshd con sola chiave ed25519) dà `ALGORITHM_UNSUPPORTED` tradotto, non più `IO`.
+- **Selezione come Windows:** impostazione "Selezione col mouse come in Windows" (`windowsSelection`): click = solo quel file, Shift+click = solo l'intervallo dal cursore, click nel vuoto toglie le marcature; il click su una riga marcata le toglie al rilascio, così il trascinamento di più file resta possibile.
+- **Pulsanti premuti:** stato `:active` (sfondo e ombra interna) e `:focus-visible` negli stili comuni dei pulsanti e dei dialoghi.
+- **Coda delle operazioni:** "Pulisci completati" è l'icona di un cestino, con il testo come `title` e `aria-label`.
+- **Gestore delle connessioni:** pulsante "Importa" con un menu, per ora con la sola voce WinSCP.
+- **Trascinamento tra gruppi:** Maiusc al rilascio sposta (dal drag interno delle schede remote, oppure chiesto a Windows con `shift_pressed`, perché l'evento di drop di Tauri non porta i modificatori); sopra la finestra un'etichetta "Copia/Sposta …" segue il cursore, dove l'immagine della shell non si vede.
+- **FTPS implicito** (PBSZ/PROT e TLS 1.2 per il riuso della sessione) e **viewer remoto senza `Range`** (immagini, PDF e media si scaricano senza leggere il campione): corretti durante le verifiche.
+
+**Aperti**
+- **SFTP: solo chiavi dell'host RSA.** libssh2 con WinCNG (`libssh2-sys` 0.3.3) non ha ed25519 né ECDSA. Decisione dell'utente: passare a `russh`, con un lavoro a parte (spec e piano propri).
+- **Viewer remoto: trascinamento della barra un po' a scatti** (osservazione, non bloccante). Su SFTP i salti (Fine, Home) sono istantanei, ma trascinando la barra ogni posizione legge una finestra dal server. Se serve: durante il trascinamento leggere solo l'ultima posizione (throttle) e mostrare la finestra precedente nel frattempo.
+- **Altre sorgenti per "Importa"** (PuTTY, FileZilla, Total Commander, OpenSSH `config`…): da decidere a parte.
+
+## Note sui server di prova in WSL
+
+- L'inoltro di `localhost` di WSL 2 (`127.0.0.1` da Windows) a volte perde la coda di un upload quando il client chiude la connessione: con `curl` in FTP semplice 4 upload su 15 sono arrivati troncati con esito 226, mentre verso l'IP della macchina WSL (`hostname -I`) 15 su 15 sono interi. In FTPS vsftpd se ne accorge (manca il `close_notify`) e risponde 426, che l'app mostra come errore di connessione, eliminando il temporaneo. Le prove sui server in WSL vanno fatte sull'IP della macchina WSL, non su `127.0.0.1`.
+- Sempre con l'inoltro di `localhost`, ogni connessione dati passiva aspetta circa 1 s (WSL deve accorgersi della nuova porta in ascolto).
 
 ## Limiti noti
 

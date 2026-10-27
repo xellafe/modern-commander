@@ -1,5 +1,5 @@
 // Comandi sui file (Task 16): copia, spostamento, rinomina, nuova cartella, eliminazione, selezione per maschera.
-import { enqueueJob, fileInfo, normalizePaths } from "../ipc/api";
+import { enqueueJob, fileInfo, normalizePaths, shiftPressed } from "../ipc/api";
 import type { ConflictPolicy, JobId, JobSpec } from "../ipc/types";
 import { folderName, isRemote, joinPath, normalizePath, parseRemote, sourceCaps } from "../lib/paths";
 import { useJobs, waitForJob } from "../state/jobs";
@@ -148,18 +148,21 @@ export async function startCopyMove(
  * Drop su un gruppo, da Explorer o di righe trascinate da un altro gruppo: finestra di copia verso la
  * cartella della sua scheda attiva. Le righe rilasciate sul loro stesso gruppo si ignorano.
  */
-export async function dropOnGroup(groupId: string, paths: string[]) {
+export async function dropOnGroup(groupId: string, paths: string[], move?: boolean) {
   const l = useLayout.getState();
   const g = l.groups.find((x) => x.id === groupId);
   // Con una finestra o un prompt aperti il drop si ignora: non si perde ciò che l'utente sta scrivendo.
   if (!g || !paths.length || ui().dialog || useJobs.getState().prompts.length) return;
   const action = dropAction(paths, groupId);
   if (action.kind === "ignore") return;
+  // Maiusc al rilascio sposta, come in TC e in Explorer. L'evento di drop di Tauri non porta i modificatori: per i
+  // drop nativi lo stato del tasto si chiede al sistema subito dopo il rilascio, prima di ogni altra attesa.
+  move ??= await shiftPressed();
   // normalizePaths riguarda i percorsi di Explorer: un indirizzo remoto (drag tra i gruppi dell'app) non ci passa.
   const sources = paths.some(isRemote) ? paths : await normalizePaths(paths);
   const dest = l.tabs[g.activeTabId].path;
   ui().openDialog({
-    kind: "copyMove", move: false, sources,
+    kind: "copyMove", move, sources,
     from: action.kind === "fromGroup" ? action.from : (parentPath(sources[0]) ?? sources[0]),
     dest: sourceCaps(dest).write ? dest : "", requireChange: false, targets: [], policy: "ask",
   });

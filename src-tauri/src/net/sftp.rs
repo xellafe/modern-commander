@@ -60,6 +60,9 @@ fn map_session_error(code: i32) -> ErrorCode {
         | sys::LIBSSH2_ERROR_SOCKET_RECV
         | sys::LIBSSH2_ERROR_BAD_SOCKET => ErrorCode::ConnectionFailed,
         sys::LIBSSH2_ERROR_AUTHENTICATION_FAILED | sys::LIBSSH2_ERROR_PASSWORD_EXPIRED => ErrorCode::AuthFailed,
+        // Negoziazione fallita: con WinCNG libssh2 ha solo chiavi dell'host RSA, e un server con sole ed25519 o
+        // ECDSA risponde "no matching host key type found".
+        sys::LIBSSH2_ERROR_KEX_FAILURE => ErrorCode::AlgorithmUnsupported,
         _ => ErrorCode::Io,
     }
 }
@@ -414,6 +417,7 @@ mod tests {
         assert_eq!(map_session_error(sys::LIBSSH2_ERROR_TIMEOUT), ErrorCode::Timeout);
         assert_eq!(map_session_error(sys::LIBSSH2_ERROR_SOCKET_RECV), ErrorCode::ConnectionFailed);
         assert_eq!(map_session_error(sys::LIBSSH2_ERROR_AUTHENTICATION_FAILED), ErrorCode::AuthFailed);
+        assert_eq!(map_session_error(sys::LIBSSH2_ERROR_KEX_FAILURE), ErrorCode::AlgorithmUnsupported);
     }
 
     #[test]
