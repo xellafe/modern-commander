@@ -1,6 +1,7 @@
 // Integrazione con la shell (Task 18): menu contestuale nativo, Proprietà, drag in uscita, apertura dei file.
 import type { MouseEvent } from "react";
-import { openPath, openWith, showContextMenu, showProperties, startDrag } from "../ipc/api";
+import i18n from "../i18n";
+import { openPath, openWith, shiftPressed, showContextMenu, showProperties, startDrag } from "../ipc/api";
 import type { AppError } from "../ipc/types";
 import { isRemote, joinPath, sourceCaps, type SourceCaps } from "../lib/paths";
 import { useLayout } from "../state/layout";
@@ -105,9 +106,46 @@ interface SelfDragState {
   last: { paths: string[]; at: number } | null;
   /** Gruppo e cartella da cui è partito l'ultimo drag. */
   origin?: { groupId: string; from: string } | null;
+  /** Cosa si trascina («nome» o "N elementi"), per l'immagine sotto il cursore. */
+  what?: string;
 }
 const SELF_DROP_MS = 2000;
 const selfDrag: SelfDragState = { dragging: false, last: null, origin: null };
+
+const describe = (rows: Row[]) =>
+  rows.length === 1 ? i18n.t("ops.oneItem", { name: rows[0].name }) : i18n.t("ops.items", { count: rows.length });
+
+// Immagine del trascinamento sopra la finestra dell'app: quella della shell si vede solo fuori (sopra Explorer),
+// la WebView non la disegna; il drag tra gruppi delle schede remote non ne ha nessuna.
+let ghost: HTMLDivElement | null = null;
+// Sale a ogni chiusura: una risposta di `shiftPressed` partita prima non riapre l'immagine.
+let ghostGen = 0;
+// Dopo il drop gli `over` ancora in coda non la riaprono, fino al drag successivo.
+let ghostDropped = false;
+
+function showGhost(x: number, y: number, move: boolean) {
+  if (!ghost) {
+    ghost = document.createElement("div");
+    ghost.className = "mc-drag-ghost";
+    document.body.appendChild(ghost);
+  }
+  ghost.textContent = i18n.t(move ? "ops.dragMove" : "ops.dragCopy", { what: selfDrag.what });
+  ghost.style.transform = `translate(${x + 14}px, ${y + 12}px)`;
+}
+
+export function hideGhost(dropped = false) {
+  ghost?.remove();
+  ghost = null;
+  ghostGen++;
+  if (dropped) ghostDropped = true;
+}
+
+/** Il nostro drag nativo passa sopra la finestra (`over` di Tauri, in pixel CSS): immagine e Maiusc letto dal sistema. */
+export function ghostOver(x: number, y: number) {
+  if (!selfDrag.dragging || ghostDropped) return;
+  const gen = ghostGen;
+  shiftPressed().then((move) => gen === ghostGen && !ghostDropped && selfDrag.dragging && showGhost(x, y, move), console.error);
+}
 
 const samePaths = (a: string[], b: string[]) => {
   const set = new Set(a.map((p) => p.toLowerCase()));
@@ -125,8 +163,7 @@ export type DropAction = { kind: "external" } | { kind: "ignore" } | { kind: "fr
 
 /**
  * Drop sul gruppo `groupId`: da fuori (Explorer), oppure il nostro drag. Il nostro sullo stesso gruppo si
- * ignora; su un altro gruppo è una copia dalla cartella d'origine (Maiusc per spostare, come in TC, non si
- * può leggere: l'evento di drop di Tauri non porta i modificatori).
+ * ignora; su un altro gruppo è una copia dalla cartella d'origine, o uno spostamento con Maiusc (`dropOnGroup`).
  */
 export function classifyDrop(paths: string[], s: SelfDragState, now: number, groupId: string): DropAction {
   if (!isSelfDrop(paths, s, now)) return { kind: "external" };
@@ -146,55 +183,66 @@ export async function dragOut(tabId: string, name: string) {
   const paths = shellPaths(from, rows);
   if (!paths.length) return;
   selfDrag.origin = { groupId: l.groups.find((g) => g.tabIds.includes(tabId))?.id ?? "", from };
+  selfDrag.what = describe(rows);
+  ghostDropped = false;
   selfDrag.dragging = true;
   try {
     await startDrag(paths);
   } catch (e) {
     report(tabId, e);
   } finally {
+    hideGhost();
     selfDrag.last = { paths, at: Date.now() };
     // Un macrotask dopo: un drop già in coda viene comunque scartato.
     setTimeout(() => (selfDrag.dragging = false), 0);
   }
 }
 
+/** `dropOnGroup`; `move` assente = si legge Maiusc dal sistema. */
+type DropFn = (groupId: string, paths: string[], move?: boolean) => Promise<void>;
+
 /**
  * Sulle schede remote non c'è il drag OLE: le righe si portano con il mouse su un altro gruppo dell'app, che al
  * rilascio apre la finestra di copia (`drop` è `dropOnGroup`, passata da chi chiama per non incrociare i moduli).
  */
-async function dragInApp(tabId: string, name: string, drop: (groupId: string, paths: string[]) => Promise<void>) {
+async function dragInApp(tabId: string, name: string, drop: DropFn) {
   const v = useTabViews.getState().views[tabId];
   const rows = v ? rowsAt(v, v.rows.findIndex((r) => r.name === name)) : [];
   if (!rows.length) return;
   const l = useLayout.getState();
   const from = l.tabs[tabId].path;
   selfDrag.origin = { groupId: l.groups.find((g) => g.tabIds.includes(tabId))?.id ?? "", from };
+  selfDrag.what = describe(rows);
+  ghostDropped = false;
   selfDrag.dragging = true;
   try {
     // Rilascio nella finestra (mouseup), oppure fuori (perdita del focus o mousemove a pulsante già rilasciato): annulla.
     const up = await new Promise<globalThis.MouseEvent | null>((res) => {
       const end = (ev: globalThis.MouseEvent | null) => {
+        hideGhost();
         for (const [t, h] of Object.entries(on)) window.removeEventListener(t, h as EventListener);
         res(ev);
       };
       const on = {
         mouseup: (ev: globalThis.MouseEvent) => end(ev),
         blur: () => end(null),
-        mousemove: (ev: globalThis.MouseEvent) => ev.buttons & 1 || end(null),
+        mousemove: (ev: globalThis.MouseEvent) => (ev.buttons & 1 ? showGhost(ev.clientX, ev.clientY, ev.shiftKey) : end(null)),
       };
       for (const [t, h] of Object.entries(on)) window.addEventListener(t, h as EventListener);
     });
     const groupId = up && document.elementFromPoint(up.clientX, up.clientY)?.closest<HTMLElement>("[data-group-id]")?.dataset.groupId;
-    if (groupId) await drop(groupId, rows.map((r) => joinPath(from, r.name)));
+    // Maiusc al rilascio sposta, come in TC.
+    if (groupId) await drop(groupId, rows.map((r) => joinPath(from, r.name)), up.shiftKey);
   } catch (e) {
     report(tabId, e);
   } finally {
+    hideGhost();
     selfDrag.dragging = false;
   }
 }
 
 /** Dal mousedown sinistro su una riga: oltre la soglia, con il pulsante ancora premuto, parte il drag nativo. */
-export function trackDragOut(tabId: string, i: number, e: MouseEvent, drop: (groupId: string, paths: string[]) => Promise<void>) {
+export function trackDragOut(tabId: string, i: number, e: MouseEvent, drop: DropFn) {
   // Il nome, non l'indice: il watcher può ricaricare la lista prima che si superi la soglia.
   const name = useTabViews.getState().views[tabId]?.rows[i]?.name;
   if (e.button !== 0 || name === undefined) return;

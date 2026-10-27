@@ -53,6 +53,9 @@ pub enum ErrorCode {
     ReadOnlySource,
     /// Il server non supporta le letture a intervalli (`Range`).
     RangeUnsupported,
+    /// Il server SSH non ha in comune con l'app lo scambio di chiavi, il cifrario o il MAC: `detail` porta il messaggio
+    /// della libreria. Per la chiave dell'host c'è `HostKeyUnsupported`.
+    AlgorithmUnsupported,
     Io,
 }
 
@@ -150,6 +153,7 @@ mod tests {
         assert_eq!(s(ErrorCode::UnsafeWrite), "UNSAFE_WRITE");
         assert_eq!(s(ErrorCode::ReadOnlySource), "READ_ONLY_SOURCE");
         assert_eq!(s(ErrorCode::RangeUnsupported), "RANGE_UNSUPPORTED");
+        assert_eq!(s(ErrorCode::AlgorithmUnsupported), "ALGORITHM_UNSUPPORTED");
     }
 
     #[test]

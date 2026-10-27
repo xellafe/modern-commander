@@ -4,7 +4,7 @@ Data: 2026-10-23 · Branch: `claude/fase-3a-rete-d97c31` (spec: `docs/superpower
 
 ## Verifiche manuali da fare
 
-Nessuna è stata eseguita: richiedono la GUI o server veri. I test automatici coprono la logica pura, i parser (indici HTML, siti di WinSCP) e i provider con un server finto in memoria.
+Eseguite il 2026-10-27 sulla build di debug, con i server di prova in WSL (vedi "Difetti trovati durante le verifiche" per l'esito e per quelle che richiedono un server reale). I test automatici coprono la logica pura, i parser (indici HTML, siti di WinSCP) e i provider con un server finto in memoria.
 
 **Prima di tutto: CSP** (Task 14). La CSP vale solo per le pagine servite da Tauri: in `npm run tauri dev` la WebView carica `http://localhost:1420` direttamente da Vite e **nessuna CSP si applica** (né `csp` né `devCsp`; il proxy del dev server con CSP esiste solo su mobile). Quindi le prove vanno fatte su `npm run tauri build -- --debug` (DevTools disponibili) e poi sulla build release. In DevTools → Console, nessun errore `Refused to …` su:
 - lista; anteprima testo colorata e Markdown dell'ispettore (Ctrl+Q);
@@ -114,14 +114,40 @@ Note:
 - I worker ricevono la CSP dalla propria risposta, e Tauri la manda solo per l'HTML: dentro i worker non ci sono restrizioni.
 - `devCsp` non serve: in `tauri dev` su desktop non si applica (vedi sopra), e l'HMR di Vite (`ws://localhost:1420`) non ne risente.
 
+## Difetti trovati durante le verifiche
+
+Tutte le verifiche manuali qui sopra sono state fatte con i server di prova in WSL (sotto), tranne quelle che richiedono un server reale: MLSD con collegamenti, disco pieno (552), EPSV su IPv6, server senza `MDTM` o senza `posix-rename`, IIS. I difetti trovati:
+
+**Corretti**
+- **Barra dei tasti funzione:** gli slot si ricavano dalla mappa attiva (`fkeyLabels` in `src/lib/fkeys.ts`, F1–F12 per livello di modificatori), con l'etichetta breve quando c'è e altrimenti il titolo del comando.
+- **Frecce nei dialoghi:** in `Dialog` le frecce passano al pulsante accanto fra quelli dello stesso gruppo, come nei messaggi di Windows.
+- **SFTP, chiave dell'host non supportata:** la negoziazione fallita (`LIBSSH2_ERROR_KEX_FAILURE`, verificata con un sshd con sola chiave ed25519) dava `ALGORITHM_UNSUPPORTED` tradotto, non più `IO`. Superato dal passaggio a russh (sezione "SFTP su russh").
+- **SFTP: solo chiavi dell'host RSA:** risolto passando a russh (sezione "SFTP su russh"); `sftp_live` verde contro un sshd in WSL con sola chiave ed25519.
+- **Selezione come Windows:** impostazione "Selezione col mouse come in Windows" (`windowsSelection`): click = solo quel file, Shift+click = solo l'intervallo dal cursore, click nel vuoto toglie le marcature; il click su una riga marcata le toglie al rilascio, così il trascinamento di più file resta possibile.
+- **Pulsanti premuti:** stato `:active` (sfondo e ombra interna) e `:focus-visible` negli stili comuni dei pulsanti e dei dialoghi.
+- **Coda delle operazioni:** "Pulisci completati" è l'icona di un cestino, con il testo come `title` e `aria-label`.
+- **Gestore delle connessioni:** pulsante "Importa" con un menu, per ora con la sola voce WinSCP.
+- **Trascinamento tra gruppi:** Maiusc al rilascio sposta (dal drag interno delle schede remote, oppure chiesto a Windows con `shift_pressed`, perché l'evento di drop di Tauri non porta i modificatori); sopra la finestra un'etichetta "Copia/Sposta …" segue il cursore, dove l'immagine della shell non si vede.
+- **FTPS implicito** (PBSZ/PROT e TLS 1.2 per il riuso della sessione) e **viewer remoto senza `Range`** (immagini, PDF e media si scaricano senza leggere il campione): corretti durante le verifiche.
+
+**Aperti**
+- **Viewer remoto: trascinamento della barra un po' a scatti** (osservazione, non bloccante). Su SFTP i salti (Fine, Home) sono istantanei, ma trascinando la barra ogni posizione legge una finestra dal server. Se serve: durante il trascinamento leggere solo l'ultima posizione (throttle) e mostrare la finestra precedente nel frattempo.
+- **Altre sorgenti per "Importa"** (PuTTY, FileZilla, Total Commander, OpenSSH `config`…): da decidere a parte.
+
+## Note sui server di prova in WSL
+
+- L'inoltro di `localhost` di WSL 2 (`127.0.0.1` da Windows) a volte perde la coda di un upload quando il client chiude la connessione: con `curl` in FTP semplice 4 upload su 15 sono arrivati troncati con esito 226, mentre verso l'IP della macchina WSL (`hostname -I`) 15 su 15 sono interi. In FTPS vsftpd se ne accorge (manca il `close_notify`) e risponde 426, che l'app mostra come errore di connessione, eliminando il temporaneo. Le prove sui server in WSL vanno fatte sull'IP della macchina WSL, non su `127.0.0.1`.
+- Sempre con l'inoltro di `localhost`, ogni connessione dati passiva aspetta circa 1 s (WSL deve accorgersi della nuova porta in ascolto).
+
 ## SFTP su russh
 
-SFTP ora gira su russh 0.65 + russh-sftp 3.0 (libssh2 con WinCNG offriva solo chiavi dell'host RSA). Chiavi dell'host accettate: ed25519, ECDSA P-256/384/521, RSA. `known_hosts` ricorda il tipo di chiave; le voci salvate prima (senza tipo) valgono come RSA, quindi i server già fidati restano fidati senza richieste. Gli algoritmi datati di libssh2 restano in coda alla lista: group14-sha1, group-exchange-sha1, aes-cbc, 3des-cbc, hmac-sha1. Il group exchange accetta gruppi da 2048 a 8192 bit, come libssh2 (il default di russh parte da 3072); un gruppo fuori intervallo dà `CONNECTION_FAILED`. Nuovo errore `HOST_KEY_UNSUPPORTED`.
+SFTP ora gira su russh 0.65 + russh-sftp 3.0 (libssh2 con WinCNG offriva solo chiavi dell'host RSA). Chiavi dell'host accettate: ed25519, ECDSA P-256/384/521, RSA. `known_hosts` ricorda il tipo di chiave; le voci salvate prima (senza tipo) valgono come RSA, quindi i server già fidati restano fidati senza richieste. Gli algoritmi datati di libssh2 restano in coda alla lista: group14-sha1, group-exchange-sha1, aes-cbc, 3des-cbc, hmac-sha1. Il group exchange accetta gruppi da 2048 a 8192 bit, come libssh2 (il default di russh parte da 3072); un gruppo fuori intervallo dà `CONNECTION_FAILED`. Nuovo errore `HOST_KEY_UNSUPPORTED` (solo tipi di chiave dell'host non gestiti); `ALGORITHM_UNSUPPORTED`, nato per libssh2, ora vale per scambio di chiavi, cifrario o MAC senza accordo.
 
 Verifiche manuali da fare:
 - Server con la sola chiave dell'host ed25519: sshd in WSL con la sola `HostKey /etc/ssh/ssh_host_ed25519_key`, raggiunto sull'IP della macchina WSL (`ip -4 addr show eth0`), non su 127.0.0.1.
 - Server salvato con la versione precedente: resta noto, nessuna richiesta di impronta.
 - Server con soli algoritmi datati, se disponibile.
+
 ## Limiti noti
 
 - SFTP: i nomi non UTF-8 si vedono con U+FFFD e quelli con `\` non si aprono (un "a\b" remoto copiato su Windows finirebbe nella sottocartella "a"). Visibili ma non apribili.

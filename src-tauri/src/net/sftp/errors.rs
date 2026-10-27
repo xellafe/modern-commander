@@ -52,10 +52,12 @@ pub(super) fn ssh_error(e: &russh::Error) -> AppError {
         E::NoCommonAlgo { kind: AlgorithmKind::Key, theirs, .. } => {
             return app_error(ErrorCode::HostKeyUnsupported, None, theirs.join(", "));
         }
+        // Nessun accordo su scambio di chiavi, cifrario, MAC o compressione: `detail` porta il messaggio di russh.
+        E::NoCommonAlgo { .. } => ErrorCode::AlgorithmUnsupported,
         E::IO(io) if io.kind() == std::io::ErrorKind::TimedOut => ErrorCode::Timeout,
         E::ConnectionTimeout | E::KeepaliveTimeout | E::InactivityTimeout | E::Elapsed(_) => ErrorCode::Timeout,
         // `KexInit`: per esempio un gruppo di group exchange fuori dall'intervallo chiesto.
-        E::NoCommonAlgo { .. } | E::KexInit | E::IO(_) | E::Disconnect | E::HUP | E::SendError | E::RecvError => {
+        E::KexInit | E::IO(_) | E::Disconnect | E::HUP | E::SendError | E::RecvError => {
             ErrorCode::ConnectionFailed
         }
         _ => ErrorCode::Io,
@@ -150,9 +152,9 @@ mod tests {
     }
 
     #[test]
-    fn no_common_cipher_is_connection_failed() {
+    fn no_common_cipher_is_algorithm_unsupported() {
         let e = ssh_error(&no_common(AlgorithmKind::Cipher));
-        assert_eq!(e.code, ErrorCode::ConnectionFailed);
+        assert_eq!(e.code, ErrorCode::AlgorithmUnsupported);
         assert!(e.detail.unwrap().contains("Cipher"));
     }
 

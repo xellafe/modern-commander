@@ -178,6 +178,7 @@ export const showProperties = (paths: string[]) => invoke<void>("show_properties
 
 /** Drag modale verso Explorer: si risolve a drop concluso o annullato (no-op a pulsante già rilasciato). */
 export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths });
+export const shiftPressed = () => invoke<boolean>("shift_pressed");
 
 /** Apre con il programma associato (verbo "open" della shell). */
 export const openPath = (path: string) => invoke<void>("open_path", { path });

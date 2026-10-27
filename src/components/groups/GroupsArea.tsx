@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Fragment, useEffect, useRef, useState, type PointerEvent } from "react";
 import { dropOnGroup } from "../../commands/fileOps";
 import { chordFromEvent, quickSearchChar } from "../../commands/keys";
+import { ghostOver, hideGhost } from "../../commands/shell";
 import { focusInTextOrDialog } from "../../commands/useKeyboard";
 import { onFsChanged } from "../../ipc/api";
 import { isUnwatched, useDrives } from "../../state/drives";
@@ -75,11 +76,14 @@ export function GroupsArea({ keymap }: { keymap: Map<string, string> }) {
     };
   }, []);
 
-  // Drop da Explorer: finestra di copia verso il gruppo sotto il puntatore (posizione in pixel fisici).
+  // Drop da Explorer o dal nostro drag: finestra di copia verso il gruppo sotto il puntatore (posizione in pixel
+  // fisici). Durante il nostro drag, l'immagine sotto il cursore.
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent(({ payload: p }) => {
-      if (p.type !== "drop") return;
       const dpr = window.devicePixelRatio || 1;
+      if (p.type === "over") return ghostOver(p.position.x / dpr, p.position.y / dpr);
+      hideGhost(p.type === "drop");
+      if (p.type !== "drop") return;
       const el = document.elementFromPoint(p.position.x / dpr, p.position.y / dpr);
       const groupId = el?.closest<HTMLElement>("[data-group-id]")?.dataset.groupId;
       if (groupId) dropOnGroup(groupId, p.paths).catch(console.error);

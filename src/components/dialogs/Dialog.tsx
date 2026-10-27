@@ -28,6 +28,8 @@ interface DialogProps {
   actions: ReactNode;
 }
 
+const ARROWS: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+
 /**
  * Finestra modale: prende il focus all'apertura (l'elemento con `data-autofocus`, altrimenti il
  * primo), lo tiene dentro con Tab e lo restituisce alla chiusura. I tasti non escono dalla finestra.
@@ -49,6 +51,16 @@ export function Dialog({ title, onCancel, onConfirm, children, actions }: Dialog
       onConfirm();
     } else if (e.key === "Tab") {
       trapTab(e, ref.current!);
+    } else if (!e.defaultPrevented && e.target instanceof HTMLButtonElement && ARROWS[e.key]) {
+      // Come nei messaggi di Windows: le frecce passano al pulsante accanto, fra quelli dello stesso gruppo.
+      const row = [...e.target.parentElement!.children].filter(
+        (b): b is HTMLButtonElement => b instanceof HTMLButtonElement && !b.disabled && b.getAttribute("aria-disabled") !== "true",
+      );
+      const i = row.indexOf(e.target);
+      if (i < 0 || row.length < 2) return;
+      e.preventDefault();
+      e.stopPropagation();
+      row[(i + ARROWS[e.key] + row.length) % row.length].focus();
     }
   };
 

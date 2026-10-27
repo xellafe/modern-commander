@@ -1,4 +1,5 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { ChevronDown } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { forgetHost, forgetPassword, importConnections, winscpCandidates } from "../../ipc/api";
 import type { AppError, Connection, ConnectionView, ImportCandidate, Scheme } from "../../ipc/types";
@@ -38,6 +39,10 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Anteprima dell'importazione da WinSCP: i siti letti e quelli spuntati (per posizione).
   const [imp, setImp] = useState<{ items: ImportCandidate[]; checked: Set<number> } | null>(null);
+  // Menu "Importa": una voce per programma da cui importare.
+  // Posizione fissa sotto il pulsante: il corpo del dialogo scorre e taglierebbe un menu in `absolute`.
+  const [importMenu, setImportMenu] = useState<{ top: number; left: number } | null>(null);
+  const importButton = useRef<HTMLButtonElement>(null);
   const close = useUi.getState().closeDialog;
   const sel: ConnectionView | undefined = list.find((c) => c.id === selId) ?? list[0];
 
@@ -243,10 +248,34 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
       ) : <p className="mc-muted">{t("connections.empty")}</p>}
       <div className="mc-conn-tools">
         {tool("connections.new", true, () => setForm(blank({})))}
-        {tool("connections.import", true, () => run(async () => {
-          const items = await winscpCandidates();
-          setImp({ items, checked: new Set(items.flatMap((c, i) => (c.skipped ? [] : [i]))) });
-        }))}
+        <div className="mc-conn-import" onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setImportMenu(null)}>
+          <button ref={importButton} aria-haspopup="menu" aria-expanded={!!importMenu} onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setImportMenu(importMenu ? null : { top: r.bottom + 2, left: r.left });
+          }}>
+            {t("connections.import")} <ChevronDown size={12} aria-hidden />
+          </button>
+          {importMenu && (
+            // Esc chiude il menu, non il dialogo, e il focus torna al pulsante.
+            <div className="mc-menu mc-conn-import-menu" role="menu" style={importMenu} onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              e.stopPropagation();
+              setImportMenu(null);
+              importButton.current?.focus();
+            }}>
+              <button role="menuitem" className="mc-menu-item" autoFocus onClick={() => {
+                setImportMenu(null);
+                run(async () => {
+                  const items = await winscpCandidates();
+                  setImp({ items, checked: new Set(items.flatMap((c, i) => (c.skipped ? [] : [i]))) });
+                });
+              }}>
+                {t("connections.importWinscp")}
+              </button>
+            </div>
+          )}
+        </div>
         {tool("connections.edit", !!sel, () => setForm({ ...sel!, password: "" }))}
         {tool("connections.duplicate", !!sel, () => setForm({ ...sel!, id: "", name: t("connections.copyOf", { name: sel!.name }), password: "" }))}
         {tool(confirmDelete ? "connections.confirmDelete" : "connections.delete", !!sel, remove, confirmDelete ? "danger" : undefined)}
