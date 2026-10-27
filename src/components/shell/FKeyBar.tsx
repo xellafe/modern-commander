@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { focusInTextOrDialog } from "../../commands/useKeyboard";
-import { executeCommand, getCommand, getCommands, shouldExecute } from "../../commands/registry";
+import { executeCommand, getCommand, shouldExecute } from "../../commands/registry";
 import { fkeyLabels, type Mods } from "../../lib/fkeys";
+import { useKeybindings } from "../../state/keybindings";
 import { activeTab, useLayout } from "../../state/layout";
 
 const NO_MODS: Mods = { shift: false, ctrl: false, alt: false };
@@ -10,6 +11,7 @@ const NO_MODS: Mods = { shift: false, ctrl: false, alt: false };
 export function FKeyBar() {
   const { t } = useTranslation();
   const [mods, setMods] = useState(NO_MODS);
+  const keymap = useKeybindings((s) => s.keymap);
 
   useEffect(() => {
     const sync = (e: KeyboardEvent) =>
@@ -28,7 +30,7 @@ export function FKeyBar() {
     };
   }, []);
 
-  const slots = fkeyLabels(mods, new Set(getCommands().map((c) => c.id)));
+  const slots = fkeyLabels(mods, keymap, (id) => getCommand(id)?.titleKey);
   return (
     <footer className="mc-fkeys">
       {slots.map((s) => (

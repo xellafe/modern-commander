@@ -17,7 +17,7 @@ const listArchive = vi.mocked(api.listArchive);
 const cancelRequest = vi.mocked(api.cancelRequest);
 const dirSize = vi.mocked(computeDirSize);
 
-const INFO: FileInfo = { size: 10, isDir: false, createdMs: 1, modifiedMs: 2, accessedMs: 3, attributes: 0 };
+const INFO: FileInfo = { size: 10, isDir: false, createdMs: 1, modifiedMs: 2, accessedMs: 3, attributes: 0, mtimeReliable: true };
 const enc = (s: string) => new TextEncoder().encode(s);
 const set = (path: string, isDir = false) => useInspector.getState().setTarget({ path, isDir });
 const state = () => useInspector.getState();
@@ -184,6 +184,20 @@ test("markdown is rendered without raw html; image, pdf, video read nothing", as
     expect(state().preview).toEqual({ kind, path: `C:\\${name}` });
   }
   expect(readChunk).not.toHaveBeenCalled();
+});
+
+test("remote file: metadata and text preview only, no media or archive", async () => {
+  for (const name of ["a.png", "a.pdf", "a.mp4", "a.zip", "a.7z"]) {
+    set(`sftp://h/${name}`);
+    await sleep(DEBOUNCE_MS + 10);
+    expect(state()).toMatchObject({ info: INFO, preview: { kind: "none" } });
+  }
+  expect(readChunk).not.toHaveBeenCalled();
+  expect(listArchive).not.toHaveBeenCalled();
+  readChunk.mockResolvedValue(enc("ciao"));
+  set("sftp://h/a.txt");
+  await sleep(DEBOUNCE_MS + 10);
+  expect(state().preview).toMatchObject({ kind: "text", text: "ciao" });
 });
 
 test("folder: size arrives, but not if the target changed meanwhile", async () => {

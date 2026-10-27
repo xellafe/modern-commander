@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { ansiEncoding, fileInfo, readFile, writeTextFile } from "../ipc/api";
 import type { AppError } from "../ipc/types";
 import { detectEncoding } from "../lib/encoding";
-import { folderName } from "../lib/paths";
+import { folderName, isRemote } from "../lib/paths";
 import { languageFor, loadMonaco } from "../lib/monaco";
 import { looksBinary } from "../lib/preview";
 import { useTabViews } from "./tabViews";
@@ -55,6 +55,8 @@ const loads = new Map<string, { promise: Promise<void> }>();
 /** Coda dei salvataggi per file (percorso minuscolo) e salvataggio semplice in coda per scheda. */
 const saveQueues = new Map<string, Promise<void>>();
 const waitingSaves = new Map<string, Promise<void>>();
+/** Dimensione all'apertura o all'ultimo salvataggio (il remoto la confronta) e affidabilità delle date del server. */
+const opened = new Map<string, { size: number; mtimeReliable: boolean }>();
 
 export const editorModel = (tabId: string) => models.get(tabId);
 export const saveViewState = (tabId: string, state: editor.ICodeEditorViewState | null) => void viewStates.set(tabId, state);
@@ -78,14 +80,30 @@ export interface SaveOptions {
   force?: boolean;
   /** Salva in un'altra codifica. */
   encoding?: string;
+  /** Remoto: scrive direttamente sul file se il server non permette il salvataggio sicuro. */
+  allowUnsafe?: boolean;
+  /** Remoto con date poco affidabili: l'utente ha già confermato questo salvataggio. */
+  confirmed?: boolean;
 }
+
+/**
+ * Motivi del dialogo di salvataggio: gli errori del backend da correggere, più la conferma che si chiede prima di
+ * ogni salvataggio su un server con date poco affidabili (lì `CHANGED_ON_DISK` può non accorgersi di una modifica).
+ */
+export type SaveErrorCode = "CHANGED_ON_DISK" | "UNMAPPABLE_CHARS" | "UNSAFE_WRITE" | "UNRELIABLE_MTIME";
+
+const RETRY: Record<SaveErrorCode, SaveOptions> = {
+  CHANGED_ON_DISK: { force: true },
+  UNMAPPABLE_CHARS: { encoding: "utf-8" },
+  UNSAFE_WRITE: { allowUnsafe: true },
+  UNRELIABLE_MTIME: { confirmed: true },
+};
 
 /**
  * Opzioni con cui il dialogo di errore ripete il salvataggio: quelle del tentativo fallito più la correzione
  * scelta. Senza la somma, un file cambiato su disco E con caratteri non rappresentabili non si salverebbe mai.
  */
-export const retryOptions = (previous: SaveOptions, code: "CHANGED_ON_DISK" | "UNMAPPABLE_CHARS"): SaveOptions =>
-  code === "CHANGED_ON_DISK" ? { ...previous, force: true } : { ...previous, encoding: "utf-8" };
+export const retryOptions = (previous: SaveOptions, code: SaveErrorCode): SaveOptions => ({ ...previous, ...RETRY[code] });
 
 interface EditorsStore {
   docs: Record<string, EditorDoc>;
@@ -118,6 +136,7 @@ async function load(tabId: string, path: string, current: () => boolean) {
   models.set(tabId, model);
   savedVersion.set(tabId, model.getAlternativeVersionId());
   model.onDidChangeContent(() => refreshDirty(tabId));
+  opened.set(tabId, { size: info.size, mtimeReliable: info.mtimeReliable });
   const { text: _text, ...rest } = decoded;
   useEditors.setState((s) => ({ docs: { ...s.docs, [tabId]: { path, ...rest, modifiedMs: info.modifiedMs, dirty: false } } }));
 }
@@ -127,17 +146,24 @@ async function writeDoc(tabId: string, opts: SaveOptions) {
   const doc = useEditors.getState().docs[tabId];
   const model = models.get(tabId);
   if (!doc || !model || doc.readOnly) return;
+  const meta = opened.get(tabId);
+  if (meta?.mtimeReliable === false && !opts.confirmed && !opts.force) {
+    return useUi.getState().openDialog({ kind: "saveError", tabId, code: "UNRELIABLE_MTIME", opts });
+  }
   const version = model.getAlternativeVersionId();
   const encoding = opts.encoding ?? doc.encoding;
+  const args = [doc.path, model.getValue(), encoding, doc.bom, opts.force ? null : doc.modifiedMs] as const;
   try {
-    const info = await writeTextFile(doc.path, model.getValue(), encoding, doc.bom, opts.force ? null : doc.modifiedMs);
+    // Dimensione e scrittura diretta valgono solo sul remoto.
+    const info = await (isRemote(doc.path) ? writeTextFile(...args, !!opts.allowUnsafe, opts.force ? null : (meta?.size ?? null)) : writeTextFile(...args));
     if (models.get(tabId) !== model) return; // scheda chiusa durante la scrittura
     savedVersion.set(tabId, version);
+    opened.set(tabId, { size: info.size, mtimeReliable: info.mtimeReliable });
     patchDoc(tabId, { encoding, modifiedMs: info.modifiedMs });
     refreshDirty(tabId); // se si è scritto durante il salvataggio resta modificato
   } catch (e) {
     const code = (e as Partial<AppError> | null)?.code;
-    if (code === "CHANGED_ON_DISK" || code === "UNMAPPABLE_CHARS") useUi.getState().openDialog({ kind: "saveError", tabId, code, opts });
+    if (code === "CHANGED_ON_DISK" || code === "UNMAPPABLE_CHARS" || code === "UNSAFE_WRITE") useUi.getState().openDialog({ kind: "saveError", tabId, code, opts });
     else useTabViews.getState().showNotice(tabId, e);
   }
 }
@@ -183,6 +209,7 @@ export const useEditors = create<EditorsStore>((set, get) => ({
     models.get(tabId)?.dispose();
     models.delete(tabId);
     savedVersion.delete(tabId);
+    opened.delete(tabId);
     viewStates.delete(tabId);
     loads.delete(tabId);
     set((s) => {

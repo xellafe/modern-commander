@@ -19,6 +19,18 @@ export type ErrorCode =
   | "CHANGED_ON_DISK"
   | "UNMAPPABLE_CHARS"
   | "CORRUPT_ARCHIVE"
+  | "AUTH_REQUIRED"
+  | "AUTH_FAILED"
+  | "CONNECTION_FAILED"
+  | "TIMEOUT"
+  | "HOST_KEY_UNKNOWN"
+  | "HOST_KEY_CHANGED"
+  | "HOST_KEY_UNSUPPORTED"
+  | "CERT_UNTRUSTED"
+  | "UNSAFE_WRITE"
+  | "READ_ONLY_SOURCE"
+  | "RANGE_UNSUPPORTED"
+  | "ALGORITHM_UNSUPPORTED"
   | "IO";
 
 export interface AppError {
@@ -39,6 +51,8 @@ export interface Entry {
   /** Attributi Win32 grezzi. */
   attributes: number;
   isSymlink: boolean;
+  /** Permessi POSIX delle sorgenti remote; null in locale. */
+  mode?: number | null;
 }
 
 export type DriveKind = "fixed" | "removable" | "network" | "cdrom" | "other";
@@ -69,6 +83,8 @@ export interface FileInfo {
   modifiedMs: number;
   accessedMs: number;
   attributes: number;
+  /** Date al secondo o meglio: sempre in locale, non su FTP senza MDTM. */
+  mtimeReliable: boolean;
 }
 
 /** fs/columns.rs: confine di carattere sulla riga, con la colonna dove inizia quel carattere. */
@@ -215,7 +231,9 @@ export type Prompt =
       canElevate: boolean;
       /** Il Cestino ha rifiutato l'elemento: si può offrire `deletePermanent`. */
       canDeletePermanently: boolean;
-    };
+    }
+  /** Il server non permette la scrittura sicura su `path`: si scrive direttamente solo con conferma. */
+  | { type: "unsafeWrite"; promptId: number; jobId: JobId; path: string };
 
 /** `retryElevated` si comporta come `retry` finché non c'è l'helper elevato (Task 17). */
 export type ErrorAction = {
@@ -231,4 +249,40 @@ export type PromptReply =
   | { type: "conflict"; decision: Decision; applyToAll: boolean }
   /** Risolve il conflitto con una politica (non `ask`); con `applyToAll` vale per i successivi. */
   | { type: "conflictPolicy"; policy: ConflictPolicy; applyToAll: boolean }
-  | { type: "error"; action: ErrorAction; applyToAll: boolean };
+  | { type: "error"; action: ErrorAction; applyToAll: boolean }
+  /** `proceed: false` salta l'elemento; `applyToAll` vale per il resto del job. */
+  | { type: "unsafeWrite"; proceed: boolean; applyToAll: boolean };
+
+export type Scheme = "sftp" | "ftp" | "ftps" | "http" | "https";
+
+/** Connessione salvata: la password non c'è mai, sta nel Credential Manager. */
+export interface Connection {
+  /** Vuoto per una connessione nuova: l'id lo dà il backend. */
+  id: string;
+  name: string;
+  scheme: Scheme;
+  host: string;
+  port: number;
+  user: string;
+  startDir: string;
+  /** FTPS implicito (porta 990) invece di `AUTH TLS`. */
+  ftpsImplicit: boolean;
+}
+
+export interface ConnectionView extends Connection {
+  hasPassword: boolean;
+}
+
+/** Sito di WinSCP nell'anteprima dell'importazione; la password non c'è mai. */
+export interface ImportCandidate {
+  name: string;
+  /** Vuoto per i siti che non si importano. */
+  scheme: Scheme | null;
+  host: string;
+  port: number;
+  user: string;
+  startDir: string;
+  ftpsImplicit: boolean;
+  /** Codice del motivo (`webdav`, `s3`, `nohost`, `unknown`): il testo sta nelle traduzioni. */
+  skipped: string | null;
+}

@@ -4,7 +4,7 @@ import i18n from "../i18n";
 import { listDrives } from "../ipc/api";
 import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
-import { dirTarget, folderName, joinPath, rootPath } from "../lib/paths";
+import { dirTarget, folderName, isRemote, joinPath, rootPath, sourceCaps } from "../lib/paths";
 import { cancelAllAndWait, unfinishedJobs, useJobs } from "../state/jobs";
 import { activeTab, targetGroup, useLayout } from "../state/layout";
 import {
@@ -76,6 +76,7 @@ const SIZE_CONCURRENCY = 4;
 
 /** Calcola la dimensione delle cartelle `names` di `dir` nella scheda; si ferma se la scheda cambia cartella. */
 async function measure(tabId: string, dir: string, names: string[]) {
+  if (!sourceCaps(dir).dirSize) return; // remoto: Spazio marca soltanto
   const here = () => {
     const v = views().views[tabId];
     return !!v && v.history[v.historyIndex] === dir;
@@ -264,8 +265,11 @@ const DEFS: Def[] = [
     if (!cursorRow) return;
     const target = dirTarget(path, cursorRow);
     if (target) return open(target, cursorRow.isParent ? { focus: folderName(path) } : undefined);
+    const file = joinPath(path, cursorRow.name);
+    // Un file remoto nel viewer interno (come F3): la shell di Windows non lo raggiunge.
+    if (isRemote(path)) return useLayout.getState().openFileTab(useLayout.getState().activeGroupId, { path: file, mode: "viewer" });
     // Un file (anche un collegamento .lnk) si apre col programma associato, come in Explorer.
-    return openFile(tabId, joinPath(path, cursorRow.name));
+    return openFile(tabId, file);
   }],
   ["cm_GoToParent", () => {
     const { path } = activeTabContext();

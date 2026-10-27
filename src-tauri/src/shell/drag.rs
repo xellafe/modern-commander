@@ -7,7 +7,7 @@
 use super::{Selection, hr_error, on_main_thread};
 use crate::error::AppError;
 use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_MOVE};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON, VK_SHIFT};
 use windows::Win32::UI::Shell::SHDoDragDrop;
 
 /// Avvia un drag modale (copia o spostamento) degli elementi; ritorna a drop concluso o annullato.
@@ -25,4 +25,11 @@ pub async fn start_drag(window: tauri::Window, paths: Vec<String>) -> Result<(),
             .map_err(|e| hr_error(&e, None))
     })
     .await
+}
+
+/// Maiusc premuto adesso. Serve al drop sull'app: l'evento di drop di Tauri non porta i modificatori, e arriva
+/// quando il pulsante è appena stato rilasciato, con il tasto ancora giù se l'utente sposta (come in TC).
+#[tauri::command]
+pub fn shift_pressed() -> bool {
+    (unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) }) < 0
 }

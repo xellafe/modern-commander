@@ -5,6 +5,10 @@ const ATTRS: [number, string][] = [[0x1, "r"], [0x20, "a"], [0x2, "h"], [0x4, "s
 /** Attributi Win32 nello stile di TC: `rahs`, `-` dove manca. */
 export const formatAttrs = (a: number): string => ATTRS.map(([bit, c]) => (a & bit ? c : "-")).join("");
 
+/** Permessi POSIX come `ls -l`: `drwxr-xr-x`. */
+export const formatMode = (mode: number, isDir: boolean): string =>
+  (isDir ? "d" : "-") + [..."rwxrwxrwx"].map((c, i) => (mode & (0o400 >> i) ? c : "-")).join("");
+
 /** [nome, estensione]; le cartelle e i nomi che iniziano col punto non hanno estensione. */
 export function splitName(name: string, isDir: boolean): [string, string] {
   const i = name.lastIndexOf(".");

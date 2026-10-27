@@ -105,6 +105,26 @@ pub fn has_trailing_dot_or_space(p: &Path) -> bool {
     })
 }
 
+/// Nome che Windows non accetta come componente (come `nameError` nel frontend, più i nomi riservati):
+/// vuoto, con `< > : " / \ | ? *` o caratteri di controllo, `CON`/`PRN`/`AUX`/`NUL`/`CONIN$`/`CONOUT$`/
+/// `COM1-9`/`LPT1-9` (anche con `¹²³`) senza distinguere le maiuscole e anche con estensione, oppure finito con
+/// un punto o uno spazio. Serve per i nomi che arrivano da un server remoto.
+pub fn invalid_windows_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end_matches(' ').to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| {
+            let mut c = n.chars();
+            matches!((c.next(), c.next()), (Some('1'..='9' | '¹' | '²' | '³'), None))
+        })
+    };
+    name.is_empty()
+        || name.ends_with(['.', ' '])
+        || name.chars().any(|c| c < ' ' || r#"<>:"/\|?*"#.contains(c))
+        || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || numbered("COM")
+        || numbered("LPT")
+}
+
 /// Chiave del volume (`C:` oppure `\\SERVER\SHARE`) in maiuscolo; stringa vuota senza prefisso.
 pub fn volume_key(p: &Path) -> String {
     match p.components().next() {
@@ -162,6 +182,16 @@ mod tests {
         assert_eq!(volume_key(Path::new(r"c:\x")), "C:");
         assert_eq!(volume_key(Path::new(r"\\Srv\Share\x")), r"\\SRV\SHARE");
         assert_eq!(volume_key(Path::new(r"rel\x")), "");
+    }
+
+    #[test]
+    fn windows_names() {
+        for bad in ["a:b.log", "x?", "a\\b", "a/b", "..", ".", "fine.", "fine ", "", "con", "NUL.txt", "Com1.log", "lpt9", "aux .x", "a\u{1}", "COM¹", "lpt³.txt", "conin$", "CONOUT$.log"] {
+            assert!(invalid_windows_name(bad), "{bad:?}");
+        }
+        for ok in ["ok.log", ".bashrc", "console", "com0", "COM10", "COM⁴", "conin", "è%20#1.log", "a b"] {
+            assert!(!invalid_windows_name(ok), "{ok:?}");
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { HashAlgo } from "../../ipc/types";
 import { formatAttrs, formatDate, formatSize } from "../../lib/format";
 import { loadMonaco, splitForColorize, worthColorizing } from "../../lib/monaco";
-import { folderName, joinPath } from "../../lib/paths";
+import { folderName, joinPath, sourceCaps } from "../../lib/paths";
 import { PREVIEW_BYTES, useInspector, type Preview } from "../../state/inspector";
 import { useLayout } from "../../state/layout";
 import { useTabViews } from "../../state/tabViews";
@@ -149,6 +149,7 @@ function PreviewView({ preview }: { preview: Preview | null }) {
           </button>
         </div>
       );
+    case "none": return null;
     case "binary": return <div className="mc-viewer-note">{t("inspector.binary")}</div>;
     case "error": return <div className="mc-viewer-note" role="alert">{t(`errors.${preview.code}`)}</div>;
   }
@@ -218,7 +219,7 @@ function Body() {
           <dd>{formatAttrs(info.attributes)}</dd>
         </dl>
       )}
-      {isFile && info && <Hashes />}
+      {isFile && info && sourceCaps(target.path).hash && <Hashes />}
     </>
   );
 }

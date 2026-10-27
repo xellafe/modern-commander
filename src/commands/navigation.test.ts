@@ -62,6 +62,15 @@ test("cm_Return enters a folder; cm_GoToParent comes back with the cursor on it"
   expect(ctx().cursorRow?.name).toBe("sub");
 });
 
+test("cm_Return on a remote file opens the internal viewer instead of the associated program", async () => {
+  listDir.mockResolvedValueOnce([f("log.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/var");
+  useTabViews.getState().update("t1", (v) => ({ ...v, cursor: 1 })); // log.txt
+  await executeCommand("cm_Return");
+  expect(api.openPath).not.toHaveBeenCalled();
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "sftp://w/var/log.txt", mode: "viewer" });
+});
+
 test("sort command on the same key twice reverses the order", async () => {
   await executeCommand("cm_SrcByName"); // già per nome: diventa decrescente
   expect(ctx().view.rows.map((r) => r.name)).toEqual(["..", "sub", "b.txt", "a.txt"]);

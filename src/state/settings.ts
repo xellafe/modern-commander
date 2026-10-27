@@ -20,6 +20,8 @@ export interface Settings {
   columns: ColumnConfig[];
   /** Il Nome mostra anche l'estensione e la colonna Estensione sparisce. */
   extInName: boolean;
+  /** Mouse come in Windows: click = solo quel file, click nel vuoto toglie le marcature (altrimenti come TC). */
+  windowsSelection: boolean;
 }
 
 export const defaultSettings = (osLocale: string): Settings => ({
@@ -34,6 +36,7 @@ export const defaultSettings = (osLocale: string): Settings => ({
   jumpInNewTab: false,
   columns: DEFAULT_COLUMNS,
   extInName: false,
+  windowsSelection: false,
 });
 
 export const resolveTheme = (theme: Settings["theme"], prefersDark: boolean): "dark" | "light" =>
@@ -56,6 +59,7 @@ const pickSettings = (s: Settings): Settings => ({
   jumpInNewTab: s.jumpInNewTab,
   columns: s.columns,
   extInName: s.extInName,
+  windowsSelection: s.windowsSelection,
 });
 
 // Le scritture partono in ordine di chiamata: l'ultimo update() vince sempre.

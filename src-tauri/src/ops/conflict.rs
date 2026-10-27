@@ -3,6 +3,9 @@
 use super::model::{ConflictPolicy, Decision, Meta};
 use crate::error::{AppError, ErrorCode};
 use crate::paths::{normalize_lexical, same_path, to_extended};
+use crate::vfs::loc::Loc;
+use crate::vfs::provider::Purpose;
+use crate::vfs::router::Vfs;
 use std::ffi::OsString;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
@@ -41,21 +44,30 @@ pub(crate) fn same_file(src: &Path, dst: &Path) -> bool {
     }
 }
 
+/// Stesso elemento: in locale come `same_file`; sul remoto si decide sulla posizione, senza aprire niente.
+pub(crate) fn same_loc(src: &Loc, dst: &Loc) -> bool {
+    match (src, dst) {
+        (Loc::Local(s), Loc::Local(d)) => same_file(s, d),
+        _ => src.same(dst),
+    }
+}
+
 /// `None` = la decisione spetta all'utente. Se sorgente e destinazione sono lo stesso file
 /// l'unica politica ammessa è `RenameNew`; ogni altra dà `SAME_FILE` (sovrascrivere un file con
 /// se stesso lo distruggerebbe).
 pub fn resolve(
+    vfs: &Vfs,
     policy: &ConflictPolicy,
-    src: &Path,
-    dst: &Path,
+    src: &Loc,
+    dst: &Loc,
     src_meta: &Meta,
     dst_meta: &Meta,
 ) -> Result<Option<Decision>, AppError> {
-    let rename = || Some(Decision::Rename(next_free_name(dst)));
-    if same_file(src, dst) {
+    let rename = || Some(Decision::Rename(free_name(vfs, dst)));
+    if same_loc(src, dst) {
         return match policy {
             ConflictPolicy::RenameNew => Ok(rename()),
-            _ => Err(AppError::new(ErrorCode::SameFile, Some(src))),
+            _ => Err(src.error(ErrorCode::SameFile)),
         };
     }
     let pick = |overwrite: bool| Some(if overwrite { Decision::Overwrite } else { Decision::Skip });
@@ -88,10 +100,37 @@ pub fn next_free_name(dst: &Path) -> PathBuf {
         .expect("intervallo infinito")
 }
 
+/// Come `next_free_name`, anche sul remoto: lì un nome è libero se `stat` non lo trova (con la connessione
+/// caduta lo sembrano tutti, ma la scrittura non sostituisce mai un file che non ha deciso di sovrascrivere).
+pub fn free_name(vfs: &Vfs, dst: &Loc) -> Loc {
+    if let Loc::Local(p) = dst {
+        return Loc::Local(next_free_name(p));
+    }
+    let name = dst.file_name().unwrap_or_default();
+    // Come `Path::file_stem`/`extension`: `.bashrc` non ha estensione.
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name.as_str(), ""),
+    };
+    let parent = dst.parent().unwrap_or_else(|| dst.clone());
+    (2u64..)
+        .map(|n| parent.join(&format!("{stem} ({n}){ext}")))
+        .find(|c| vfs.remote(c, Purpose::Transfer).and_then(|(p, path)| p.stat(&path)).is_err())
+        .expect("intervallo infinito")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+    use crate::vfs::mem::{self, MemProvider};
+    use std::sync::Arc;
+
+    /// I test locali restano sui percorsi: si avvolgono in `Loc::Local`.
+    fn resolve(policy: &ConflictPolicy, src: &Path, dst: &Path, sm: &Meta, dm: &Meta) -> Result<Option<Decision>, AppError> {
+        let (src, dst) = (Loc::Local(src.into()), Loc::Local(dst.into()));
+        super::resolve(&mem::vfs(&[]), policy, &src, &dst, sm, dm)
+    }
 
     #[test]
     fn same_file_never_overwritten() {
@@ -166,6 +205,24 @@ mod tests {
         std::fs::write(&f, b"").unwrap();
         let m = Meta { size: 0, modified_ms: 0 };
         let got = resolve(&ConflictPolicy::RenameNew, Path::new(r"C:\other\f.txt"), &f, &m, &m).unwrap();
-        assert_eq!(got, Some(Decision::Rename(d.path().join("f (2).txt"))));
+        assert_eq!(got, Some(Decision::Rename(Loc::Local(d.path().join("f (2).txt")))));
+    }
+
+    #[test]
+    fn remote_conflicts_use_the_location() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/d/f.txt", b"");
+        m.add_file("/d/f (2).txt", b"");
+        m.add_file("/d/.bashrc", b"");
+        let vfs = mem::vfs(&[("m", &m)]);
+        let l = |s: &str| Loc::parse(s).unwrap();
+        assert_eq!(super::free_name(&vfs, &l("sftp://m/d/f.txt")), l("sftp://m/d/f (3).txt"));
+        assert_eq!(super::free_name(&vfs, &l("sftp://m/d/.bashrc")), l("sftp://m/d/.bashrc (2)"));
+        let mm = Meta { size: 1, modified_ms: 1 };
+        let same = super::resolve(&vfs, &ConflictPolicy::Overwrite, &l("sftp://m/d/f.txt"), &l("sftp://m/d/./f.txt"), &mm, &mm);
+        assert_eq!(same.unwrap_err().code, ErrorCode::SameFile);
+        // POSIX distingue le maiuscole: due file diversi.
+        let other = super::resolve(&vfs, &ConflictPolicy::Overwrite, &l("sftp://m/d/F.txt"), &l("sftp://m/d/f.txt"), &mm, &mm);
+        assert_eq!(other.unwrap(), Some(Decision::Overwrite));
     }
 }

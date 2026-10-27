@@ -10,7 +10,7 @@ const CATEGORIES: Category[] = ["appearance", "files", "editor", "terminal"];
 
 type Item =
   | { id: "theme" | "language" | "terminalShell"; category: Category; kind: "select"; options: string[] }
-  | { id: "showHidden" | "showSystem" | "confirmDelete" | "jumpInNewTab" | "useExternalEditor"; category: Category; kind: "check" }
+  | { id: "showHidden" | "showSystem" | "confirmDelete" | "jumpInNewTab" | "windowsSelection" | "useExternalEditor"; category: Category; kind: "check" }
   | { id: "externalEditor"; category: Category; kind: "text" };
 
 const ITEMS: Item[] = [
@@ -20,6 +20,7 @@ const ITEMS: Item[] = [
   { id: "showSystem", category: "files", kind: "check" },
   { id: "confirmDelete", category: "files", kind: "check" },
   { id: "jumpInNewTab", category: "files", kind: "check" },
+  { id: "windowsSelection", category: "files", kind: "check" },
   { id: "useExternalEditor", category: "editor", kind: "check" },
   { id: "externalEditor", category: "editor", kind: "text" },
   // Le opzioni di `terminalShell` si completano con le shell trovate (`termShells`).

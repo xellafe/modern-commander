@@ -1,6 +1,7 @@
 import type { DirSize, Drive, Entry } from "../ipc/types";
 import { typeKey } from "../lib/columns";
 import { compileMask } from "../lib/mask";
+import { parseRemote } from "../lib/paths";
 
 export type SortKey = "name" | "ext" | "size" | "date" | "created" | "accessed" | "type" | "none";
 export interface Row extends Entry {
@@ -55,10 +56,15 @@ export const hasSize = (sizes: Record<string, unknown>, name: string): boolean =
   Object.prototype.hasOwnProperty.call(sizes, name); // Object.hasOwn è ES2022, il target è ES2020
 
 export function parentPath(path: string): string | null {
+  const r = parseRemote(path);
+  if (r) {
+    if (r.path === "/") return null; // radice della connessione
+    return `${r.scheme}://${r.conn}${r.path.slice(0, r.path.lastIndexOf("/")) || "/"}`;
+  }
   const p = path.replace(/\\+$/, "");
   if (p.startsWith("\\\\")) {
     const parts = p.slice(2).split("\\");
-    return parts.length <= 2 ? null : `\\\\${parts.slice(0, -1).join("\\")}`;
+    return parts.length <= 1 ? null : `\\\\${parts.slice(0, -1).join("\\")}`;
   }
   const i = p.lastIndexOf("\\");
   if (i < 0) return null; // radice dell'unità ("C:")

@@ -10,8 +10,9 @@ import { useUi } from "../state/ui";
 import { dropOnGroup } from "./fileOps";
 import { registerNavigationCommands } from "./navigation";
 import { executeCommand } from "./registry";
+import { sourceCaps } from "../lib/paths";
 import {
-  classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowsAt, SHELL_COMMAND_IDS, shellPaths,
+  appMenuItems, classifyDrop, dragOut, isSelfDrop, pastDragThreshold, registerShellCommands, rowContextMenu, rowsAt, SHELL_COMMAND_IDS, shellPaths,
   suppressNativeContextMenu, toPhysical,
 } from "./shell";
 
@@ -56,6 +57,9 @@ test("shellPaths joins names, uses the drive root for drives and falls back to t
   expect(shellPaths("drives:", [{ ...f("D:\\", true), drive }])).toEqual(["D:\\"]);
   expect(shellPaths("C:\\x", [])).toEqual(["C:\\x"]);
   expect(shellPaths("drives:", [])).toEqual([]);
+  // Le sorgenti remote non arrivano mai alla shell di Windows.
+  expect(shellPaths("sftp://w/x", [{ ...f("a.txt") }])).toEqual([]);
+  expect(shellPaths("sftp://w/x", [])).toEqual([]);
 });
 
 test("toPhysical scales client coordinates and rounds to integers", () => {
@@ -104,6 +108,17 @@ test("cm_Edit with the external editor option opens that program and no tab", as
   await executeCommand("cm_Edit");
   expect(api.openWith).toHaveBeenCalledWith("code.exe", "C:\\x\\a.txt");
   expect(useLayout.getState().groups[0].tabIds).toHaveLength(1);
+  useSettings.setState({ useExternalEditor: false });
+});
+
+test("cm_Edit on a remote tab opens the internal editor even with the external editor option", async () => {
+  useSettings.setState({ externalEditor: "code.exe", useExternalEditor: true });
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/x");
+  setCursor("a.txt");
+  await executeCommand("cm_Edit");
+  expect(api.openWith).not.toHaveBeenCalled();
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "sftp://w/x/a.txt", mode: "editor" });
   useSettings.setState({ useExternalEditor: false });
 });
 
@@ -178,6 +193,7 @@ test("rows dragged onto another group open the copy dialog from the origin folde
   let finish!: () => void;
   vi.mocked(api.startDrag).mockReturnValue(new Promise<void>((r) => (finish = r)));
   vi.mocked(api.normalizePaths).mockImplementation(async (p) => p);
+  vi.mocked(api.shiftPressed).mockResolvedValue(false);
   mark("a.txt", "b.txt");
   const drag = dragOut("t1", "a.txt");
   await dropOnGroup("g1", ["C:\\x\\a.txt", "C:\\x\\b.txt"]); // sullo stesso gruppo: niente
@@ -187,6 +203,15 @@ test("rows dragged onto another group open the copy dialog from the origin folde
     kind: "copyMove", move: false, sources: ["C:\\x\\a.txt", "C:\\x\\b.txt"], from: "C:\\x", dest: "D:\\y",
     requireChange: false, targets: [], policy: "ask",
   });
+  // Con Maiusc al rilascio (letto dal sistema, o passato dal drag interno) è uno spostamento.
+  const paths = ["C:\\x\\a.txt", "C:\\x\\b.txt"];
+  useUi.setState({ dialog: null });
+  vi.mocked(api.shiftPressed).mockResolvedValue(true);
+  await dropOnGroup("g2", paths);
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", move: true });
+  useUi.setState({ dialog: null });
+  await dropOnGroup("g2", paths, false);
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", move: false });
   finish();
   await drag;
 });
@@ -249,4 +274,67 @@ test("every shell command has a title in both languages", async () => {
     expect(en.commands[id], id).toBeTruthy();
     expect(it.commands[id], id).toBeTruthy();
   }
+});
+
+const ids = (caps: string, rows: ReturnType<typeof f>[]) => appMenuItems(sourceCaps(caps), rows as never).map((i) => i.commandId);
+
+test("appMenuItems: SFTP with one file has every item, in order", () => {
+  expect(appMenuItems(sourceCaps("sftp://w/x"), [f("a.txt")] as never)).toEqual([
+    { commandId: "cm_List", labelKey: "commands.cm_List" },
+    { commandId: "cm_Edit", labelKey: "commands.cm_Edit" },
+    { commandId: "cm_Copy", labelKey: "commands.cm_Copy" },
+    { commandId: "cm_RenMov", labelKey: "commands.cm_RenMov" },
+    { commandId: "cm_RenameOnly", labelKey: "commands.cm_RenameOnly" },
+    { commandId: "cm_Delete", labelKey: "commands.cm_Delete" },
+    { commandId: "cm_MkDir", labelKey: "commands.cm_MkDir" },
+    { commandId: "cm_RereadSource", labelKey: "commands.cm_RereadSource" },
+    { commandId: "mc_CopyPath", labelKey: "commands.mc_CopyPath" },
+  ]);
+});
+
+test("appMenuItems: two files drop Edit and Rename; a folder drops Edit only; HTTP is read-only", () => {
+  expect(ids("sftp://w/x", [f("a"), f("b")])).toEqual(
+    ["cm_List", "cm_Copy", "cm_RenMov", "cm_Delete", "cm_MkDir", "cm_RereadSource", "mc_CopyPath"]);
+  expect(ids("sftp://w/x", [f("d", true)])).not.toContain("cm_Edit");
+  expect(ids("sftp://w/x", [f("d", true)])).toContain("cm_RenameOnly");
+  expect(ids("http://w/x", [f("a")])).toEqual(["cm_List", "cm_Copy", "cm_RereadSource", "mc_CopyPath"]);
+});
+
+test("dropOnGroup with remote sources skips normalizePaths", async () => {
+  useLayout.setState({
+    groups: [{ id: "g1", tabIds: ["t1"], activeTabId: "t1" }, { id: "g2", tabIds: ["t2"], activeTabId: "t2" }],
+    tabs: { t1: { id: "t1", path: "sftp://w/x" }, t2: { id: "t2", path: "D:\\y" } },
+    activeGroupId: "g1",
+    activationOrder: ["g1", "g2"],
+  });
+  await dropOnGroup("g2", ["sftp://w/x/a.txt"]);
+  expect(api.normalizePaths).not.toHaveBeenCalled();
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", sources: ["sftp://w/x/a.txt"], from: "sftp://w/x", dest: "D:\\y" });
+});
+
+test("remote rows never start an OLE drag", async () => {
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/x");
+  await dragOut("t1", "a.txt");
+  expect(api.startDrag).not.toHaveBeenCalled();
+});
+
+test("remote menu: right-click on an unmarked row clears the marks, on a marked row keeps them, so menu and commands share targets", async () => {
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt"), f("b.txt"), f("c.txt")]);
+  await useTabViews.getState().load("t1", "sftp://w/x");
+  const click = (name: string | null) => rowContextMenu("t1", name === null ? null : indexOf(name), { preventDefault() {}, button: 2, clientX: 5, clientY: 6 } as never);
+  const menu = () => (useTabViews.getState().overlay as { items: { commandId: string }[]; x: number; y: number });
+  mark("a.txt", "b.txt");
+  click("c.txt");
+  expect(view().marked.size).toBe(0);
+  expect(view().rows[view().cursor].name).toBe("c.txt");
+  expect(menu().items.map((i) => i.commandId)).toContain("cm_Edit"); // un solo file
+  expect(menu()).toMatchObject({ x: 5, y: 6 });
+  mark("a.txt", "b.txt");
+  click("b.txt");
+  expect(view().marked.size).toBe(2);
+  expect(menu().items.map((i) => i.commandId)).not.toContain("cm_Edit");
+  click(null); // area vuota: le marcate
+  expect(view().marked.size).toBe(2);
+  expect(menu().items.map((i) => i.commandId)).not.toContain("cm_RenameOnly");
 });

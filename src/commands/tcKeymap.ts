@@ -54,6 +54,7 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
 
   'Ctrl+R': 'cm_RereadSource',
   'Ctrl+D': 'cm_DirectoryHotlist',
+  'Ctrl+F': 'cm_FtpConnect',
   'Ctrl+F1': 'cm_SrcShort',
   'Ctrl+F2': 'cm_SrcLong',
   'Ctrl+Shift+F1': 'cm_SrcThumbs',

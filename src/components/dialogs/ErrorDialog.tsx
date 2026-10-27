@@ -41,3 +41,32 @@ export function ErrorDialog({ prompt }: { prompt: ErrorPrompt }) {
     </Dialog>
   );
 }
+
+type UnsafeWritePrompt = Extract<Prompt, { type: "unsafeWrite" }>;
+
+/** Il server non permette la scrittura sicura: si scrive direttamente solo se l'utente lo conferma. */
+export function UnsafeWriteDialog({ prompt }: { prompt: UnsafeWritePrompt }) {
+  const { t } = useTranslation();
+  const { busy, error, send } = useAnswer(prompt);
+  const [all, setAll] = useState(false);
+  const answer = (proceed: boolean) => void send({ type: "unsafeWrite", proceed, applyToAll: all });
+
+  return (
+    <Dialog
+      title={t("ops.unsafeWriteTitle")}
+      onCancel={() => answer(false)}
+      actions={<>
+        <button aria-disabled={busy || undefined} onClick={() => answer(true)}>{t("ops.saveAnyway")}</button>
+        <button aria-disabled={busy || undefined} onClick={() => answer(false)} data-autofocus>{t("ops.cancel")}</button>
+      </>}
+    >
+      <p>{t("ops.unsafeWrite")}</p>
+      <div className="mc-path">{prompt.path}</div>
+      <label className="mc-check">
+        <input type="checkbox" checked={all} onChange={(ev) => setAll(ev.target.checked)} />
+        {t("ops.forAll")}
+      </label>
+      {error && <div className="mc-field-error" role="alert">{error}</div>}
+    </Dialog>
+  );
+}

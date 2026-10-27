@@ -1,16 +1,22 @@
 // Terminale a schede nel pannello in basso: Ctrl+ò mostra/nasconde, Ctrl+Shift+ò ne apre uno nuovo.
 import type { ShellKind } from "../ipc/types";
-import { DRIVES } from "../lib/paths";
-import { activeTab, useLayout } from "../state/layout";
+import { sourceCaps } from "../lib/paths";
+import { useLayout } from "../state/layout";
 import { pendingTerminals, toggleTerminal, useTerminals } from "../state/terminals";
 import { useUi } from "../state/ui";
 import { registerCommand } from "./registry";
 
-/** Apre un terminale nella cartella della scheda attiva del gruppo attivo (`drives:` passa vuota: il backend usa la cartella utente). */
+/**
+ * Apre un terminale nella cartella della scheda attiva del gruppo attivo. Su una scheda remota o nelle unità vale
+ * l'ultima scheda locale attiva (gruppi dal più recente); senza, la cartella vuota: il backend usa quella dell'utente.
+ */
 export async function newTerminal(shell?: ShellKind): Promise<void> {
-  const { path } = activeTab(useLayout.getState());
+  const l = useLayout.getState();
+  const cwd = l.activationOrder
+    .map((id) => l.tabs[l.groups.find((g) => g.id === id)!.activeTabId].path)
+    .find((p) => sourceCaps(p).shell) ?? "";
   useUi.getState().showBottomPanel("terminal");
-  await useTerminals.getState().create(path === DRIVES ? "" : path, shell);
+  await useTerminals.getState().create(cwd, shell);
 }
 
 /** Mostra il pannello sul terminale (aprendone uno se non ce n'è) quando se ne sceglie la scheda. */

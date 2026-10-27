@@ -43,7 +43,7 @@ class FakeModel {
   }
 }
 
-const info = (modifiedMs: number): FileInfo => ({ size: 9, isDir: false, createdMs: 0, modifiedMs, accessedMs: 0, attributes: 0 });
+const info = (modifiedMs: number): FileInfo => ({ size: 9, isDir: false, createdMs: 0, modifiedMs, accessedMs: 0, attributes: 0, mtimeReliable: true });
 const bytes = (s: string) => new TextEncoder().encode(s);
 const model = () => editorModel("t1") as unknown as FakeModel;
 const err = (code: string) => ({ code, path: "C:\\a.ts", detail: null });
@@ -259,4 +259,44 @@ test("saves of different files do run independently", async () => {
   expect(api.writeTextFile).toHaveBeenCalledTimes(2);
   w.gates.splice(0).forEach((g) => g());
   await Promise.all(both);
+});
+
+test("remote: UNSAFE_WRITE opens the confirmation and 'save anyway' retries with allowUnsafe and the opened size", async () => {
+  await useEditors.getState().open("t1", "sftp://h/a.ts");
+  model().type("nuovo");
+  vi.mocked(api.writeTextFile).mockRejectedValueOnce(err("UNSAFE_WRITE"));
+  await useEditors.getState().save("t1");
+  expect(api.writeTextFile).toHaveBeenLastCalledWith("sftp://h/a.ts", "nuovo", "utf-8", false, 100, false, 9);
+  const d = useUi.getState().dialog as Extract<NonNullable<ReturnType<typeof useUi.getState>["dialog"]>, { kind: "saveError" }>;
+  expect(d).toEqual({ kind: "saveError", tabId: "t1", code: "UNSAFE_WRITE", opts: {} });
+  useUi.getState().closeDialog();
+  vi.mocked(api.writeTextFile).mockResolvedValueOnce({ ...info(600), size: 5 });
+  await useEditors.getState().save("t1", retryOptions(d.opts, d.code));
+  expect(api.writeTextFile).toHaveBeenLastCalledWith("sftp://h/a.ts", "nuovo", "utf-8", false, 100, true, 9);
+  expect(useEditors.getState().docs.t1).toMatchObject({ dirty: false, modifiedMs: 600 });
+  // Il salvataggio dopo parte dalla data e dalla dimensione appena scritte, e di nuovo senza scrittura diretta.
+  vi.mocked(api.writeTextFile).mockResolvedValueOnce(info(700));
+  model().type("ancora");
+  await useEditors.getState().save("t1");
+  expect(api.writeTextFile).toHaveBeenLastCalledWith("sftp://h/a.ts", "ancora", "utf-8", false, 600, false, 5);
+});
+
+test("remote with unreliable dates: every save asks first, and only the confirmation writes", async () => {
+  vi.mocked(api.fileInfo).mockResolvedValue({ ...info(100), mtimeReliable: false });
+  await useEditors.getState().open("t1", "ftp://h/a.ts");
+  model().type("nuovo");
+  await useEditors.getState().save("t1");
+  expect(api.writeTextFile).not.toHaveBeenCalled();
+  const d = useUi.getState().dialog as Extract<NonNullable<ReturnType<typeof useUi.getState>["dialog"]>, { kind: "saveError" }>;
+  expect(d).toEqual({ kind: "saveError", tabId: "t1", code: "UNRELIABLE_MTIME", opts: {} });
+  useUi.getState().closeDialog();
+  vi.mocked(api.writeTextFile).mockResolvedValue({ ...info(200), mtimeReliable: false });
+  await useEditors.getState().save("t1", retryOptions(d.opts, d.code));
+  expect(api.writeTextFile).toHaveBeenCalledTimes(1);
+  expect(api.writeTextFile).toHaveBeenLastCalledWith("ftp://h/a.ts", "nuovo", "utf-8", false, 100, false, 9);
+  // Il salvataggio successivo chiede di nuovo.
+  model().type("altro");
+  await useEditors.getState().save("t1");
+  expect(api.writeTextFile).toHaveBeenCalledTimes(1);
+  expect(useUi.getState().dialog).toMatchObject({ code: "UNRELIABLE_MTIME" });
 });

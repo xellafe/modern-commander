@@ -1,15 +1,19 @@
 import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { folderName } from "../../lib/paths";
 import { useJobs } from "../../state/jobs";
-import { useUi } from "../../state/ui";
+import { useUi, type DialogRequest } from "../../state/ui";
 import { ConflictDialog } from "./ConflictDialog";
+import { ConnectionsDialog } from "./ConnectionsDialog";
 import { CopyMoveDialog } from "./CopyMoveDialog";
 import { DeleteConfirm } from "./DeleteConfirm";
-import { ErrorDialog } from "./ErrorDialog";
+import { ErrorDialog, UnsafeWriteDialog } from "./ErrorDialog";
 import { ExitConfirm } from "./ExitConfirm";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
+import { PasswordDialog } from "./PasswordDialog";
 import { SaveErrorDialog } from "./SaveErrorDialog";
+import { TrustDialog } from "./TrustDialog";
 import { UnsavedDialog } from "./UnsavedDialog";
 import { trapTab, useModalFocus } from "./focusTrap";
 import "./dialogs.css";
@@ -23,6 +27,8 @@ interface DialogProps {
   children: ReactNode;
   actions: ReactNode;
 }
+
+const ARROWS: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
 
 /**
  * Finestra modale: prende il focus all'apertura (l'elemento con `data-autofocus`, altrimenti il
@@ -45,6 +51,16 @@ export function Dialog({ title, onCancel, onConfirm, children, actions }: Dialog
       onConfirm();
     } else if (e.key === "Tab") {
       trapTab(e, ref.current!);
+    } else if (!e.defaultPrevented && e.target instanceof HTMLButtonElement && ARROWS[e.key]) {
+      // Come nei messaggi di Windows: le frecce passano al pulsante accanto, fra quelli dello stesso gruppo.
+      const row = [...e.target.parentElement!.children].filter(
+        (b): b is HTMLButtonElement => b instanceof HTMLButtonElement && !b.disabled && b.getAttribute("aria-disabled") !== "true",
+      );
+      const i = row.indexOf(e.target);
+      if (i < 0 || row.length < 2) return;
+      e.preventDefault();
+      e.stopPropagation();
+      row[(i + ARROWS[e.key] + row.length) % row.length].focus();
     }
   };
 
@@ -64,8 +80,19 @@ export function Dialog({ title, onCancel, onConfirm, children, actions }: Dialog
 export function useWhat(paths: string[]): string {
   const { t } = useTranslation();
   return paths.length === 1
-    ? t("ops.oneItem", { name: paths[0].slice(paths[0].lastIndexOf("\\") + 1) })
+    ? t("ops.oneItem", { name: folderName(paths[0]) })
     : t("ops.items", { count: paths.length });
+}
+
+/** Avviso con il solo OK. */
+function MessageDialog({ req }: { req: Extract<DialogRequest, { kind: "message" }> }) {
+  const { t } = useTranslation();
+  const close = useUi.getState().closeDialog;
+  return (
+    <Dialog title={t(req.title)} onCancel={close} actions={<button className="primary" onClick={close}>{t("ops.ok")}</button>}>
+      <p>{t(req.text, req.values)}</p>
+    </Dialog>
+  );
 }
 
 /** Una finestra alla volta: prima quella aperta da un comando, poi i prompt della coda (il più vecchio). */
@@ -80,9 +107,15 @@ export function DialogHost() {
     case "exit": return <ExitConfirm req={dialog} />;
     case "unsaved": return <UnsavedDialog req={dialog} />;
     case "saveError": return <SaveErrorDialog req={dialog} />;
+    case "connections": return <ConnectionsDialog req={dialog} />;
+    case "password": return <PasswordDialog req={dialog} />;
+    case "trust": return <TrustDialog req={dialog} />;
+    case "message": return <MessageDialog req={dialog} />;
   }
   if (!prompt) return null;
-  return prompt.type === "conflict"
-    ? <ConflictDialog key={prompt.promptId} prompt={prompt} />
-    : <ErrorDialog key={prompt.promptId} prompt={prompt} />;
+  switch (prompt.type) {
+    case "conflict": return <ConflictDialog key={prompt.promptId} prompt={prompt} />;
+    case "unsafeWrite": return <UnsafeWriteDialog key={prompt.promptId} prompt={prompt} />;
+    default: return <ErrorDialog key={prompt.promptId} prompt={prompt} />;
+  }
 }

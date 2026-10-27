@@ -100,7 +100,7 @@ fn set_attributes_no_follow(p: &Path, attrs: u32) -> windows::core::Result<()> {
 /// Prima di sostituire `dst`: MoveFileExW rifiuta di sostituire un file di sola lettura. Gli
 /// attributi del file nuovo vengono comunque dalla sorgente. Su una cartella la sola lettura è
 /// un marcatore della Shell e la sostituzione fallirebbe comunque: non si tocca.
-fn clear_readonly_of(dst: &Path) -> Result<(), AppError> {
+pub(crate) fn clear_readonly_of(dst: &Path) -> Result<(), AppError> {
     match std::fs::symlink_metadata(to_extended(dst)) {
         Ok(m) if !m.is_dir() => clear_readonly(dst, m.file_attributes()),
         _ => Ok(()),
@@ -115,7 +115,7 @@ fn remove_part(part: &Path) {
     }
 }
 
-fn move_file(src: &Path, dst: &Path, flags: MOVE_FILE_FLAGS) -> Result<(), AppError> {
+pub(crate) fn move_file(src: &Path, dst: &Path, flags: MOVE_FILE_FLAGS) -> Result<(), AppError> {
     unsafe { MoveFileExW(&wide(src), &wide(dst), flags) }.map_err(|e| {
         let err = from_win(&e, src);
         match err.code {

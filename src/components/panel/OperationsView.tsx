@@ -69,8 +69,11 @@ export function OperationsView({ visible }: { visible: boolean }) {
   return (
     <div className="mc-ops">
       <div className="mc-ops-bar">
-        <button onClick={() => clearFinished().then(refresh, console.error)} disabled={!order.some((id) => jobs[id] && isFinished(jobs[id]))}>
-          {t("ops.clearFinished")}
+        <button
+          title={t("ops.clearFinished")} aria-label={t("ops.clearFinished")}
+          onClick={() => clearFinished().then(refresh, console.error)} disabled={!order.some((id) => jobs[id] && isFinished(jobs[id]))}
+        >
+          <Trash2 size={13} />
         </button>
       </div>
       {order.length === 0 && <div className="mc-ops-empty">{t("ops.empty")}</div>}

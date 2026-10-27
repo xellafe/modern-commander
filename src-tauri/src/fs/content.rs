@@ -6,6 +6,10 @@ use super::listing::FILETIME_UNIX_DIFF_MS;
 use crate::error::{AppError, ErrorCode};
 use crate::ops::exec::{PART_SUFFIX, from_win, wide};
 use crate::paths::to_extended;
+use crate::vfs::loc::Loc;
+use crate::vfs::provider::{Provider, Purpose, stream_error};
+use crate::vfs::router::Vfs;
+use crate::vfs::transfer;
 use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -32,6 +36,8 @@ pub struct FileInfo {
     pub accessed_ms: i64,
     /// Attributi Win32 grezzi (`FILE_ATTRIBUTE_*`).
     pub attributes: u32,
+    /// Date al secondo o meglio: sempre in locale, `Caps::precise_mtime` sul remoto.
+    pub mtime_reliable: bool,
 }
 
 /// Apre in sola lettura senza escludere nessuno, anche con percorsi oltre i 260 caratteri.
@@ -39,7 +45,7 @@ pub(crate) fn open_shared(path: &Path) -> std::io::Result<File> {
     File::options().read(true).share_mode(SHARE_ALL).open(to_extended(path))
 }
 
-fn ms(filetime: u64) -> i64 {
+pub(crate) fn ms(filetime: u64) -> i64 {
     (filetime / 10_000) as i64 - FILETIME_UNIX_DIFF_MS
 }
 
@@ -52,6 +58,22 @@ pub fn file_info(path: &Path) -> Result<FileInfo, AppError> {
         modified_ms: ms(m.last_write_time()),
         accessed_ms: ms(m.last_access_time()),
         attributes: m.file_attributes(),
+        mtime_reliable: true,
+    })
+}
+
+/// `file_info` di un elemento remoto: una sola data, ripetuta in creazione e accesso; niente attributi.
+pub fn remote_file_info(p: &dyn Provider, path: &str) -> Result<FileInfo, AppError> {
+    let s = p.stat(path)?;
+    let t = s.modified_ms.unwrap_or(0);
+    Ok(FileInfo {
+        size: s.size,
+        is_dir: s.is_dir,
+        created_ms: t,
+        modified_ms: t,
+        accessed_ms: t,
+        attributes: 0,
+        mtime_reliable: p.caps().precise_mtime,
     })
 }
 
@@ -65,6 +87,28 @@ pub fn read_chunk(path: &Path, offset: u64, len: u32) -> Result<Vec<u8>, AppErro
     f.seek(SeekFrom::Start(offset)).map_err(err)?;
     let mut buf = Vec::new();
     f.take(u64::from(len)).read_to_end(&mut buf).map_err(err)?;
+    Ok(buf)
+}
+
+/// `read_chunk` di un file remoto.
+pub fn remote_chunk(p: &dyn Provider, path: &str, offset: u64, len: u32) -> Result<Vec<u8>, AppError> {
+    if len > MAX_CHUNK {
+        return Err(AppError::new(ErrorCode::InvalidRequest, Some(Path::new(path))));
+    }
+    p.read_at(path, offset, len)
+}
+
+/// `read_whole` di un file remoto.
+pub fn remote_whole(p: &dyn Provider, path: &str, max: u64) -> Result<Vec<u8>, AppError> {
+    let too_large = || AppError::new(ErrorCode::TooLarge, Some(Path::new(path)));
+    if p.stat(path)?.size > max {
+        return Err(too_large());
+    }
+    let mut buf = Vec::new();
+    p.reader(path)?.take(max.saturating_add(1)).read_to_end(&mut buf).map_err(|e| stream_error(e, path))?;
+    if buf.len() as u64 > max {
+        return Err(too_large());
+    }
     Ok(buf)
 }
 
@@ -206,6 +250,48 @@ pub fn write_text_file(path: &Path, text: &str, encoding: &str, bom: bool, expec
         return Err(e);
     }
     file_info(path)
+}
+
+/// `write_text_file` di un file remoto. Con `expected_modified_ms` il file deve avere ancora la data (e, se data,
+/// la dimensione) dell'apertura, altrimenti `CHANGED_ON_DISK`. Si scrive con la sequenza di `transfer::write`
+/// (temporaneo e rinomina); se il server non la permette, `UNSAFE_WRITE` senza toccare il file, a meno di
+/// `allow_unsafe` (l'utente ha confermato), che scrive direttamente sul file.
+#[allow(clippy::too_many_arguments)]
+pub fn remote_write_text_file(
+    vfs: &Vfs,
+    loc: &Loc,
+    text: &str,
+    encoding: &str,
+    bom: bool,
+    expected_modified_ms: Option<i64>,
+    expected_size: Option<u64>,
+    allow_unsafe: bool,
+) -> Result<FileInfo, AppError> {
+    let bytes = encode_text(text, encoding, bom).map_err(|e| AppError { path: Some(loc.to_string()), ..e })?;
+    let (p, path) = vfs.remote(loc, Purpose::Browse)?;
+    if let Some(t) = expected_modified_ms {
+        let current = match p.stat(&path) {
+            Ok(s) => Some(s),
+            Err(e) if e.code == ErrorCode::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        // `unwrap_or(0)` come in `remote_file_info`, da cui l'editor ha preso la data.
+        let same = current.is_some_and(|s| s.modified_ms.unwrap_or(0) == t && expected_size.is_none_or(|n| n == s.size));
+        if !same {
+            return Err(loc.error(ErrorCode::ChangedOnDisk));
+        }
+    }
+    let mut refused = false;
+    let mut confirm = |_: &Loc| {
+        refused = !allow_unsafe;
+        allow_unsafe
+    };
+    // ponytail: come in locale, tra il controllo qui sopra e la rinomina un altro client può ancora scrivere il file.
+    match transfer::write(vfs, loc, true, &mut confirm, &mut |_| true, || Ok((bytes.as_slice(), None, path.clone()))) {
+        Err(e) if e.code == ErrorCode::Cancelled && refused => return Err(loc.error(ErrorCode::UnsafeWrite)),
+        r => r?,
+    }
+    remote_file_info(&*p, &path)
 }
 
 #[cfg(test)]
@@ -448,6 +534,49 @@ mod tests {
         assert!(results.iter().any(|r| r.is_ok()));
         // Il file è intero: uno dei testi, mai un misto o un troncamento.
         assert!(texts.contains(&std::fs::read_to_string(&f).unwrap()));
+    }
+
+    fn remote(m: &std::sync::Arc<crate::vfs::mem::MemProvider>) -> (crate::vfs::router::Vfs, crate::vfs::loc::Loc) {
+        (crate::vfs::mem::vfs(&[("m", m)]), crate::vfs::loc::Loc::parse("sftp://m/d/a.txt").unwrap())
+    }
+
+    #[test]
+    fn remote_save_detects_changes() {
+        let m = std::sync::Arc::new(crate::vfs::mem::MemProvider::new());
+        m.add_file("/d/a.txt", b"v1");
+        m.set_meta("/d/a.txt", Some(2_000), Some(0o640)).unwrap();
+        let (v, l) = remote(&m);
+        // Data diversa da quella dell'apertura, poi stessa data ma dimensione diversa: niente scrittura.
+        for (t, size) in [(1_000, Some(2)), (2_000, Some(5))] {
+            let e = remote_write_text_file(&v, &l, "mio", "utf-8", false, Some(t), size, false).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+            assert_eq!(m.data("/d/a.txt").unwrap(), b"v1");
+        }
+        let info = remote_write_text_file(&v, &l, "mio", "utf-8", false, Some(2_000), Some(2), false).unwrap();
+        assert_eq!((m.data("/d/a.txt").unwrap(), info.size), (b"mio".to_vec(), 3));
+        // Scrittura sicura (temporaneo e rinomina): nessun `.mcpart` resta, i permessi POSIX si riapplicano.
+        assert_eq!(m.list("/d").unwrap().into_iter().map(|s| s.name).collect::<Vec<_>>(), ["a.txt"]);
+        assert_eq!(m.stat("/d/a.txt").unwrap().mode, Some(0o640));
+        // Un file sparito dal server conta come cambiato.
+        m.delete("/d/a.txt", false).unwrap();
+        let e = remote_write_text_file(&v, &l, "mio", "utf-8", false, Some(2_000), Some(3), false).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+        assert!(m.data("/d/a.txt").is_none());
+    }
+
+    #[test]
+    fn remote_save_unsafe_needs_flag() {
+        let mut m = crate::vfs::mem::MemProvider::new();
+        m.atomic_replace = false;
+        let m = std::sync::Arc::new(m);
+        m.add_file("/d/a.txt", b"vecchio");
+        let (v, l) = remote(&m);
+        let e = remote_write_text_file(&v, &l, "nuovo", "utf-8", false, None, None, false).unwrap_err();
+        assert_eq!((e.code, e.path.as_deref()), (ErrorCode::UnsafeWrite, Some("sftp://m/d/a.txt")));
+        assert_eq!(m.data("/d/a.txt").unwrap(), b"vecchio");
+        remote_write_text_file(&v, &l, "nuovo", "utf-8", false, None, None, true).unwrap();
+        assert_eq!(m.data("/d/a.txt").unwrap(), b"nuovo");
+        assert_eq!(m.list("/d").unwrap().len(), 1);
     }
 
     #[test]

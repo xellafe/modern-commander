@@ -5,8 +5,9 @@ import { useUi, type DialogRequest } from "../../state/ui";
 import { Dialog } from "./Dialog";
 
 /**
- * Salvataggio che perderebbe dati: file cambiato da un altro programma (sovrascrivi o annulla) oppure caratteri
- * che la codifica non rappresenta (salva in UTF-8 o annulla). Il pulsante sicuro ha il focus.
+ * Salvataggio che perderebbe dati: file cambiato da un altro programma (sovrascrivi o annulla), caratteri che la
+ * codifica non rappresenta (salva in UTF-8 o annulla), server senza scrittura sicura (salva lo stesso o annulla).
+ * Il pulsante sicuro ha il focus. Su un server con date poco affidabili ogni salvataggio si conferma qui (focus su Annulla).
  */
 export function SaveErrorDialog({ req }: { req: Extract<DialogRequest, { kind: "saveError" }> }) {
   const { t } = useTranslation();
@@ -16,21 +17,30 @@ export function SaveErrorDialog({ req }: { req: Extract<DialogRequest, { kind: "
     close();
     void useEditors.getState().save(req.tabId, opts);
   };
-  const changed = req.code === "CHANGED_ON_DISK";
+  const retry = () => saveWith(retryOptions(req.opts, req.code));
   const name = folderName(doc?.path ?? "");
+  const risky = req.code === "CHANGED_ON_DISK" || req.code === "UNSAFE_WRITE";
+  // Anche la conferma per le date poco affidabili parte da Annulla: un Invio distratto non salva.
+  const cancelFirst = risky || req.code === "UNRELIABLE_MTIME";
+  const [title, text, action] = {
+    CHANGED_ON_DISK: ["editor.saveErrorTitle", t("editor.changedOnDisk", { name }), "editor.overwrite"],
+    UNMAPPABLE_CHARS: ["editor.saveErrorTitle", t("editor.unmappable", { name, encoding: doc?.encoding }), "editor.saveUtf8"],
+    UNSAFE_WRITE: ["ops.unsafeWriteTitle", t("ops.unsafeWrite"), "ops.saveAnyway"],
+    UNRELIABLE_MTIME: ["editor.unreliableMtimeTitle", t("editor.unreliableMtime", { name }), "editor.save"],
+  }[req.code];
 
   return (
     <Dialog
-      title={t("editor.saveErrorTitle")}
+      title={t(title)}
       onCancel={close}
       actions={<>
-        {changed
-          ? <button className="danger" onClick={() => saveWith(retryOptions(req.opts, req.code))}>{t("editor.overwrite")}</button>
-          : <button className="primary" onClick={() => saveWith(retryOptions(req.opts, req.code))} data-autofocus>{t("editor.saveUtf8")}</button>}
-        <button onClick={close} data-autofocus={changed || undefined}>{t("ops.cancel")}</button>
+        {risky
+          ? <button className="danger" onClick={retry}>{t(action)}</button>
+          : <button className="primary" onClick={retry} data-autofocus={!cancelFirst || undefined}>{t(action)}</button>}
+        <button onClick={close} data-autofocus={cancelFirst || undefined}>{t("ops.cancel")}</button>
       </>}
     >
-      <p>{changed ? t("editor.changedOnDisk", { name }) : t("editor.unmappable", { name, encoding: doc?.encoding })}</p>
+      <p>{text}</p>
     </Dialog>
   );
 }

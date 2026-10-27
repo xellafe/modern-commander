@@ -33,7 +33,7 @@ Non si possono automatizzare: richiedono UAC, hardware reale o l'osservazione de
 ## Follow-up noti
 
 **Prima del rilascio pubblico**
-- CSP stretta in `tauri.conf.json` (oggi `csp: null`), da provare sulla build.
+- ✅ Risolto nella fase 3a (Task 14, commit `feat(security): CSP e verifiche della fase 3a`): CSP stretta in `tauri.conf.json`, motivazioni e verifiche in `fase-3a-follow-up.md` (sezione "CSP"). Testo originale: CSP stretta in `tauri.conf.json` (oggi `csp: null`), da provare sulla build.
 
 **Operazioni su file**
 - `runner.rs` `dir()`: nei nuovi tentativi usare `self.items[i].unlisted`. Oggi il difetto è latente.

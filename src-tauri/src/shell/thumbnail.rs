@@ -120,7 +120,8 @@ pub(crate) fn bgra_to_rgba(px: &mut [u8]) {
 /// Miniatura come `[larghezza u32 LE][altezza u32 LE][RGBA]`: arriva al frontend come `ArrayBuffer`.
 #[tauri::command]
 pub async fn get_thumbnail(path: String, size: u32) -> Result<Response, AppError> {
-    let (w, h, rgba) = crate::fs::blocking(move || thumbnail(Path::new(&path), size)).await??;
+    let path = crate::fs::local_only(&path)?;
+    let (w, h, rgba) = crate::fs::blocking(move || thumbnail(&path, size)).await??;
     let mut out = Vec::with_capacity(8 + rgba.len());
     out.extend_from_slice(&w.to_le_bytes());
     out.extend_from_slice(&h.to_le_bytes());

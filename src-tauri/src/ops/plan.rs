@@ -3,18 +3,23 @@
 //! Una cartella che qui non si riesce a leggere non fa fallire il job: resta nell'elenco come
 //! `unlisted` e il runner la elenca quando ci arriva, dove un errore diventa un prompt
 //! (riprova, anche come amministratore, salta, annulla).
+//!
+//! Le posizioni locali si leggono con `std::fs`, quelle remote con `Provider::stat`/`list`.
 
 use super::model::{FileItem, JobKind, JobSpec, ListEntry};
 use crate::error::{AppError, ErrorCode};
 use crate::mask::match_mask;
-use crate::paths::{is_within, normalize_lexical, same_path, to_extended, volume_key};
-use std::ffi::OsString;
+use crate::paths::{normalize_lexical, to_extended};
+use crate::vfs::loc::Loc;
+use crate::vfs::provider::{Purpose, Stat};
+use crate::vfs::router::Vfs;
+use std::ffi::{OsStr, OsString};
 use std::fs::Metadata;
 use std::os::windows::fs::FileTypeExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn invalid(p: Option<&Path>) -> AppError {
-    AppError::new(ErrorCode::InvalidRequest, p)
+fn invalid(p: Option<&Loc>) -> AppError {
+    p.map_or_else(|| AppError::new(ErrorCode::InvalidRequest, None), |l| l.error(ErrorCode::InvalidRequest))
 }
 
 fn entry(name: OsString, m: &Metadata) -> ListEntry {
@@ -22,9 +27,22 @@ fn entry(name: OsString, m: &Metadata) -> ListEntry {
     ListEntry { name, dir: m.is_dir(), dir_link: m.file_type().is_symlink_dir(), size: m.len() }
 }
 
-fn stat(p: &Path) -> Result<ListEntry, AppError> {
-    let m = std::fs::symlink_metadata(to_extended(p)).map_err(|e| AppError::from_io(&e, p))?;
-    Ok(entry(p.file_name().unwrap_or_default().to_os_string(), &m))
+/// `Stat.is_dir` vale anche per un collegamento a cartella: qui, come in locale, `dir` è solo la cartella vera.
+fn remote_entry(s: Stat) -> ListEntry {
+    ListEntry { name: s.name.into(), dir: s.is_dir && !s.dir_link, dir_link: s.dir_link, size: s.size }
+}
+
+fn stat(vfs: &Vfs, l: &Loc) -> Result<ListEntry, AppError> {
+    match l {
+        Loc::Local(p) => {
+            let m = std::fs::symlink_metadata(to_extended(p)).map_err(|e| AppError::from_io(&e, p))?;
+            Ok(entry(p.file_name().unwrap_or_default().to_os_string(), &m))
+        }
+        r => {
+            let (prov, path) = vfs.remote(r, Purpose::Transfer)?;
+            Ok(remote_entry(prov.stat(&path)?))
+        }
+    }
 }
 
 /// Contenuto diretto di una cartella, senza seguire i collegamenti (`LocalExecutor::list_dir`).
@@ -40,10 +58,45 @@ pub fn read_entries(dir: &Path) -> Result<Vec<ListEntry>, AppError> {
     Ok(out)
 }
 
+/// Contenuto diretto di una cartella: `read_entries` in locale, `Provider::list` sul remoto.
+pub(crate) fn entries(vfs: &Vfs, dir: &Loc) -> Result<Vec<ListEntry>, AppError> {
+    if let Loc::Local(p) = dir {
+        return read_entries(p);
+    }
+    let (prov, path) = vfs.remote(dir, Purpose::Transfer)?;
+    // Contenuto non fidato: un nome con `/`, `.` o `..` porterebbe fuori dalla cartella.
+    let name_ok = |s: &Stat| !matches!(s.name.as_str(), "" | "." | "..") && !s.name.contains('/');
+    Ok(prov.list(&path)?.into_iter().filter(name_ok).map(remote_entry).collect())
+}
+
+/// Il figlio `name` di `l`; in locale anche un nome non valido in UTF-16 resta intatto.
+pub(crate) fn child(l: &Loc, name: &OsStr) -> Loc {
+    match l {
+        Loc::Local(p) => Loc::Local(p.join(name)),
+        r => r.join(&name.to_string_lossy()),
+    }
+}
+
+/// Forma comune per i confronti e per costruire le destinazioni. In locale `normalize_lexical` (assoluta,
+/// senza `\\?\`, `..` risolti: in un percorso `\\?\` Windows non risolve `..`); il remoto è già pulito.
+pub(crate) fn norm(l: &Loc) -> Loc {
+    match l {
+        Loc::Local(p) => Loc::Local(normalize_lexical(p)),
+        r => r.clone(),
+    }
+}
+
+fn name_of(l: &Loc) -> Option<OsString> {
+    match l {
+        Loc::Local(p) => p.file_name().map(OsStr::to_os_string),
+        r => r.file_name().map(OsString::from),
+    }
+}
+
 /// `unlisted`: cartella vera di cui non si è (ancora) messo il contenuto nell'elenco.
-fn item(src: &Path, dst: Option<PathBuf>, e: &ListEntry, unlisted: bool) -> FileItem {
+fn item(src: &Loc, dst: Option<Loc>, e: &ListEntry, unlisted: bool) -> FileItem {
     let is_dir = e.dir || e.dir_link;
-    FileItem { src: src.to_path_buf(), dst, is_dir, size: if is_dir { 0 } else { e.size }, unlisted: unlisted && e.dir }
+    FileItem { src: src.clone(), dst, is_dir, size: if is_dir { 0 } else { e.size }, unlisted: unlisted && e.dir }
 }
 
 /// Filtro del job; vuoto o di soli spazi = nessuno.
@@ -53,19 +106,21 @@ pub fn filter_of(spec: &JobSpec) -> Option<&str> {
 
 /// Regola di TC per F5/F6: con una sola sorgente che è un file e una destinazione che non è una
 /// cartella esistente né termina con `\`, la destinazione è il nome del file da creare.
-pub fn file_target(spec: &JobSpec) -> bool {
-    let is_dir = |p: &Path| std::fs::metadata(to_extended(p)).is_ok_and(|m| m.is_dir());
+pub fn file_target(spec: &JobSpec, vfs: &Vfs) -> bool {
+    let is_dir = |l: &Loc| match l {
+        Loc::Local(p) => std::fs::metadata(to_extended(p)).is_ok_and(|m| m.is_dir()),
+        r => vfs.remote(r, Purpose::Transfer).and_then(|(p, path)| p.stat(&path)).is_ok_and(|s| s.is_dir),
+    };
     match (&spec.kind, &spec.dest, spec.sources.as_slice()) {
         (JobKind::Copy | JobKind::Move, Some(dest), [src]) => {
-            !dest.as_os_str().to_string_lossy().ends_with(['\\', '/'])
-                && !is_dir(dest)
-                && stat(src).is_ok_and(|e| !e.dir && !e.dir_link)
+            !dest.to_string().ends_with(['\\', '/']) && !is_dir(dest) && stat(vfs, src).is_ok_and(|e| !e.dir && !e.dir_link)
         }
         _ => false,
     }
 }
 
 struct Walker<'a> {
+    vfs: &'a Vfs,
     filter: Option<&'a str>,
     /// Delete: contenuto prima della cartella. Copy/Move: cartella prima del contenuto.
     post_order: bool,
@@ -74,7 +129,7 @@ struct Walker<'a> {
 
 impl Walker<'_> {
     /// `true` se `src` è rimasto nell'elenco (per le cartelle: se non è vuoto dopo il filtro).
-    fn visit(&mut self, src: &Path, dst: Option<PathBuf>, e: &ListEntry) -> bool {
+    fn visit(&mut self, src: &Loc, dst: Option<Loc>, e: &ListEntry) -> bool {
         // ponytail: un collegamento a cartella è una foglia (is_dir, size 0); Copy/Move lo
         // passano all'executor che decide, Delete elimina il collegamento e mai il contenuto del
         // bersaglio. Seguirlo (con protezione dai cicli) se servirà copiare il contenuto.
@@ -90,7 +145,7 @@ impl Walker<'_> {
             }
             return keep;
         }
-        let Ok(children) = read_entries(src) else {
+        let Ok(children) = entries(self.vfs, src) else {
             // Illeggibile: si elenca durante l'esecuzione (con il prompt d'errore). Si tiene anche
             // con un filtro: il suo contenuto potrebbe passarlo.
             self.out.push(item(src, dst, e, true));
@@ -100,7 +155,7 @@ impl Walker<'_> {
         if !self.post_order {
             self.out.push(item(src, dst.clone(), e, false));
         }
-        let any = self.children(src, dst.as_deref(), children);
+        let any = self.children(src, dst.as_ref(), children);
         let keep = self.filter.is_none() || any;
         if self.post_order {
             // Con un filtro le cartelle non si eliminano: conterrebbero i file esclusi.
@@ -114,12 +169,12 @@ impl Walker<'_> {
     }
 
     /// Il contenuto `children` della cartella `src`; `true` se ne è rimasto qualcosa.
-    fn children(&mut self, src: &Path, dst: Option<&Path>, mut children: Vec<ListEntry>) -> bool {
+    fn children(&mut self, src: &Loc, dst: Option<&Loc>, mut children: Vec<ListEntry>) -> bool {
         // Ordine stabile: prima i file, poi le cartelle, per nome.
         children.sort_by_cached_key(|c| (c.dir || c.dir_link, c.name.to_string_lossy().to_lowercase()));
         let mut any = false;
         for c in children {
-            any |= self.visit(&src.join(&c.name), dst.map(|d| d.join(&c.name)), &c);
+            any |= self.visit(&child(src, &c.name), dst.map(|d| child(d, &c.name)), &c);
         }
         any
     }
@@ -127,17 +182,17 @@ impl Walker<'_> {
 
 /// Elementi del contenuto (`children`, appena elencato) della cartella `dir`, senza la cartella
 /// stessa, con le destinazioni costruite dalla `dst` originale di `dir`.
-pub fn expand_children(spec: &JobSpec, dir: &FileItem, children: Vec<ListEntry>) -> Vec<FileItem> {
+pub fn expand_children(spec: &JobSpec, vfs: &Vfs, dir: &FileItem, children: Vec<ListEntry>) -> Vec<FileItem> {
     let post_order = matches!(spec.kind, JobKind::Delete { .. });
-    let mut walker = Walker { filter: filter_of(spec), post_order, out: Vec::new() };
-    walker.children(&dir.src, dir.dst.as_deref(), children);
+    let mut walker = Walker { vfs, filter: filter_of(spec), post_order, out: Vec::new() };
+    walker.children(&dir.src, dir.dst.as_ref(), children);
     walker.out
 }
 
-pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
+pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
     let first = spec.sources.first().ok_or_else(|| invalid(None))?;
     let filter = filter_of(spec);
-    let mut walker = Walker { filter, post_order: false, out: Vec::new() };
+    let mut walker = Walker { vfs, filter, post_order: false, out: Vec::new() };
     match &spec.kind {
         JobKind::Mkdir => Ok(vec![FileItem { src: first.clone(), dst: None, is_dir: true, size: 0, unlisted: false }]),
         JobKind::Rename => {
@@ -145,11 +200,15 @@ pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
             if spec.sources.len() != 1 {
                 return Err(invalid(Some(first)));
             }
-            let e = stat(first)?;
-            let (ns, nd) = (normalize_lexical(first), normalize_lexical(&dest));
+            let e = stat(vfs, first)?;
+            let (ns, nd) = (norm(first), norm(&dest));
+            // Sul remoto si rinomina solo nella stessa connessione.
+            if (ns.is_remote() || nd.is_remote()) && ns.volume_key() != nd.volume_key() {
+                return Err(invalid(Some(first)));
+            }
             // Cambiare solo le maiuscole (`a` → `A`) è lecito; finire dentro se stesso no.
-            if is_within(&nd, &ns) && !same_path(&nd, &ns) {
-                return Err(AppError::new(ErrorCode::IntoItself, Some(first)));
+            if nd.is_within(&ns) && !nd.same(&ns) {
+                return Err(first.error(ErrorCode::IntoItself));
             }
             Ok(vec![item(first, Some(nd), &e, false)])
         }
@@ -160,10 +219,10 @@ pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
             let whole = !permanent && filter.is_none();
             for s in &spec.sources {
                 // Mai un'intera unità o condivisione.
-                if normalize_lexical(s).file_name().is_none() {
+                if norm(s).file_name().is_none() {
                     return Err(invalid(Some(s)));
                 }
-                let e = stat(s)?;
+                let e = stat(vfs, s)?;
                 if whole {
                     walker.out.push(item(s, None, &e, true));
                 } else {
@@ -175,27 +234,27 @@ pub fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
         JobKind::Copy | JobKind::Move => {
             let is_move = spec.kind == JobKind::Move;
             let dest = spec.dest.as_ref().ok_or_else(|| invalid(Some(first)))?;
-            // Forma comune (assoluta, senza `\\?\`, `..` risolti) per i confronti e per costruire
-            // le destinazioni: in un percorso `\\?\` Windows non risolve `..`.
-            let ndest = normalize_lexical(dest);
-            let to_file = file_target(spec);
+            // Forma comune (`norm`) per i confronti e per costruire le destinazioni.
+            let ndest = norm(dest);
+            let to_file = file_target(spec, vfs);
             let mut checked = Vec::with_capacity(spec.sources.len());
             for s in &spec.sources {
-                let e = stat(s)?;
-                let ns = normalize_lexical(s);
-                let name = ns.file_name().ok_or_else(|| invalid(Some(s)))?.to_os_string();
+                let e = stat(vfs, s)?;
+                let ns = norm(s);
+                let name = name_of(&ns).ok_or_else(|| invalid(Some(s)))?;
                 // Un file come destinazione è il nome nuovo: lo stesso file dà il prompt di conflitto.
-                let dst = if to_file { ndest.clone() } else { ndest.join(name) };
-                if !to_file && is_within(&ndest, &ns) {
-                    return Err(AppError::new(ErrorCode::IntoItself, Some(s)));
+                let dst = if to_file { ndest.clone() } else { child(&ndest, &name) };
+                if !to_file && ndest.is_within(&ns) {
+                    return Err(s.error(ErrorCode::IntoItself));
                 }
-                if is_move && !to_file && ns.parent().is_some_and(|p| same_path(p, &ndest)) {
-                    return Err(AppError::new(ErrorCode::SameFile, Some(s)));
+                if is_move && !to_file && ns.parent().is_some_and(|p| p.same(&ndest)) {
+                    return Err(s.error(ErrorCode::SameFile));
                 }
                 // ponytail: stessa unità = stessa lettera/condivisione; un volume montato in una
                 // cartella o un'unità `subst` danno ERROR_NOT_SAME_DEVICE e l'executor ripiega su copia.
-                let vol = volume_key(&ns);
-                let rename = is_move && filter.is_none() && !vol.is_empty() && vol == volume_key(&ndest);
+                // Sul remoto la chiave è la connessione: lo spostamento nella stessa è un `Provider::rename`.
+                let vol = ns.volume_key();
+                let rename = is_move && filter.is_none() && !vol.is_empty() && vol == ndest.volume_key();
                 checked.push((s, e, dst, rename));
             }
             for (s, e, dst, rename) in checked {
@@ -216,14 +275,29 @@ mod tests {
     use crate::error::ErrorCode;
     use crate::ops::model::{ConflictPolicy, JobKind};
     use crate::paths::to_extended;
+    use crate::vfs::mem;
     use std::path::{Path, PathBuf};
 
+    // I test locali passano dal `Vfs` senza connessioni.
+    fn expand(spec: &JobSpec) -> Result<Vec<FileItem>, AppError> {
+        super::expand(spec, &mem::vfs(&[]))
+    }
+
+    fn file_target(spec: &JobSpec) -> bool {
+        super::file_target(spec, &mem::vfs(&[]))
+    }
+
     fn spec(kind: JobKind, sources: Vec<PathBuf>, dest: Option<PathBuf>, filter: Option<&str>) -> JobSpec {
-        JobSpec { kind, sources, dest, filter: filter.map(str::to_string), policy: ConflictPolicy::Ask }
+        let sources = sources.into_iter().map(Loc::Local).collect();
+        JobSpec { kind, sources, dest: dest.map(Loc::Local), filter: filter.map(str::to_string), policy: ConflictPolicy::Ask }
     }
 
     fn srcs(items: &[FileItem]) -> Vec<PathBuf> {
-        items.iter().map(|i| i.src.clone()).collect()
+        items.iter().map(|i| i.src.as_local().unwrap().to_path_buf()).collect()
+    }
+
+    fn local(p: impl Into<PathBuf>) -> Option<Loc> {
+        Some(Loc::Local(p.into()))
     }
 
     /// a/{x.txt (3 byte), s/y.txt}
@@ -274,7 +348,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let a = tree(d.path());
         let items = expand(&spec(JobKind::Copy, vec![a.clone()], Some(d.path().to_path_buf()), None)).unwrap();
-        assert_eq!(items[0].dst.as_deref(), Some(a.as_path()));
+        assert_eq!(items[0].dst, local(&a));
     }
 
     #[test]
@@ -284,11 +358,11 @@ mod tests {
         let dest = to_extended(d.path()).join("x").join("..").join("D");
         let items = expand(&spec(JobKind::Copy, vec![a.clone()], Some(dest), None)).unwrap();
         let da = d.path().join("D").join("a");
-        assert_eq!(items[0].dst.as_deref(), Some(da.as_path()));
-        assert_eq!(items[3].dst, Some(da.join("s").join("y.txt")));
+        assert_eq!(items[0].dst, local(&da));
+        assert_eq!(items[3].dst, local(da.join("s").join("y.txt")));
         let renamed = d.path().join("x").join("..").join("b");
         let items = expand(&spec(JobKind::Rename, vec![a], Some(renamed), None)).unwrap();
-        assert_eq!(items[0].dst, Some(d.path().join("b")));
+        assert_eq!(items[0].dst, local(d.path().join("b")));
     }
 
     #[test]
@@ -306,7 +380,7 @@ mod tests {
         let dest = d.path().join("D");
         let items = expand(&spec(JobKind::Copy, vec![a.clone()], Some(dest.clone()), None)).unwrap();
         assert_eq!(srcs(&items), vec![a.clone(), a.join("x.txt"), a.join("s"), a.join("s").join("y.txt")]);
-        let dsts: Vec<_> = items.iter().map(|i| i.dst.clone().unwrap()).collect();
+        let dsts: Vec<_> = items.iter().map(|i| i.dst.as_ref().unwrap().as_local().unwrap().to_path_buf()).collect();
         let da = dest.join("a");
         assert_eq!(dsts, vec![da.clone(), da.join("x.txt"), da.join("s"), da.join("s").join("y.txt")]);
         assert_eq!(items.iter().map(|i| (i.is_dir, i.size)).collect::<Vec<_>>(), vec![(true, 0), (false, 3), (true, 0), (false, 0)]);
@@ -324,8 +398,8 @@ mod tests {
         assert_eq!(
             items,
             vec![
-                FileItem { src: e, dst: Some(dest.join("empty")), is_dir: true, size: 0, unlisted: false },
-                FileItem { src: f, dst: Some(dest.join("f.txt")), is_dir: false, size: 2, unlisted: false },
+                FileItem { src: Loc::Local(e), dst: local(dest.join("empty")), is_dir: true, size: 0, unlisted: false },
+                FileItem { src: Loc::Local(f), dst: local(dest.join("f.txt")), is_dir: false, size: 2, unlisted: false },
             ]
         );
     }
@@ -377,20 +451,20 @@ mod tests {
         let to = d.path().join("D").join("g.txt");
         for kind in [JobKind::Copy, JobKind::Move] {
             let items = expand(&spec(kind, vec![f.clone()], Some(to.clone()), None)).unwrap();
-            assert_eq!(items[0].dst.as_deref(), Some(to.as_path()));
+            assert_eq!(items[0].dst, local(&to));
         }
         // Un file esistente come destinazione: lo stesso nome (poi il prompt di conflitto).
         let items = expand(&spec(JobKind::Copy, vec![f.clone()], Some(f.clone()), None)).unwrap();
-        assert_eq!(items[0].dst.as_deref(), Some(f.as_path()));
+        assert_eq!(items[0].dst, local(&f));
         // Con `\` finale, una cartella esistente, una cartella o più sorgenti: la destinazione è una cartella.
         let mut slash = to.clone().into_os_string();
         slash.push("\\");
         let into = |sources: Vec<PathBuf>, dest: PathBuf| expand(&spec(JobKind::Copy, sources, Some(dest), None)).unwrap()[0].dst.clone();
-        assert_eq!(into(vec![f.clone()], PathBuf::from(slash)), Some(to.join("f.txt")));
-        assert_eq!(into(vec![f.clone()], d.path().to_path_buf()), Some(d.path().join("f.txt")));
+        assert_eq!(into(vec![f.clone()], PathBuf::from(slash)), local(to.join("f.txt")));
+        assert_eq!(into(vec![f.clone()], d.path().to_path_buf()), local(d.path().join("f.txt")));
         let a = tree(d.path());
-        assert_eq!(into(vec![a.clone()], to.clone()), Some(to.join("a")));
-        assert_eq!(into(vec![f.clone(), a.join("x.txt")], to.clone()), Some(to.join("f.txt")));
+        assert_eq!(into(vec![a.clone()], to.clone()), local(to.join("a")));
+        assert_eq!(into(vec![f.clone(), a.join("x.txt")], to.clone()), local(to.join("f.txt")));
         assert_eq!(file_target(&spec(JobKind::Copy, vec![f.clone()], Some(to.clone()), None)), true);
         assert_eq!(file_target(&spec(JobKind::Delete { permanent: true }, vec![f.clone()], Some(to), None)), false);
     }
@@ -418,7 +492,7 @@ mod tests {
         let a = tree(d.path());
         let dest = d.path().join("D");
         let items = expand(&spec(JobKind::Move, vec![a.clone()], Some(dest.clone()), None)).unwrap();
-        assert_eq!(items, vec![FileItem { src: a.clone(), dst: Some(dest.join("a")), is_dir: true, size: 0, unlisted: true }]);
+        assert_eq!(items, vec![FileItem { src: Loc::Local(a.clone()), dst: local(dest.join("a")), is_dir: true, size: 0, unlisted: true }]);
         // Con un filtro il rename in blocco sposterebbe anche i file esclusi: si espande.
         let items = expand(&spec(JobKind::Move, vec![a.clone()], Some(dest), Some("x.*"))).unwrap();
         assert_eq!(srcs(&items), vec![a.clone(), a.join("x.txt")]);
@@ -434,7 +508,7 @@ mod tests {
         }
         let items = expand(&spec(JobKind::Move, vec![a.clone()], Some(other.path().to_path_buf()), None)).unwrap();
         assert_eq!(items.len(), 4);
-        assert_eq!(items[3].dst, Some(other.path().join("a").join("s").join("y.txt")));
+        assert_eq!(items[3].dst, local(other.path().join("a").join("s").join("y.txt")));
     }
 
     #[test]
@@ -473,14 +547,14 @@ mod tests {
         let a = tree(d.path());
         let b = d.path().join("b");
         let items = expand(&spec(JobKind::Rename, vec![a.clone()], Some(b.clone()), None)).unwrap();
-        assert_eq!(items, vec![FileItem { src: a.clone(), dst: Some(b), is_dir: true, size: 0, unlisted: false }]);
+        assert_eq!(items, vec![FileItem { src: Loc::Local(a.clone()), dst: local(b), is_dir: true, size: 0, unlisted: false }]);
         let upper = d.path().join("A");
-        assert_eq!(expand(&spec(JobKind::Rename, vec![a.clone()], Some(upper.clone()), None)).unwrap()[0].dst, Some(upper));
+        assert_eq!(expand(&spec(JobKind::Rename, vec![a.clone()], Some(upper.clone()), None)).unwrap()[0].dst, local(upper));
         let inside = spec(JobKind::Rename, vec![a.clone()], Some(a.join("s").join("a")), None);
         assert_eq!(expand(&inside).unwrap_err().code, ErrorCode::IntoItself);
         let n = d.path().join("new");
         let items = expand(&spec(JobKind::Mkdir, vec![n.clone()], None, None)).unwrap();
-        assert_eq!(items, vec![FileItem { src: n, dst: None, is_dir: true, size: 0, unlisted: false }]);
+        assert_eq!(items, vec![FileItem { src: Loc::Local(n), dst: None, is_dir: true, size: 0, unlisted: false }]);
     }
 
     #[test]
@@ -497,14 +571,14 @@ mod tests {
         assert_eq!(srcs(&del), vec![link.clone(), p.clone()]);
         // Eliminare la giunzione stessa: un solo elemento, il collegamento.
         let del = expand(&spec(JobKind::Delete { permanent: true }, vec![link.clone()], None, None)).unwrap();
-        assert_eq!(del, vec![FileItem { src: link.clone(), dst: None, is_dir: true, size: 0, unlisted: false }]);
+        assert_eq!(del, vec![FileItem { src: Loc::Local(link.clone()), dst: None, is_dir: true, size: 0, unlisted: false }]);
         // Nel Cestino il collegamento va da solo, e non è mai una cartella da elencare.
         let del = expand(&spec(JobKind::Delete { permanent: false }, vec![link.clone()], None, None)).unwrap();
         assert!(!del[0].unlisted);
 
         let dest = d.path().join("D");
         let cp = expand(&spec(JobKind::Copy, vec![p.clone()], Some(dest.clone()), None)).unwrap();
-        assert_eq!(cp[1], FileItem { src: link, dst: Some(dest.join("p").join("link")), is_dir: true, size: 0, unlisted: false });
+        assert_eq!(cp[1], FileItem { src: Loc::Local(link), dst: local(dest.join("p").join("link")), is_dir: true, size: 0, unlisted: false });
         assert_eq!(cp.len(), 2);
     }
 }

@@ -158,8 +158,9 @@ describe("parentPath", () => {
     expect(parentPath("C:\\x\\y\\")).toBe("C:\\x");
     expect(parentPath("\\\\srv\\share\\x")).toBe("\\\\srv\\share");
     expect(parentPath("\\\\srv\\share\\x\\y")).toBe("\\\\srv\\share\\x");
-    expect(parentPath("\\\\srv\\share")).toBeNull();
-    expect(parentPath("\\\\srv\\share\\")).toBeNull();
+    expect(parentPath("\\\\srv\\share")).toBe("\\\\srv");
+    expect(parentPath("\\\\srv\\share\\")).toBe("\\\\srv");
+    expect(parentPath("\\\\srv")).toBeNull();
   });
 });
 

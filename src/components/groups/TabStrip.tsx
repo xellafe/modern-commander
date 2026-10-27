@@ -5,7 +5,9 @@ import { chordParts } from "../../commands/keys";
 import { chordsOf } from "../../commands/keymap";
 import { closeTab } from "../../commands/navigation";
 import { useKeybindings } from "../../state/keybindings";
-import { DRIVES, folderName } from "../../lib/paths";
+import { DRIVES, folderName, parseRemote } from "../../lib/paths";
+import { useConnections } from "../../state/connections";
+import { ConnIcon } from "./ConnIcon";
 import { useEditors } from "../../state/editors";
 import { useLayout, type Group, type Tab } from "../../state/layout";
 
@@ -68,8 +70,14 @@ export function TabStrip({ group }: { group: Group }) {
   const docs = useEditors((s) => s.docs);
   const splitKeys = useKeybindings((s) => chordsOf(s.keymap, "mc_SplitGroup")[0]);
   const splitTitle = t("commands.mc_SplitGroup") + (splitKeys ? ` (${chordParts(splitKeys).join("+")})` : "");
-  const label = (tab: Tab) =>
-    tab.file ? folderName(tab.file.path) : tab.path === DRIVES ? t("groups.drives") : folderName(tab.path);
+  const nameOf = useConnections((s) => s.nameOf);
+  useConnections((s) => s.list); // i nomi cambiano col gestore delle connessioni
+  const label = (tab: Tab) => {
+    if (tab.file) return folderName(tab.file.path);
+    if (tab.path === DRIVES) return t("groups.drives");
+    const r = parseRemote(tab.path);
+    return r?.path === "/" ? nameOf(r.conn) : folderName(tab.path);
+  };
 
   return (
     <div className="mc-tabs">
@@ -84,6 +92,7 @@ export function TabStrip({ group }: { group: Group }) {
           onAuxClick={(e) => e.button === 1 && closeTab(id)}
         >
           {tabs[id].file && (tabs[id].file!.mode === "editor" ? <Pencil size={12} aria-hidden /> : <Eye size={12} aria-hidden />)}
+          {!tabs[id].file && parseRemote(tabs[id].path) && <ConnIcon scheme={parseRemote(tabs[id].path)!.scheme} />}
           <span className="mc-tab-label">{label(tabs[id])}</span>
           {docs[id]?.dirty && <span className="mc-tab-dirty" role="img" aria-label={t("editor.unsavedTitle")} title={t("editor.unsavedTitle")} />}
           <button

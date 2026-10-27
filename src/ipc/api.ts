@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ArchiveListing, ColumnHit, ColumnProgress, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
+import type { ArchiveListing, ColumnHit, ColumnProgress, Connection, ConnectionView, DirSizeEvent, Drive, Entry, FileInfo, HashAlgo, ImportCandidate, JobId, JobSpec, JobView, Mark, Prompt, PromptReply, ScanEntry, ShellKind, TermExitEvent } from "./types";
 
 export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 
@@ -132,9 +132,28 @@ export const readFile = async (path: string, max: number) =>
 /**
  * Salva il testo dell'editor senza mai scrivere sul posto (`<file>.mcpart` poi sostituzione). Con una data
  * attesa `CHANGED_ON_DISK` se il file è cambiato; `null` sovrascrive. `UNMAPPABLE_CHARS` se la codifica non basta.
+ * Solo sul remoto: conta anche `expectedSize`, e senza `allowUnsafe` un server che non permette la scrittura
+ * sicura dà `UNSAFE_WRITE` (file intatto).
  */
-export const writeTextFile = (path: string, text: string, encoding: string, bom: boolean, expectedModifiedMs: number | null) =>
-  invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs });
+export const writeTextFile = (
+  path: string,
+  text: string,
+  encoding: string,
+  bom: boolean,
+  expectedModifiedMs: number | null,
+  allowUnsafe = false,
+  expectedSize: number | null = null,
+) => invoke<FileInfo>("write_text_file", { path, text, encoding, bom, expectedModifiedMs, expectedSize, allowUnsafe });
+
+/**
+ * Scarica un file remoto nella cartella temporanea dell'app e restituisce il percorso locale; `onProgress` riceve
+ * i byte scaricati. `cancelRequest(requestId)` annulla (errore `CANCELLED`, senza file parziali).
+ */
+export const fetchTemp = (requestId: number, path: string, onProgress: (bytes: number) => void) => {
+  const channel = new Channel<number>();
+  channel.onmessage = onProgress;
+  return invoke<string>("fetch_temp", { requestId, path, onProgress: channel });
+};
 
 /** Carattere di ogni virtual key nel layout di tastiera attivo (`MapVirtualKeyW`); null se il tasto non ne ha. */
 export const keyLabels = (vks: number[]) => invoke<(string | null)[]>("key_labels", { vks });
@@ -159,6 +178,7 @@ export const showProperties = (paths: string[]) => invoke<void>("show_properties
 
 /** Drag modale verso Explorer: si risolve a drop concluso o annullato (no-op a pulsante già rilasciato). */
 export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths });
+export const shiftPressed = () => invoke<boolean>("shift_pressed");
 
 /** Apre con il programma associato (verbo "open" della shell). */
 export const openPath = (path: string) => invoke<void>("open_path", { path });
@@ -240,3 +260,39 @@ export const onJobUpdated = (cb: (job: JobView) => void): Promise<UnlistenFn> =>
 
 export const onJobPrompt = (cb: (prompt: Prompt) => void): Promise<UnlistenFn> =>
   listen<Prompt>("job-prompt", (e) => cb(e.payload));
+
+/** Le connessioni salvate: delle password solo se ci sono. */
+export const listConnections = () => invoke<ConnectionView[]>("list_connections");
+
+/**
+ * Un `id` vuoto crea una connessione nuova. La password si salva nel Credential Manager solo con `remember`;
+ * cambiando host o porta si dimentica l'impronta accettata.
+ */
+export const saveConnection = (conn: Connection, password: string | null, remember: boolean) =>
+  invoke<ConnectionView>("save_connection", { conn, password, remember });
+
+/** I siti salvati di WinSCP (da `WinSCP.ini` o dal registro), senza password. Non salva niente. */
+export const winscpCandidates = () => invoke<ImportCandidate[]>("winscp_candidates");
+
+/** Importa i siti scelti come connessioni nuove, senza password. */
+export const importConnections = (items: ImportCandidate[]) => invoke<ConnectionView[]>("import_connections", { items });
+
+/** Elimina anche la password e l'impronta della connessione. */
+export const deleteConnection = (id: string) => invoke<void>("delete_connection", { id });
+
+export const forgetPassword = (id: string) => invoke<void>("forget_password", { id });
+
+/**
+ * Senza password usa quella salvata (`AUTH_REQUIRED` se serve e non c'è); con `remember` la salva se la connessione
+ * riesce. `false`: connessi, ma la password non si è potuta salvare.
+ */
+export const connect = (id: string, password: string | null, remember: boolean) =>
+  invoke<boolean>("connect", { id, password, remember });
+
+export const disconnect = (id: string) => invoke<void>("disconnect", { id });
+
+/** Accetta l'impronta (SSH o TLS, secondo lo schema) per host e porta della connessione. */
+export const trustHost = (id: string, fingerprint: string) => invoke<void>("trust_host", { id, fingerprint });
+
+/** Dimentica le impronte accettate per host e porta della connessione. */
+export const forgetHost = (id: string) => invoke<void>("forget_host", { id });

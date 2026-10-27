@@ -3,7 +3,9 @@ import { expect, test, vi } from "vitest";
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
 import type { JobView, Prompt } from "../ipc/types";
-import { cancelAllAndWait, conflictChoices, conflictReply, newestJob, pendingPrompts, renamePath, unfinishedJobs, useJobs, waitForJob } from "./jobs";
+import { cancelAllAndWait, conflictChoices, conflictReply, initJobs, newestJob, pendingPrompts, remoteVolumesOf, renamePath, unfinishedJobs, useJobs, waitForJob } from "./jobs";
+import { useLayout } from "./layout";
+import { useTabViews } from "./tabViews";
 
 test("newestJob: only a job added after the last one seen, not a reorder or a removal", () => {
   expect(newestJob([], 0)).toBeNull();
@@ -89,4 +91,24 @@ test("renamePath keeps the folder of the suggested name and changes only the fil
   expect(renamePath("C:\\d\\f (2).txt", "g.txt")).toBe("C:\\d\\g.txt");
   expect(renamePath("C:\\f (2).txt", "g.txt")).toBe("C:\\g.txt");
   expect(renamePath("\\\\srv\\sh\\f (2)", "g")).toBe("\\\\srv\\sh\\g");
+});
+
+test("remoteVolumesOf keeps only the connections among a job's volumes", () => {
+  expect(remoteVolumesOf({ ...job(1, null), volumes: ["c:", "sftp://w"] })).toEqual(["sftp://w"]);
+});
+
+test("a job that finishes reloads the tabs on its remote connections, once", async () => {
+  let emit!: (j: JobView) => void;
+  vi.mocked(api.listJobs).mockResolvedValue([]);
+  vi.mocked(api.onJobUpdated).mockImplementation(async (cb) => ((emit = cb), () => {}));
+  await initJobs();
+  useLayout.setState({ tabs: { a: { id: "a", path: "sftp://w/x" }, b: { id: "b", path: "sftp://v/" }, c: { id: "c", path: "C:\\" } } });
+  const reload = vi.fn(async () => {});
+  useTabViews.setState({ reload });
+  const vols = (type: JobView["state"]["type"]) => ({ ...withState(9, type), volumes: ["c:", "sftp://w"] });
+  emit(vols("running"));
+  expect(reload).not.toHaveBeenCalled();
+  emit(vols("done"));
+  emit(vols("done"));
+  expect(reload.mock.calls).toEqual([["a"]]);
 });

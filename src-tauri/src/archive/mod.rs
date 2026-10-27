@@ -62,8 +62,9 @@ pub async fn list_archive(
     path: String,
     limit: usize,
 ) -> Result<ArchiveListing, AppError> {
+    let path = crate::fs::local_only(&path)?;
     let guard = requests.register(request_id);
-    blocking(move || list::list_archive(Path::new(&path), limit, guard.flag())).await?
+    blocking(move || list::list_archive(&path, limit, guard.flag())).await?
 }
 
 #[cfg(test)]

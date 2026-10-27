@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { nameError } from "../../commands/fileOps";
 import type { AppError, Meta, Prompt, PromptReply } from "../../ipc/types";
 import { formatDate, formatSize, splitName } from "../../lib/format";
+import { folderName } from "../../lib/paths";
 import { conflictChoices, conflictReply, renamePath, useJobs, type ConflictChoice } from "../../state/jobs";
 import { parentPath } from "../../state/tabView";
 import { Dialog } from "./Dialog";
@@ -50,7 +51,7 @@ export function ConflictDialog({ prompt }: { prompt: ConflictPrompt }) {
   const { t } = useTranslation();
   const { busy, error, setError, send } = useAnswer(prompt);
   const [all, setAll] = useState(false);
-  const suggested = prompt.suggestedName.slice(prompt.suggestedName.lastIndexOf("\\") + 1);
+  const suggested = folderName(prompt.suggestedName);
   const [name, setName] = useState(suggested);
   const input = useRef<HTMLInputElement>(null);
 
@@ -61,7 +62,7 @@ export function ConflictDialog({ prompt }: { prompt: ConflictPrompt }) {
 
   const choose = (c: ConflictChoice) => {
     if (c === "rename") {
-      const e = nameError(name.trim());
+      const e = nameError(name.trim(), prompt.suggestedName);
       if (e) return setError(t(e));
     }
     void send(conflictReply(c, all, renamePath(prompt.suggestedName, name.trim())));

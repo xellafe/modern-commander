@@ -4,22 +4,36 @@ pub mod elevation;
 pub mod error;
 pub mod fs;
 pub mod mask;
+pub mod net;
 pub mod ops;
 pub mod paths;
 pub mod requests;
 pub mod shell;
 pub mod terminal;
+pub mod vfs;
 
 use ops::queue::{Event, Queue};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Un protocollo senza factory dà `UNSUPPORTED`.
+    let factories: HashMap<vfs::loc::Scheme, Arc<dyn net::sessions::ProviderFactory>> = HashMap::from([
+        (vfs::loc::Scheme::Sftp, Arc::new(net::sftp::SftpFactory) as _),
+        (vfs::loc::Scheme::Ftp, Arc::new(net::ftp::FtpFactory { tls: false }) as _),
+        (vfs::loc::Scheme::Ftps, Arc::new(net::ftp::FtpFactory { tls: true }) as _),
+        (vfs::loc::Scheme::Http, Arc::new(net::http_index::HttpFactory { tls: false }) as _),
+        (vfs::loc::Scheme::Https, Arc::new(net::http_index::HttpFactory { tls: true }) as _),
+    ]);
+    let sessions = Arc::new(net::sessions::Sessions::new(factories));
     tauri::Builder::default()
         .manage(fs::watch::Watchers::default())
         .manage(requests::Requests::default())
         .manage(terminal::Terminals::default())
+        .manage(sessions.clone())
+        .manage(Arc::new(vfs::router::Vfs::new(sessions)))
         // Un ricaricamento della pagina (anche il reload di Vite) perde i canali e non esegue la pulizia dei
         // componenti: i terminali aperti si chiudono qui. All'avvio non ce n'è nessuno: nessun effetto.
         // ponytail: vale con la finestra unica; con più finestre servirebbe la proprietà della sessione per webview.
@@ -29,6 +43,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // I download temporanei lasciati da un'esecuzione chiusa male; il disco può essere lento.
+            std::thread::spawn(net::temp::cleanup_stale);
             if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
                 elevation::set_owner_window(hwnd);
             }
@@ -39,7 +55,8 @@ pub fn run() {
                     Event::Prompt(p) => handle.emit("job-prompt", p),
                 };
             });
-            app.manage(Queue::new(Arc::new(ops::exec::LocalExecutor), Arc::new(elevation::shared), sink));
+            let vfs = app.state::<Arc<vfs::router::Vfs>>().inner().clone();
+            app.manage(Queue::new(Arc::new(ops::exec::LocalExecutor), Arc::new(elevation::shared), vfs, sink));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,10 +78,12 @@ pub fn run() {
             fs::read_chunk,
             fs::read_file,
             fs::write_text_file,
+            fs::fetch_temp,
             fs::ansi_encoding,
             shell::context_menu::show_context_menu,
             shell::properties::show_properties,
             shell::drag::start_drag,
+            shell::drag::shift_pressed,
             shell::open::open_path,
             shell::open::open_with,
             shell::thumbnail::get_thumbnail,
@@ -85,13 +104,24 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_kill,
+            net::list_connections,
+            net::save_connection,
+            net::winscp_candidates,
+            net::import_connections,
+            net::delete_connection,
+            net::forget_password,
+            net::connect,
+            net::disconnect,
+            net::trust_host,
+            net::forget_host,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Nessun processo orfano: i terminali aperti si fermano con l'app.
+            // Nessun processo orfano: i terminali aperti si fermano con l'app. I download temporanei si eliminano.
             if let tauri::RunEvent::Exit = event {
                 app.state::<terminal::Terminals>().kill_all();
+                net::temp::cleanup_own();
             }
         });
 }

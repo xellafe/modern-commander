@@ -123,7 +123,9 @@
     "shellPreview": "Showing the shell preview instead: the browser cannot display this format.",
     "unsupportedMedia": "This file cannot be played here.",
     "unsupportedPdf": "This PDF cannot be opened. Use Text or Hex to see the file.",
-    "openExternal": "Open with default program"
+    "openExternal": "Open with default program",
+    "downloading": "Downloading {{size}} · Esc cancels",
+    "downloadAndOpen": "Download and open"
   },
   "inspector": {
     "title": "Inspector",
@@ -158,7 +160,9 @@
     "overwrite": "Overwrite",
     "saveUtf8": "Save as UTF-8",
     "readOnly": "Open read-only: this file looks binary or cannot be decoded without losing data, so saving could corrupt it. Press F3 in the file list to see it as hex.",
-    "tooLarge": "This file is too large to edit (over {{size}}). Press F3 in the file list to view it."
+    "tooLarge": "This file is too large to edit (over {{size}}). Press F3 in the file list to view it.",
+    "unreliableMtimeTitle": "Confirm save",
+    "unreliableMtime": "This server does not give precise modification dates: it cannot be checked whether “{{name}}” was changed by someone else after you opened it. Save?"
   },
   "hotlist": {
     "title": "Directory hotlist",
@@ -256,7 +260,9 @@
     "cm_Config": "Settings",
     "mc_Keybindings": "Keyboard shortcuts",
     "mc_CommandPalette": "Command palette",
-    "mc_QuickJump": "Quick jump"
+    "mc_QuickJump": "Quick jump",
+    "mc_CopyPath": "Copy path",
+    "cm_FtpConnect": "Remote connections"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",
@@ -273,10 +279,22 @@
     "UNSUPPORTED": "This item is not supported by the operation.",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",
-    "TOO_LARGE": "The file is too large for this operation.",
+    "TOO_LARGE": "The file or folder is too large for this operation.",
     "CHANGED_ON_DISK": "The file was changed on disk by another program.",
     "UNMAPPABLE_CHARS": "The text contains characters the chosen encoding cannot represent.",
     "CORRUPT_ARCHIVE": "The archive is damaged or cannot be read.",
+    "AUTH_REQUIRED": "The server requires a password.",
+    "AUTH_FAILED": "Authentication failed: wrong user name or password.",
+    "CONNECTION_FAILED": "Could not connect to the server, or the connection was lost.",
+    "TIMEOUT": "The server did not respond in time.",
+    "HOST_KEY_UNKNOWN": "The server fingerprint is unknown.",
+    "HOST_KEY_CHANGED": "The server fingerprint has changed from the accepted one.",
+    "HOST_KEY_UNSUPPORTED": "The server only offers unsupported host key types.",
+    "CERT_UNTRUSTED": "The server certificate is not trusted.",
+    "UNSAFE_WRITE": "This server does not allow safe saving: if the connection drops, the file may be left incomplete.",
+    "READ_ONLY_SOURCE": "This source is read-only.",
+    "RANGE_UNSUPPORTED": "The server does not allow reading the file in blocks.",
+    "ALGORITHM_UNSUPPORTED": "The server offers no supported encryption algorithms.",
     "IO": "Input/output error."
   },
   "ops": {
@@ -287,6 +305,8 @@
     "oneItem": "“{{name}}”",
     "items_one": "{{count}} item",
     "items_other": "{{count}} items",
+    "dragCopy": "Copy {{what}}",
+    "dragMove": "Move {{what}}",
     "copyTitle": "Copy",
     "moveTitle": "Move",
     "copyTo": "Copy {{what}} to:",
@@ -321,6 +341,10 @@
     "retryElevated": "Retry as administrator",
     "deletePermanentNow": "Delete permanently",
     "applyToAllErrors": "Apply to all errors of this kind",
+    "unsafeWriteTitle": "Unsafe save",
+    "unsafeWrite": "This server does not allow safe saving: if the connection drops, the file may be left incomplete. Save anyway?",
+    "saveAnyway": "Save anyway",
+    "forAll": "For all",
     "mkdirTitle": "New folder",
     "mkdirLabel": "New folder in {{path}} (\\ creates subfolders):",
     "deleteTitle": "Delete",
@@ -399,6 +423,10 @@
         "label": "Confirm before deleting",
         "desc": "Ask for confirmation before moving items to the Recycle Bin or deleting them."
       },
+      "windowsSelection": {
+        "label": "Windows-style mouse selection",
+        "desc": "A click selects only that file and clears other marks, Shift+click selects the range, a click on empty space clears everything. Otherwise like Total Commander: a click only moves the cursor."
+      },
       "jumpInNewTab": {
         "label": "Always open search results in a new tab",
         "desc": "Quick jump (Ctrl+P) opens the chosen item in a new tab of the same group. Ctrl+Enter does the opposite."
@@ -458,5 +486,68 @@
     "resetFor": "Reset “{{command}}” to its default",
     "rowHint": "Double-click or press Enter to change the key",
     "noResults": "No commands found."
+  },
+  "connections": {
+    "title": "Connections",
+    "empty": "No saved connections.",
+    "new": "New",
+    "edit": "Edit",
+    "duplicate": "Duplicate",
+    "delete": "Delete",
+    "confirmDelete": "Confirm delete",
+    "forgetPassword": "Forget password",
+    "forgetHost": "Forget fingerprint",
+    "connect": "Connect",
+    "close": "Close",
+    "copyOf": "{{name}} (copy)",
+    "newTitle": "New connection",
+    "editTitle": "Edit connection",
+    "save": "Save",
+    "saveConnect": "Save and connect",
+    "name": "Name",
+    "scheme": "Protocol",
+    "schemes": {
+      "sftp": "SFTP",
+      "ftp": "FTP",
+      "ftps": "FTPS",
+      "http": "HTTP",
+      "https": "HTTPS"
+    },
+    "ftpsImplicit": "Implicit FTPS (port 990)",
+    "host": "Server",
+    "port": "Port",
+    "user": "User",
+    "anonymous": "empty: anonymous access",
+    "password": "Password",
+    "passwordKept": "saved: leave empty to keep it",
+    "passwordHint": "If entered here, it is remembered in Windows Credential Manager.",
+    "startDir": "Start folder",
+    "passwordTitle": "Password",
+    "passwordFor": "Password for “{{name}}”:",
+    "remember": "Remember password",
+    "hostKeyTitle": "Unknown server fingerprint",
+    "hostKeyUnknown": "The SSH server of “{{name}}” presents a key never seen before.",
+    "hostKeyHint": "Accept only if the fingerprint matches the one given by the server administrator. It will be remembered for this host and port.",
+    "certTitle": "Untrusted certificate",
+    "certUnknown": "Windows does not trust the TLS certificate of “{{name}}” (self-signed, unknown authority or different name).",
+    "certHint": "Accept only if the fingerprint matches the expected certificate. It will be remembered for this host and port; if the certificate changes, you will be asked again.",
+    "fingerprint": "SHA-256 fingerprint",
+    "accept": "Accept",
+    "keyChangedTitle": "Server fingerprint changed",
+    "keyChanged": "The server key of “{{name}}” differs from the accepted one ({{fingerprint}}). It may be a server reinstall or an interception attempt: the connection is blocked. If the change is expected, open Connections (Ctrl+F), select “{{name}}” and use “Forget fingerprint”; the next connection will ask for the new one.",
+    "import": "Import",
+    "importWinscp": "WinSCP…",
+    "importTitle": "Import from WinSCP",
+    "importAction": "Import",
+    "importNone": "No WinSCP sites found.",
+    "importHint": "Passwords are never imported: you will be asked for them when connecting.",
+    "importSkipped": {
+      "webdav": "WebDAV is not supported",
+      "s3": "S3 is not supported",
+      "nohost": "no server address",
+      "badhost": "invalid server address",
+      "unknown": "unsupported protocol"
+    },
+    "notRemembered": "Connected, but the password was not remembered."
   }
 }

@@ -17,6 +17,8 @@ export interface ViewerState {
   top: number;
   /** Colonna del primo carattere visibile, con l'a capo spento; uguale per tutte le righe. */
   left: number;
+  /** File remoto: la copia scaricata nella cartella temporanea, da cui il viewer legge tutto. */
+  localCopy?: string;
 }
 
 /**

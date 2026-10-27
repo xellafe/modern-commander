@@ -7,7 +7,7 @@ import type { ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } fr
 import { detectEncoding } from "../lib/encoding";
 import { renderMarkdown } from "../lib/markdown";
 import { languageFor, loadMonaco } from "../lib/monaco";
-import { folderName } from "../lib/paths";
+import { folderName, isRemote, sourceCaps } from "../lib/paths";
 import { looksBinary, previewKind } from "../lib/preview";
 import { cancelTabSizes, computeDirSize } from "./sizeRequests";
 
@@ -31,6 +31,8 @@ export type Preview =
   | { kind: "text"; text: string; language: string | null; truncated: boolean }
   | { kind: "markdown"; html: string; truncated: boolean }
   | { kind: "folder"; size: DirSize | null }
+  /** Niente da mostrare (cartella remota: la dimensione non si calcola). */
+  | { kind: "none" }
   | { kind: "drive"; drive: Drive }
   | { kind: "archive"; listing: ArchiveListing }
   /** Archivio non elencato da solo (7z, vedi `ON_DEMAND`): si elenca con `requestArchive`. */
@@ -103,6 +105,7 @@ async function load(t: InspectorTarget, my: number) {
     if (!live()) return;
     useInspector.setState({ info });
     if (t.isDir) {
+      if (!sourceCaps(t.path).dirSize) return patch({ preview: { kind: "none" } });
       patch({ preview: { kind: "folder", size: null } });
       const size = await computeDirSize(OWNER, t.path);
       if (size) patch({ preview: { kind: "folder", size } }); // null = annullato
@@ -110,6 +113,8 @@ async function load(t: InspectorTarget, my: number) {
     }
     const name = folderName(t.path);
     const kind = previewKind(name);
+    // Sul remoto solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni movimento.
+    if (isRemote(t.path) && kind !== null && kind !== "markdown") return patch({ preview: { kind: "none" } });
     if (kind === "image" || kind === "pdf" || kind === "video" || kind === "audio") {
       return patch({ preview: { kind, path: t.path } });
     }
@@ -160,7 +165,7 @@ export const useInspector = create<InspectorState>((set, get) => ({
   },
   requestHash: (algo) => {
     const { target, hashes } = get();
-    if (shown !== token || !target || target.isDir || target.drive || hashes[algo] === "pending") return;
+    if (shown !== token || !target || target.isDir || target.drive || !sourceCaps(target.path).hash || hashes[algo] === "pending") return;
     const my = token;
     set({ hashes: { ...hashes, [algo]: "pending" } });
     tracked((id) => calcHash(id, target.path, algo)).then(

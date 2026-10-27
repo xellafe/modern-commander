@@ -3,7 +3,8 @@ import { listDir, listDrives, nearestExistingAncestor, unwatchDir, watchDir } fr
 import type { AppError, Drive, ErrorCode } from "../ipc/types";
 import { typeKey, visibleColumns } from "../lib/columns";
 import { quickFilterMask } from "../lib/mask";
-import { DRIVES } from "../lib/paths";
+import { DRIVES, isRemote, parseRemote, sourceCaps } from "../lib/paths";
+import { ensureConnected } from "./connections";
 import { setTabPath, useLayout } from "./layout";
 import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
@@ -30,6 +31,8 @@ export type Overlay =
   | { kind: "quickSearch"; tabId: string; prefix: string }
   | { kind: "filter"; tabId: string }
   | { kind: "menu"; tabId: string; title: string; items: MenuItem[] }
+  /** Menu dell'app sulle schede remote, dove non c'è la shell: `commandId` è un comando registrato. */
+  | { kind: "appMenu"; tabId: string; items: { commandId: string; labelKey: string }[]; x: number; y: number }
   /** Modifica in place del nome (Shift+F6) sulla riga `name`. */
   | { kind: "rename"; tabId: string; name: string };
 
@@ -74,13 +77,22 @@ const driveRow = (d: Drive): Row => ({
 
 interface Listing { path: string; entries: Row[]; error?: AppError }
 
-async function fetchListing(path: string): Promise<Listing> {
+// Errori che `ensureConnected` risolve chiedendo all'utente (impronta cambiata: solo l'avviso che spiega come sbloccarla).
+const RECONNECT: ErrorCode[] = ["AUTH_REQUIRED", "AUTH_FAILED", "HOST_KEY_UNKNOWN", "CERT_UNTRUSTED", "HOST_KEY_CHANGED"];
+
+async function fetchListing(path: string, retried = false): Promise<Listing> {
   if (path === DRIVES) return { path, entries: (await listDrives()).map(driveRow) };
   try {
     return { path, entries: await listDir(path) };
   } catch (e) {
     const err = e as AppError;
-    if (err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") throw e;
+    const remote = parseRemote(path);
+    // Password o impronta: una domanda all'utente e un solo nuovo tentativo.
+    if (remote && !retried && RECONNECT.includes(err?.code) && (await ensureConnected(remote.conn, err))) {
+      return fetchListing(path, true);
+    }
+    // Sul remoto niente risalita: un errore di rete o una cartella sparita vanno solo in notifica.
+    if ((err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") || isRemote(path)) throw e;
     // Cartella sparita o unità non pronta: si risale all'antenato esistente, altrimenti alle unità.
     const up = await nearestExistingAncestor(path);
     return { ...(await fetchListing(up && up !== path ? up : DRIVES)), error: err };
@@ -116,7 +128,7 @@ function queueWatcher(tabId: string, op: () => Promise<void>) {
 function syncWatcher(tabId: string, path: string) {
   if (watched.get(tabId) === path) return;
   watched.set(tabId, path);
-  queueWatcher(tabId, () => (path === DRIVES ? unwatchDir(tabId) : watchDir(tabId, path)));
+  queueWatcher(tabId, () => (sourceCaps(path).watch ? watchDir(tabId, path) : unwatchDir(tabId)));
 }
 
 export const useTabViews = create<TabViewsState>((set, get) => ({
@@ -135,9 +147,10 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
         res = await fetchListing(path);
       } catch (e) {
         try {
-          // Prima lettura di una scheda (accesso negato…): non resta vuota, mostra le unità.
+          // Prima lettura di una scheda (accesso negato…): non resta vuota, mostra le unità. Una scheda
+          // remota invece resta sul suo indirizzo, vuota: Ctrl+R riprova (il server può tornare).
           if (get().views[tabId] || path === DRIVES) throw e;
-          res = { ...(await fetchListing(DRIVES)), error: e as AppError };
+          res = isRemote(path) ? { path, entries: [], error: e as AppError } : { ...(await fetchListing(DRIVES)), error: e as AppError };
         } catch {
           if (seq.get(tabId) === token) get().showNotice(tabId, e);
           return;
