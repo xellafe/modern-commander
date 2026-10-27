@@ -1,9 +1,6 @@
 //! Connessione SSH con `russh`: algoritmi, impronta dell'host con il suo tipo, autenticazione con la password e un
 //! canale SFTP grezzo. Prende uno stream qualsiasi: il TCP in `open_in`, un `tokio::io::duplex` nei test.
 
-// Finché `open_in` non lo usa (Task 6) il modulo è morto fuori dai test.
-#![allow(dead_code)]
-
 use super::errors::{sftp_error, ssh_error};
 use super::{fingerprint, rt};
 use crate::error::{AppError, ErrorCode};
@@ -22,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-const POSIX_RENAME: &str = "posix-rename@openssh.com";
+pub(super) const POSIX_RENAME: &str = "posix-rename@openssh.com";
 /// Blocco di lettura e scrittura: 32 KiB come in russh-sftp, o meno se il server lo limita.
 const CHUNK: u32 = 32 * 1024;
 /// Attesa massima della chiusura in `Drop`.

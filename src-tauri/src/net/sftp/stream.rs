@@ -1,9 +1,6 @@
 //! Letture e scritture SFTP con più richieste in volo, sulla sessione grezza: il `File` di russh-sftp perde i codici
 //! di stato SFTP. Gli errori escono come `io::Error::other(AppError)` con il percorso (`vfs::provider::stream_error`).
 
-// Finché il provider non li usa (Task 6) sono morti fuori dai test.
-#![allow(dead_code)]
-
 use super::connect::Link;
 use super::errors::sftp_error;
 use super::rt;

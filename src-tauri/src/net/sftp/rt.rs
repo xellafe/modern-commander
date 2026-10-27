@@ -26,7 +26,6 @@ pub(super) fn runtime() -> Result<&'static Runtime, AppError> {
 }
 
 /// Aspetta `fut` per al massimo `limit`: scaduto, `TIMEOUT`.
-#[allow(dead_code)] // Task 6: i metodi del provider; per ora solo i test.
 pub(super) fn block<T>(limit: Duration, fut: impl Future<Output = Result<T, AppError>>) -> Result<T, AppError> {
     // `timeout` si crea dentro il runtime: fuori, il suo timer non troverebbe il reactor.
     let done = runtime()?.block_on(async { tokio::time::timeout(limit, fut).await });
