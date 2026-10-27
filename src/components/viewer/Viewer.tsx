@@ -56,7 +56,11 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
     (async () => {
       const info = await fileInfo(src);
       if (!useViewers.getState().states[tabId]) {
-        const [sample, ansi] = await Promise.all([readChunk(src, 0, SAMPLE), ansiEncoding()]);
+        // Immagini, PDF e media remoti si scaricano comunque: il campione non serve, e su un server senza Range la
+        // sua lettura fallirebbe prima del download.
+        const native = nativeMode(name);
+        const skipSample = isRemote(src) && native !== null && NEEDS_LOCAL.includes(native);
+        const [sample, ansi] = await Promise.all([skipSample ? new Uint8Array() : readChunk(src, 0, SAMPLE), ansiEncoding()]);
         if (!live) return; // scheda chiusa o cambiata durante la lettura: lo stato non deve rinascere
         useViewers.getState().set(tabId, { ...initialViewerState(name, sample, ansi, info.size <= SAMPLE), ...(copy && { localCopy: copy }) });
       }
