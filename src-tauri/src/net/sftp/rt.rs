@@ -2,9 +2,6 @@
 //!
 //! I metodi del provider si chiamano da thread bloccanti, mai da un task tokio (`block_on` lì va in panico).
 
-// Finché il provider `russh` non li usa (Task 4) gli elementi sono morti.
-#![allow(dead_code)]
-
 use crate::error::{AppError, ErrorCode};
 use std::future::Future;
 use std::sync::OnceLock;
@@ -29,6 +26,7 @@ pub(super) fn runtime() -> Result<&'static Runtime, AppError> {
 }
 
 /// Aspetta `fut` per al massimo `limit`: scaduto, `TIMEOUT`.
+#[allow(dead_code)] // Task 6: i metodi del provider; per ora solo i test.
 pub(super) fn block<T>(limit: Duration, fut: impl Future<Output = Result<T, AppError>>) -> Result<T, AppError> {
     // `timeout` si crea dentro il runtime: fuori, il suo timer non troverebbe il reactor.
     let done = runtime()?.block_on(async { tokio::time::timeout(limit, fut).await });

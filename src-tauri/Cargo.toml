@@ -54,6 +54,7 @@ panic = "abort"
 strip = true
 
 [dev-dependencies]
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 sevenz-rust2 = { version = "0.24.1", default-features = false, features = ["aes256", "compress"] }
 tar = { version = "0.4.46", default-features = false }

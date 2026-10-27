@@ -27,7 +27,10 @@ use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::sync::Arc;
 
+mod connect;
 mod errors;
+#[cfg(test)]
+mod fake;
 mod raw;
 mod rt;
 

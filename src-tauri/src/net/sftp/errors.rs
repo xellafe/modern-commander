@@ -2,9 +2,6 @@
 //!
 //! Nessuno di questi errori porta la password: `detail` contiene solo il testo dell'errore.
 
-// Finché il provider `russh` non li usa (Task 4) gli elementi sono morti.
-#![allow(dead_code)]
-
 use crate::error::{AppError, ErrorCode};
 use russh::AlgorithmKind;
 use russh_sftp::client::error::Error as SftpError;
