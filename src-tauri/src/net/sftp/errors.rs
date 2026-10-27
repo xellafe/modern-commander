@@ -44,7 +44,8 @@ pub(super) fn sftp_error(e: SftpError, path: Option<&str>) -> AppError {
 }
 
 /// Errore di `russh`. Nessuna chiave dell'host in comune è `HostKeyUnsupported` (`detail`: i tipi offerti dal
-/// server); gli altri algoritmi mancanti, le cadute e la chiusura del canale sono `ConnectionFailed`.
+/// server); gli altri algoritmi mancanti, lo scambio delle chiavi rifiutato, le cadute e la chiusura del canale sono
+/// `ConnectionFailed`.
 pub(super) fn ssh_error(e: &russh::Error) -> AppError {
     use russh::Error as E;
     let code = match e {
@@ -53,7 +54,8 @@ pub(super) fn ssh_error(e: &russh::Error) -> AppError {
         }
         E::IO(io) if io.kind() == std::io::ErrorKind::TimedOut => ErrorCode::Timeout,
         E::ConnectionTimeout | E::KeepaliveTimeout | E::InactivityTimeout | E::Elapsed(_) => ErrorCode::Timeout,
-        E::NoCommonAlgo { .. } | E::IO(_) | E::Disconnect | E::HUP | E::SendError | E::RecvError => {
+        // `KexInit`: per esempio un gruppo di group exchange fuori dall'intervallo chiesto.
+        E::NoCommonAlgo { .. } | E::KexInit | E::IO(_) | E::Disconnect | E::HUP | E::SendError | E::RecvError => {
             ErrorCode::ConnectionFailed
         }
         _ => ErrorCode::Io,

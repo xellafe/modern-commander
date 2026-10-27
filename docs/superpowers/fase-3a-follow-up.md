@@ -116,7 +116,7 @@ Note:
 
 ## SFTP su russh
 
-SFTP ora gira su russh 0.65 + russh-sftp 3.0 (libssh2 con WinCNG offriva solo chiavi dell'host RSA). Chiavi dell'host accettate: ed25519, ECDSA P-256/384/521, RSA. `known_hosts` ricorda il tipo di chiave; le voci salvate prima (senza tipo) valgono come RSA, quindi i server già fidati restano fidati senza richieste. Gli algoritmi datati di libssh2 restano in coda alla lista: group14-sha1, group-exchange-sha1, aes-cbc, 3des-cbc, hmac-sha1. Nuovo errore `HOST_KEY_UNSUPPORTED`.
+SFTP ora gira su russh 0.65 + russh-sftp 3.0 (libssh2 con WinCNG offriva solo chiavi dell'host RSA). Chiavi dell'host accettate: ed25519, ECDSA P-256/384/521, RSA. `known_hosts` ricorda il tipo di chiave; le voci salvate prima (senza tipo) valgono come RSA, quindi i server già fidati restano fidati senza richieste. Gli algoritmi datati di libssh2 restano in coda alla lista: group14-sha1, group-exchange-sha1, aes-cbc, 3des-cbc, hmac-sha1. Il group exchange accetta gruppi da 2048 a 8192 bit, come libssh2 (il default di russh parte da 3072); un gruppo fuori intervallo dà `CONNECTION_FAILED`. Nuovo errore `HOST_KEY_UNSUPPORTED`.
 
 Verifiche manuali da fare:
 - Server con la sola chiave dell'host ed25519: sshd in WSL con la sola `HostKey /etc/ssh/ssh_host_ed25519_key`, raggiunto sull'IP della macchina WSL (`ip -4 addr show eth0`), non su 127.0.0.1.
@@ -126,7 +126,7 @@ Verifiche manuali da fare:
 
 - SFTP: i nomi non UTF-8 si vedono con U+FFFD e quelli con `\` non si aprono (un "a\b" remoto copiato su Windows finirebbe nella sottocartella "a"). Visibili ma non apribili.
 - SFTP: codici di stato oltre l'8 (SFTP v4–v6) chiudono il canale: russh-sftp 3.0 conosce solo SFTP v3; la sessione si riapre alla richiesta successiva.
-- SFTP: una pagina di `readdir` vuota dà errore (la specifica vuole almeno un nome o la fine).
+- SFTP: una pagina di `readdir` vuota dà errore (la specifica vuole almeno un nome o la fine). `.` e `..` contano nel limite delle 200.000 voci: un server che li ripete all'infinito dà `TOO_LARGE`.
 - HTTP: date di Apache in ora locale lette come UTC; IIS solo date in inglese; IIS solo NTLM → `UNSUPPORTED`. Sola lettura.
 - Niente chiavi SSH né WebDAV (issue #1, #2), niente SCP.
 - FTP con solo `LIST` (vsftpd): i file e le cartelle che iniziano con il punto non si vedono. È voluto: `LIST` parte senza `-a` perché alcuni server leggono `-a` come un percorso.

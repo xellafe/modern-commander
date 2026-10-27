@@ -186,6 +186,8 @@ impl Provider for SftpProvider {
         let sftp = &self.link.sftp;
         let handle = self.run(checked(path)?, sftp.opendir(path))?.handle;
         let mut files = Vec::new();
+        // Nomi ricevuti, `.` e `..` compresi: un server che ripete solo quelli non fa crescere `files`.
+        let mut received = 0;
         loop {
             let page = self.run(path, async {
                 match sftp.readdir(handle.as_str()).await {
@@ -205,9 +207,10 @@ impl Provider for SftpProvider {
                     ..AppError::new(ErrorCode::Io, Some(Path::new(path)))
                 },
                 Ok(Some(page)) => {
+                    received += page.len();
                     files.extend(page.into_iter().filter(|f| f.filename != "." && f.filename != ".."));
-                    // Un server ostile non riempie la memoria.
-                    if files.len() <= MAX_ENTRIES {
+                    // Un server ostile non riempie la memoria né manda pagine all'infinito.
+                    if files.len() <= MAX_ENTRIES && received <= MAX_ENTRIES + 2 {
                         continue;
                     }
                     AppError::new(ErrorCode::TooLarge, Some(Path::new(path)))
@@ -331,6 +334,11 @@ impl Provider for SftpProvider {
         let attrs = FileAttributes { permissions: mode, atime: secs, mtime: secs, ..Default::default() };
         let setstat = self.link.sftp.setstat(checked(path)?, attrs);
         self.run(path, setstat).map(drop)
+    }
+
+    /// La sessione SSH è chiusa: `Sessions` non la rimette tra quelle libere.
+    fn is_broken(&self) -> bool {
+        self.link.handle.is_closed()
     }
 }
 
@@ -528,6 +536,27 @@ mod tests {
         let (_fake, p) = on_fake("empty-pages.test", FakeOptions { empty_pages: true, ..Default::default() }, &Options::DEFAULT);
         let e = p.list("/").unwrap_err();
         assert_eq!((e.code, e.path.as_deref(), e.detail.as_deref()), (ErrorCode::Io, Some("/"), Some("readdir senza fine")));
+    }
+
+    /// Un server che manda all'infinito pagine di soli `.` e `..` non blocca `list`: `TOO_LARGE`.
+    #[test]
+    fn endless_dot_pages_fail() {
+        let (_fake, p) = on_fake("dot-pages.test", FakeOptions { dot_pages: true, ..Default::default() }, &Options::DEFAULT);
+        let e = p.list("/").unwrap_err();
+        assert_eq!((e.code, e.path.as_deref()), (ErrorCode::TooLarge, Some("/")));
+    }
+
+    /// Connessione caduta: la sessione è rotta e non torna tra quelle libere.
+    #[test]
+    fn killed_session_is_broken() {
+        let (fake, p) = on_fake("broken.test", FakeOptions::default(), &Options::DEFAULT);
+        assert!(!p.is_broken());
+        fake.kill();
+        let t = std::time::Instant::now();
+        while !p.is_broken() && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(p.is_broken());
     }
 
     /// Server fermo: `TIMEOUT` con il percorso, presto.

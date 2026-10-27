@@ -16,7 +16,6 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 
 /// Richieste in volo per lettura o scrittura, come i default di russh-sftp.
 pub(super) const IN_FLIGHT: usize = 16;
@@ -157,7 +156,8 @@ pub(super) struct Writer {
     io_timeout: Duration,
     buf: Vec<u8>,
     offset: u64,
-    in_flight: VecDeque<JoinHandle<Result<Status, SftpError>>>,
+    /// Le conferme delle scritture inviate, in ordine.
+    in_flight: VecDeque<BoxFuture<'static, Result<Status, SftpError>>>,
     /// Il primo errore, ripetuto da ogni `write` e `flush`.
     error: Option<AppError>,
     closed: bool,
@@ -186,23 +186,18 @@ impl Writer {
     }
 
     fn wait_oldest(&mut self) -> Result<(), AppError> {
-        let Some(task) = self.in_flight.pop_front() else { return Ok(()) };
-        rt::block(self.io_timeout, async move {
-            match task.await {
-                Ok(reply) => reply.map(drop).map_err(|e| sftp_error(e, None)),
-                Err(e) => Err(AppError { detail: Some(e.to_string()), ..AppError::new(ErrorCode::Io, None) }),
-            }
-        })
+        let Some(reply) = self.in_flight.pop_front() else { return Ok(()) };
+        rt::block(self.io_timeout, async move { reply.await.map(drop).map_err(|e| sftp_error(e, None)) })
     }
 
-    /// Manda un blocco; con `IN_FLIGHT` blocchi in volo prima aspetta il più vecchio.
+    /// Manda un blocco, subito e dopo i precedenti; con `IN_FLIGHT` blocchi in volo prima aspetta il più vecchio.
     fn send(&mut self, data: Vec<u8>) -> Result<(), AppError> {
         if self.in_flight.len() >= IN_FLIGHT {
             self.wait_oldest()?;
         }
         let (sftp, handle, offset) = (self.link.sftp.clone(), self.handle.clone(), self.offset);
         self.offset += data.len() as u64;
-        self.in_flight.push_back(rt::runtime()?.spawn(async move { sftp.write(handle, offset, data).await }));
+        self.in_flight.push_back(rt::start(async move { sftp.write(handle, offset, data).await })?);
         Ok(())
     }
 
@@ -258,20 +253,15 @@ impl io::Write for Writer {
 }
 
 impl Drop for Writer {
-    /// Senza `flush` riuscito il resto del buffer si perde; le scritture in volo si aspettano e l'handle si chiude sul
-    /// runtime, senza bloccare.
+    /// Senza `flush` riuscito il resto del buffer si perde. La chiusura parte subito, dopo le scritture già inviate e
+    /// prima di ogni richiesta successiva (per esempio la cancellazione del temporaneo, che su alcuni server con
+    /// l'handle aperto fallirebbe); né la sua risposta né quelle delle scritture si aspettano.
     fn drop(&mut self) {
         if self.closed {
             return;
         }
-        let (link, handle, in_flight) =
-            (self.link.clone(), std::mem::take(&mut self.handle), std::mem::take(&mut self.in_flight));
-        rt::spawn(async move {
-            for task in in_flight {
-                let _ = task.await;
-            }
-            let _ = link.sftp.close(handle).await;
-        });
+        let (sftp, handle) = (self.link.sftp.clone(), std::mem::take(&mut self.handle));
+        let _ = rt::start(async move { sftp.close(handle).await });
     }
 }
 
@@ -390,6 +380,33 @@ mod tests {
         assert_eq!(fake.open_handles(), 0);
         w.flush().unwrap();
         assert_eq!(stream_error(w.write(b"x").unwrap_err(), "/out").code, ErrorCode::InvalidRequest);
+    }
+
+    /// I blocchi partono in ordine di offset: un server che scrive dove è arrivato (qui: rifiuta ogni altro offset)
+    /// riceve il file intero.
+    #[test]
+    fn writes_leave_in_offset_order() {
+        let (fake, c) = fake::connected("ordered-writes.test", FakeOptions { sequential_writes: true, ..Default::default() });
+        let d = data();
+        for _ in 0..5 {
+            let mut w = writer(&c, "/out", IO);
+            w.write_all(&d).unwrap();
+            w.flush().unwrap();
+            assert!(fake.get("/out") == Some(d.clone()));
+        }
+    }
+
+    /// `Drop` senza `flush` accoda la chiusura prima di tornare: una richiesta successiva (per esempio la
+    /// cancellazione del temporaneo) trova l'handle già chiuso.
+    #[test]
+    fn dropped_writer_closes_before_the_next_request() {
+        let (fake, c) = fake::connected("drop-close-order.test", FakeOptions::default());
+        let mut w = writer(&c, "/out", IO);
+        w.write_all(&data()).unwrap();
+        drop(w);
+        let sftp = c.link.sftp.clone();
+        rt::block(IO, async move { sftp.lstat("/out").await.map_err(|e| sftp_error(e, None)) }).unwrap();
+        assert_eq!(fake.open_handles(), 0);
     }
 
     #[test]

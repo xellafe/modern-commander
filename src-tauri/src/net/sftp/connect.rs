@@ -7,7 +7,9 @@ use crate::error::{AppError, ErrorCode};
 use crate::net::connections::Connection;
 use crate::net::trust::{self, Trust};
 use crate::net::{CONNECT_TIMEOUT, IO_TIMEOUT_MS};
-use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse as Kbd, Prompt};
+use russh::client::{
+    self, AuthResult, DisconnectReason, GexParams, Handle, KeyboardInteractiveAuthResponse as Kbd, Prompt,
+};
 use russh::keys::{Algorithm, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Disconnect, Preferred, cipher, kex, mac};
 use russh_sftp::client::RawSftpSession;
@@ -15,6 +17,7 @@ use russh_sftp::client::rawsession::Limits;
 use russh_sftp::extensions::LIMITS;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -103,6 +106,9 @@ pub(super) struct HostKeyCheck {
     host: String,
     port: u16,
     refused: Arc<Mutex<Option<AppError>>>,
+    /// La sessione è finita per altro che il rifiuto delle credenziali (`NoAuthMethod`): connessione caduta o chiusa
+    /// dal server.
+    hung_up: Arc<AtomicBool>,
 }
 
 impl HostKeyCheck {
@@ -130,6 +136,16 @@ impl client::Handler for HostKeyCheck {
         };
         *self.refused.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
         Ok(false)
+    }
+
+    /// Come il default di russh, e in più ricorda se la connessione è caduta.
+    async fn disconnected(&mut self, reason: DisconnectReason<Self::Error>) -> Result<(), Self::Error> {
+        let rejected = matches!(reason, DisconnectReason::Error(russh::Error::NoAuthMethod));
+        self.hung_up.store(!rejected, Ordering::SeqCst);
+        match reason {
+            DisconnectReason::ReceivedDisconnect(_) => Ok(()),
+            DisconnectReason::Error(e) => Err(e),
+        }
     }
 }
 
@@ -172,10 +188,29 @@ fn auth_failed() -> AppError {
     AppError { detail: Some("authentication rejected".into()), ..AppError::new(ErrorCode::AuthFailed, None) }
 }
 
+/// La connessione caduta mentre si aspettava la risposta: russh la riporta come un rifiuto senza metodi, ma non è
+/// colpa delle credenziali. Un rifiuto vero senza altri metodi chiude anche la sessione (`NoAuthMethod`), quindi
+/// `is_closed` non basta: conta il motivo, già noto quando russh riporta la caduta.
+fn hang_up(hung_up: &AtomicBool, r: AuthResult) -> Result<AuthResult, AppError> {
+    let gone = hung_up.load(Ordering::SeqCst);
+    match &r {
+        AuthResult::Failure { remaining_methods, .. } if remaining_methods.is_empty() && gone => {
+            let detail = Some("connection closed during authentication".into());
+            Err(AppError { detail, ..AppError::new(ErrorCode::ConnectionFailed, None) })
+        }
+        _ => Ok(r),
+    }
+}
+
 /// Prima `none` (se il server accetta si è già dentro), poi la password con il metodo che il server offre.
-async fn authenticate(h: &mut Handle<HostKeyCheck>, user: &str, password: Option<&str>) -> Result<(), AppError> {
+async fn authenticate(
+    h: &mut Handle<HostKeyCheck>,
+    hung_up: &AtomicBool,
+    user: &str,
+    password: Option<&str>,
+) -> Result<(), AppError> {
     let ssh = |e: russh::Error| ssh_error(&e);
-    let methods = match h.authenticate_none(user).await.map_err(ssh)? {
+    let methods = match hang_up(hung_up, h.authenticate_none(user).await.map_err(ssh)?)? {
         AuthResult::Success => return Ok(()),
         AuthResult::Failure { remaining_methods, .. } => {
             remaining_methods.iter().map(<&str>::from).collect::<Vec<_>>().join(",")
@@ -184,7 +219,7 @@ async fn authenticate(h: &mut Handle<HostKeyCheck>, user: &str, password: Option
     let plan = auth_plan(&methods, password.is_some()).map_err(|code| AppError::new(code, None))?;
     let pw = password.unwrap_or_default();
     let ok = match plan {
-        Auth::Password => h.authenticate_password(user, pw).await.map_err(ssh)?.success(),
+        Auth::Password => hang_up(hung_up, h.authenticate_password(user, pw).await.map_err(ssh)?)?.success(),
         Auth::KeyboardInteractive => {
             let mut answered = false;
             let mut r = h.authenticate_keyboard_interactive_start(user, None::<String>).await.map_err(ssh)?;
@@ -213,15 +248,24 @@ pub(super) async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     opts: &Options,
 ) -> Result<Connected, AppError> {
     let saved = trust::saved_ssh_key_type_in(dir, &conn.host, conn.port)?;
-    let config = Arc::new(client::Config { preferred: preferred(saved.as_deref()), ..Default::default() });
-    let refused = Arc::new(Mutex::new(None));
-    let check = HostKeyCheck { dir: dir.to_owned(), host: conn.host.clone(), port: conn.port, refused: refused.clone() };
+    // Group exchange: russh vuole gruppi da almeno 3072 bit, libssh2 ne accettava da 2048.
+    let gex = GexParams::new(2048, 4096, 8192)
+        .map_err(|e| AppError { detail: Some(e.to_string()), ..AppError::new(ErrorCode::Io, None) })?;
+    let config = Arc::new(client::Config { preferred: preferred(saved.as_deref()), gex, ..Default::default() });
+    let (refused, hung_up) = (Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)));
+    let check = HostKeyCheck {
+        dir: dir.to_owned(),
+        host: conn.host.clone(),
+        port: conn.port,
+        refused: refused.clone(),
+        hung_up: hung_up.clone(),
+    };
     let ssh = async {
         let mut handle = client::connect_stream(config, stream, check).await.map_err(|e| {
             let refused = refused.lock().unwrap_or_else(|p| p.into_inner()).take();
             refused.unwrap_or_else(|| ssh_error(&e))
         })?;
-        authenticate(&mut handle, &conn.user, password).await?;
+        authenticate(&mut handle, &hung_up, &conn.user, password).await?;
         let mut channel = handle.channel_open_session().await.map_err(|e| ssh_error(&e))?;
         channel.request_subsystem(true, "sftp").await.map_err(|e| ssh_error(&e))?;
         // La risposta: un rifiuto non deve aspettare `init` fino a `io_timeout`.
@@ -249,8 +293,11 @@ pub(super) async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let version = sftp.init().await.map_err(err)?;
     let atomic = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
     let mut chunk = CHUNK;
-    if version.extensions.contains_key(LIMITS) {
-        let limits = Limits::from(sftp.limits().await.map_err(err)?);
+    // Se la richiesta fallisce valgono i default: i limiti sono un aiuto, non un requisito.
+    if version.extensions.contains_key(LIMITS)
+        && let Ok(l) = sftp.limits().await
+    {
+        let limits = Limits::from(l);
         chunk = [limits.read_len, limits.write_len].into_iter().flatten().fold(chunk as u64, u64::min) as u32;
         sftp.set_limits(limits);
     }
@@ -429,6 +476,39 @@ mod tests {
         assert_eq!(auth_plan("publickey,password", true), Ok(Auth::Password));
         assert_eq!(auth_plan("publickey,keyboard-interactive", true), Ok(Auth::KeyboardInteractive));
         assert_eq!(auth_plan("publickey", true), Err(ErrorCode::AuthFailed));
+    }
+
+    /// Connessione chiusa dal server durante l'autenticazione: `CONNECTION_FAILED`, non un rifiuto della password.
+    #[test]
+    fn hang_up_during_auth_is_connection_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, h) = (dir.path(), "auth-hang-up.test");
+        let (fake, s) = trusted(d, h, FakeOptions { hang_up_on_auth: true, ..Default::default() });
+        assert_eq!(code(open(d, h, s, Some("pw"))), Some(ErrorCode::ConnectionFailed));
+        assert_eq!(code(open(d, h, fake.stream(), None)), Some(ErrorCode::ConnectionFailed));
+    }
+
+    /// Group exchange: gruppi da 2048 bit accettati, come libssh2; uno più piccolo dà `CONNECTION_FAILED`.
+    #[test]
+    fn group_exchange_accepts_2048_bits() {
+        use russh::kex::dh::groups::{DH_GROUP1, DH_GROUP14};
+        let dir = tempfile::tempdir().unwrap();
+        let (d, h) = (dir.path(), "gex.test");
+        let (_fake, s) = trusted(d, h, FakeOptions { gex_group: Some(DH_GROUP14), ..Default::default() });
+        assert!(open(d, h, s, Some("pw")).is_ok());
+        let (_fake, s) = trusted(d, h, FakeOptions { gex_group: Some(DH_GROUP1), ..Default::default() });
+        assert_eq!(code(open(d, h, s, Some("pw"))), Some(ErrorCode::ConnectionFailed));
+    }
+
+    /// `limits@openssh.com` riduce il blocco; se la richiesta fallisce la connessione riesce lo stesso.
+    #[test]
+    fn limits_shrink_the_chunk_and_their_failure_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, h) = (dir.path(), "limits.test");
+        for (limit, chunk) in [(8000, 8000), (1 << 20, CHUNK), (0, CHUNK)] {
+            let (_fake, s) = trusted(d, h, FakeOptions { limits: Some(limit), ..Default::default() });
+            assert_eq!(open(d, h, s, Some("pw")).map(|c| c.chunk).map_err(|e| e.code), Ok(chunk), "limite {limit}");
+        }
     }
 
     /// Il finto che non risponde a `init`: `TIMEOUT` dal limite delle richieste di russh-sftp.

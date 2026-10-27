@@ -8,12 +8,16 @@ use crate::net::trust;
 use crate::vfs::loc::Scheme;
 use getrandom::SysRng;
 use getrandom::rand_core::UnwrapErr;
+use russh::client::GexParams;
+use russh::kex::dh::groups::{DH_GROUP14, DhGroup};
 use russh::keys::ssh_key::private::RsaKeypair;
 use russh::keys::{Algorithm, HashAlg, PrivateKey};
 use russh::server::{self, Auth, ChannelOpenHandle, Msg, Response, Session};
 use russh::{Channel, ChannelId, Disconnect, MethodKind, MethodSet, Preferred, cipher, kex, mac};
+use russh_sftp::extensions::LIMITS;
 use russh_sftp::protocol::{
-    Attrs, Data, File, FileAttributes, FileMode, Handle, Name, OpenFlags, Packet, Status, StatusCode, Version,
+    Attrs, Data, ExtendedReply, File, FileAttributes, FileMode, Handle, Name, OpenFlags, Packet, Status, StatusCode,
+    Version,
 };
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -47,6 +51,16 @@ pub(super) struct FakeOptions {
     pub reject_subsystem: bool,
     /// `readdir` risponde sempre con una pagina vuota, mai `EOF`.
     pub empty_pages: bool,
+    /// `readdir` risponde sempre con una pagina di soli `.` e `..` (`DOT_PAGE` nomi), mai `EOF`.
+    pub dot_pages: bool,
+    /// Una scrittura che non comincia alla fine del file dà `FAILURE`: le scritture devono arrivare in ordine.
+    pub sequential_writes: bool,
+    /// Dichiara `limits@openssh.com` con questo limite di lettura e scrittura; `Some(0)`: la richiesta dà `FAILURE`.
+    pub limits: Option<u64>,
+    /// Solo `diffie-hellman-group-exchange-sha256`, con questo gruppo.
+    pub gex_group: Option<DhGroup>,
+    /// Chiude la connessione alla prima richiesta di autenticazione.
+    pub hang_up_on_auth: bool,
 }
 
 impl Default for FakeOptions {
@@ -60,6 +74,11 @@ impl Default for FakeOptions {
             legacy_only: false,
             reject_subsystem: false,
             empty_pages: false,
+            dot_pages: false,
+            sequential_writes: false,
+            limits: None,
+            gex_group: None,
+            hang_up_on_auth: false,
         }
     }
 }
@@ -225,6 +244,9 @@ pub(super) fn start(opts: FakeOptions) -> (FakeServer, DuplexStream) {
             ..Preferred::DEFAULT
         };
     }
+    if opts.gex_group.is_some() {
+        config.preferred = Preferred { kex: Cow::Borrowed(&[kex::DH_GEX_SHA256]), ..Preferred::DEFAULT };
+    }
     let shared = Arc::new(Shared {
         opts,
         stalled: AtomicBool::new(false),
@@ -335,6 +357,9 @@ impl server::Handler for Ssh {
     type Error = russh::Error;
 
     async fn auth_none(&mut self, _: &str) -> Result<Auth, Self::Error> {
+        if self.shared.opts.hang_up_on_auth {
+            return Err(russh::Error::Disconnect);
+        }
         Ok(if self.shared.opts.auth == FakeAuth::NoneAccepted { Auth::Accept } else { Auth::reject() })
     }
 
@@ -360,6 +385,10 @@ impl server::Handler for Ssh {
                 _ => Auth::reject(),
             },
         })
+    }
+
+    async fn lookup_dh_gex_group(&mut self, _: &GexParams) -> Result<Option<DhGroup>, Self::Error> {
+        Ok(Some(self.shared.opts.gex_group.clone().unwrap_or(DH_GROUP14)))
     }
 
     async fn channel_open_session(
@@ -394,6 +423,8 @@ enum Open {
 }
 
 const POSIX_RENAME: &str = "posix-rename@openssh.com";
+/// Nomi per pagina con `dot_pages`: pochi byte ciascuno, la pagina resta sotto i 256 KiB di russh-sftp.
+const DOT_PAGE: usize = 15_000;
 
 struct Sftp {
     shared: Arc<Shared>,
@@ -441,6 +472,9 @@ impl russh_sftp::server::Handler for Sftp {
         let mut v = Version::new();
         if self.shared.opts.posix_rename {
             v.extensions.insert(POSIX_RENAME.into(), "1".into());
+        }
+        if self.shared.opts.limits.is_some() {
+            v.extensions.insert(LIMITS.into(), "1".into());
         }
         Ok(v)
     }
@@ -505,6 +539,9 @@ impl russh_sftp::server::Handler for Sftp {
         }
         let mut fs = self.fs();
         let Some(Node::File { data, mtime, .. }) = fs.0.get_mut(&path) else { return Err(StatusCode::Failure) };
+        if self.shared.opts.sequential_writes && offset != data.len() as u64 {
+            return Err(StatusCode::Failure);
+        }
         let (start, end) = (offset as usize, offset as usize + bytes.len());
         if data.len() < end {
             data.resize(end, 0);
@@ -565,6 +602,10 @@ impl russh_sftp::server::Handler for Sftp {
         let Some(Open::Dir(path, sent)) = self.handles.get_mut(&handle) else { return Err(StatusCode::Failure) };
         if self.shared.opts.empty_pages {
             return Ok(Name { id, files: Vec::new() });
+        }
+        if self.shared.opts.dot_pages {
+            let dot = |n: &str| File { filename: n.into(), longname: String::new(), attrs: FileAttributes::empty() };
+            return Ok(Name { id, files: (0..DOT_PAGE).map(|i| dot(if i % 2 == 0 { "." } else { ".." })).collect() });
         }
         if std::mem::replace(sent, true) {
             return Err(StatusCode::Eof);
@@ -648,9 +689,17 @@ impl russh_sftp::server::Handler for Sftp {
         Ok(ok(id))
     }
 
-    /// `posix-rename@openssh.com` (se dichiarata): sostituisce la destinazione.
+    /// `posix-rename@openssh.com` (se dichiarata): sostituisce la destinazione. `limits@openssh.com` (se dichiarata):
+    /// i quattro `u64` (pacchetto, lettura, scrittura, handle; 0 = nessun limite).
     async fn extended(&mut self, id: u32, request: String, data: Vec<u8>) -> Result<Packet, StatusCode> {
         self.gate().await;
+        if let (LIMITS, Some(n)) = (request.as_str(), self.shared.opts.limits) {
+            if n == 0 {
+                return Err(StatusCode::Failure);
+            }
+            let data = [0, n, n, 0].iter().flat_map(|v: &u64| v.to_be_bytes()).collect();
+            return Ok(Packet::ExtendedReply(ExtendedReply { id, data }));
+        }
         if request != POSIX_RENAME || !self.shared.opts.posix_rename {
             return Err(StatusCode::OpUnsupported);
         }
