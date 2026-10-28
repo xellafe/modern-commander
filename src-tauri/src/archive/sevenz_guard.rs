@@ -329,7 +329,7 @@ fn streams_info<'a>(h: &mut Bytes<'a>) -> Result<Streams<'a>, AppError> {
             let (list, outs) = folder(h)?;
             coders += list.len() as u64;
             if coders > MAX_CODERS {
-                return Err(count(u64::MAX).unwrap_err());
+                return Err(unsupported(Some("too_many_entries")));
             }
             if i == 0 {
                 s.first = Some((list, Vec::new()));
