@@ -47,7 +47,9 @@
       "bySize": "Per dimensione",
       "unsorted": "Non ordinato",
       "drives": "Unità",
-      "thumbs": "Miniature"
+      "thumbs": "Miniature",
+      "pack": "Comprimi",
+      "unpack": "Estrai"
     }
   },
   "status": {
@@ -262,7 +264,10 @@
     "mc_CommandPalette": "Palette dei comandi",
     "mc_QuickJump": "Salto rapido",
     "mc_CopyPath": "Copia percorso",
-    "cm_FtpConnect": "Connessioni remote"
+    "cm_FtpConnect": "Connessioni remote",
+    "mc_OpenArchive": "Apri l'archivio come cartella",
+    "cm_PackFiles": "Comprimi in uno ZIP",
+    "cm_UnpackFiles": "Estrai l'archivio"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",
@@ -296,6 +301,7 @@
     "READ_ONLY_SOURCE": "Questa sorgente è in sola lettura.",
     "RANGE_UNSUPPORTED": "Il server non permette di leggere il file a blocchi.",
     "ALGORITHM_UNSUPPORTED": "Il server non offre algoritmi di cifratura supportati.",
+    "EMPTY_ARCHIVE": "L'archivio è vuoto: non c'è niente da estrarre.",
     "IO": "Errore di input/output."
   },
   "ops": {
@@ -347,6 +353,10 @@
     "saveAnyway": "Salva lo stesso",
     "forAll": "Per tutti",
     "mkdirTitle": "Nuova cartella",
+    "packTitle": "Comprimi in uno ZIP",
+    "packName": "Comprimi {{what}} nell'archivio:",
+    "packDest": "Nella cartella:",
+    "packExists": "«{{name}}» esiste già. Sovrascrivilo o cambia il nome.",
     "mkdirLabel": "Nuova cartella in {{path}} (\\ crea le sottocartelle):",
     "deleteTitle": "Elimina",
     "deletePermanentTitle": "Elimina definitivamente",

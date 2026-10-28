@@ -47,7 +47,9 @@
       "bySize": "By size",
       "unsorted": "Unsorted",
       "drives": "Drives",
-      "thumbs": "Thumbnails"
+      "thumbs": "Thumbnails",
+      "pack": "Pack",
+      "unpack": "Unpack"
     }
   },
   "status": {
@@ -262,7 +264,10 @@
     "mc_CommandPalette": "Command palette",
     "mc_QuickJump": "Quick jump",
     "mc_CopyPath": "Copy path",
-    "cm_FtpConnect": "Remote connections"
+    "cm_FtpConnect": "Remote connections",
+    "mc_OpenArchive": "Open archive as folder",
+    "cm_PackFiles": "Pack into a ZIP",
+    "cm_UnpackFiles": "Unpack archive"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",
@@ -296,6 +301,7 @@
     "READ_ONLY_SOURCE": "This source is read-only.",
     "RANGE_UNSUPPORTED": "The server does not allow reading the file in blocks.",
     "ALGORITHM_UNSUPPORTED": "The server offers no supported encryption algorithms.",
+    "EMPTY_ARCHIVE": "The archive is empty: there is nothing to unpack.",
     "IO": "Input/output error."
   },
   "ops": {
@@ -347,6 +353,10 @@
     "saveAnyway": "Save anyway",
     "forAll": "For all",
     "mkdirTitle": "New folder",
+    "packTitle": "Pack into a ZIP",
+    "packName": "Pack {{what}} into the archive:",
+    "packDest": "In the folder:",
+    "packExists": "“{{name}}” already exists. Overwrite it, or change the name.",
     "mkdirLabel": "New folder in {{path}} (\\ creates subfolders):",
     "deleteTitle": "Delete",
     "deletePermanentTitle": "Delete permanently",

@@ -14,6 +14,8 @@ const SHORT: Record<string, string> = {
   cm_Delete: "delete",
   cm_Exit: "exit",
   cm_CopySamepanel: "copyHere",
+  cm_PackFiles: "pack",
+  cm_UnpackFiles: "unpack",
   mc_DeletePermanent: "deletePermanent",
   cm_SrcOpenDrives: "drives",
   cm_SrcThumbs: "thumbs",

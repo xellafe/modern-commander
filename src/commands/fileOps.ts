@@ -94,7 +94,7 @@ export const mustChangeDest = (req: { from: string; move: boolean; requireChange
 const views = () => useTabViews.getState();
 const ui = () => useUi.getState();
 
-const enqueue = (spec: Omit<JobSpec, "filter" | "policy"> & Partial<JobSpec>) =>
+export const enqueue = (spec: Omit<JobSpec, "filter" | "policy"> & Partial<JobSpec>) =>
   enqueueJob({ filter: null, policy: { type: "ask" }, ...spec });
 
 /** Dopo un job riuscito porta il cursore su `name`, se la scheda è ancora in quella cartella. */
@@ -105,7 +105,7 @@ async function focusWhenDone(id: JobId, tabId: string, base: string, name: strin
 }
 
 /** Contesto dei comandi sulle selezioni; `null` nella lista delle unità o senza elementi. */
-function selection() {
+export function selection() {
   const ctx = activeTabContext();
   const sources = ctx.markedOrCursor.flatMap((r) => (r.drive ? [] : [joinPath(ctx.path, r.name)]));
   return sources.length ? { ...ctx, sources } : null;

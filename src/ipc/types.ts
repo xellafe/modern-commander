@@ -32,6 +32,8 @@ export type ErrorCode =
   | "READ_ONLY_SOURCE"
   | "RANGE_UNSUPPORTED"
   | "ALGORITHM_UNSUPPORTED"
+  /** Solo frontend: l'archivio da estrarre non ha voci. */
+  | "EMPTY_ARCHIVE"
   | "IO";
 
 export interface AppError {

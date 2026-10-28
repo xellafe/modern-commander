@@ -97,6 +97,11 @@ test("remoteVolumesOf keeps only the connections among a job's volumes", () => {
   expect(remoteVolumesOf({ ...job(1, null), volumes: ["c:", "sftp://w"] })).toEqual(["sftp://w"]);
 });
 
+test("remoteVolumesOf maps the volume of an archive on a server to its connection", () => {
+  const vols = ["c:", "arc://sftp://w/rel/a.zip", "arc://c:", "sftp://w"];
+  expect(remoteVolumesOf({ ...job(1, null), volumes: vols })).toEqual(["sftp://w"]);
+});
+
 test("a job that finishes reloads every open archive tab, even for a job on local volumes", async () => {
   let emit!: (j: JobView) => void;
   vi.mocked(api.listJobs).mockResolvedValue([]);

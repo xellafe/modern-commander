@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { registerArchiveCommands } from "./commands/archives";
 import { registerConnectionCommands } from "./commands/connections";
 import { registerFileOpCommands } from "./commands/fileOps";
 import { registerHotlistCommands } from "./commands/hotlist";
@@ -32,6 +33,7 @@ applyTheme();
 registerNavigationCommands();
 registerHotlistCommands();
 registerFileOpCommands();
+registerArchiveCommands();
 registerShellCommands();
 registerSettingsCommands();
 registerPaletteCommands();

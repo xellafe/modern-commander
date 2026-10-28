@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import { cancelJob, listJobs, onJobPrompt, onJobUpdated, replyPrompt } from "../ipc/api";
 import type { JobId, JobKind, JobView, Prompt, PromptReply } from "../ipc/types";
-import { isArchive, isRemote, joinPath, parseRemote } from "../lib/paths";
+import { isArchive, joinPath, parseRemote } from "../lib/paths";
 import { useLayout } from "./layout";
 import { parentPath } from "./tabView";
 import { useTabViews } from "./tabViews";
@@ -41,8 +41,14 @@ export function conflictReply(choice: ConflictChoice, applyToAll: boolean, renam
   }
 }
 
-/** Volumi del job che sono connessioni remote (`sftp://w`): le schede lì non hanno watcher. */
-export const remoteVolumesOf = (job: JobView): string[] => job.volumes.filter(isRemote);
+/**
+ * Connessioni remote (`sftp://w`) toccate dal job: le schede lì non hanno watcher. Il volume di un archivio remoto è
+ * `arc://` + la chiave del contenitore (`arc://sftp://w/rel/a.zip`): conta la connessione del contenitore.
+ */
+export const remoteVolumesOf = (job: JobView): string[] => [...new Set(job.volumes.flatMap((v) => {
+  const r = parseRemote(v.replace(/^arc:\/\//i, ""));
+  return r ? [`${r.scheme}://${r.conn}`] : [];
+}))];
 
 /**
  * Rilegge le schede sulle connessioni toccate dal job, al posto del watcher che il remoto non ha, e tutte le schede
