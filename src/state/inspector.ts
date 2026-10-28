@@ -7,7 +7,7 @@ import type { ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } fr
 import { detectEncoding } from "../lib/encoding";
 import { renderMarkdown } from "../lib/markdown";
 import { languageFor, loadMonaco } from "../lib/monaco";
-import { folderName, isVirtual, sourceCaps } from "../lib/paths";
+import { folderName, isRemote, isVirtual, sourceCaps } from "../lib/paths";
 import { looksBinary, previewKind } from "../lib/preview";
 import { cancelTabSizes, computeDirSize } from "./sizeRequests";
 
@@ -20,6 +20,9 @@ export const ARCHIVE_LIMIT = 500;
  * centinaia di byte può dichiarare intestazioni e dizionari da GB. Con il cursore che corre non deve mai partire da solo.
  */
 const ON_DEMAND = /\.7z$/i;
+
+/** Archivi remoti che l'ispettore può elencare (il 7z solo su richiesta, vedi `ON_DEMAND`). */
+const REMOTE_LISTABLE = /\.(zip|7z)$/i;
 
 /** Proprietario fittizio dei calcoli di dimensione dell'ispettore (`cancelTabSizes`). */
 const OWNER = "inspector";
@@ -113,8 +116,10 @@ async function load(t: InspectorTarget, my: number) {
     }
     const name = folderName(t.path);
     const kind = previewKind(name);
-    // Sul remoto e negli archivi solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni movimento.
-    if (isVirtual(t.path) && kind !== null && kind !== "markdown") return patch({ preview: { kind: "none" } });
+    // Sul remoto e negli archivi solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni
+    // movimento. Fa eccezione un ZIP o 7z remoto, che il backend elenca dall'indice (TAR e TAR.GZ remoti non si elencano).
+    const listable = kind === "archive" && isRemote(t.path) && REMOTE_LISTABLE.test(name);
+    if (isVirtual(t.path) && kind !== null && kind !== "markdown" && !listable) return patch({ preview: { kind: "none" } });
     if (kind === "image" || kind === "pdf" || kind === "video" || kind === "audio") {
       return patch({ preview: { kind, path: t.path } });
     }

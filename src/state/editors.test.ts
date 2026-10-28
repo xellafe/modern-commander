@@ -117,6 +117,23 @@ test("blockUnloadIfDirty: la ricarica della pagina si ferma solo con modifiche n
   expect(dirty.returnValue).toBe(""); // WebView2 chiede la conferma solo con returnValue impostato
 });
 
+test("a read-only open (7z entry) puts the document read-only and never writes", async () => {
+  await useEditors.getState().open("t1", "arc://C:\\a.7z/a.ts", true);
+  expect(useEditors.getState().docs.t1.readOnly).toBe(true);
+  model().type("x");
+  await useEditors.getState().save("t1");
+  expect(api.writeTextFile).not.toHaveBeenCalled();
+});
+
+test("saving a zip entry passes the expected size like a remote file", async () => {
+  await useEditors.getState().open("t1", "arc://C:\\a.zip/a.ts");
+  expect(useEditors.getState().docs.t1.readOnly).toBe(false);
+  vi.mocked(api.writeTextFile).mockResolvedValue(info(200));
+  model().type("nuovo");
+  await useEditors.getState().save("t1");
+  expect(api.writeTextFile).toHaveBeenLastCalledWith("arc://C:\\a.zip/a.ts", "nuovo", "utf-8", false, 100, false, 9);
+});
+
 test("dirty follows the version of the last save: undo back to the saved point is clean", async () => {
   await useEditors.getState().open("t1", "C:\\a.ts");
   model().type("uno");

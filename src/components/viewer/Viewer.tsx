@@ -6,9 +6,9 @@ import { ansiEncoding, cancelRequest, fetchTemp, fileInfo, nextRequestId, readCh
 import type { AppError } from "../../ipc/types";
 import { ENCODINGS } from "../../lib/encoding";
 import { formatSize } from "../../lib/format";
-import { folderName, isVirtual } from "../../lib/paths";
+import { folderName } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
-import { alignTop, initialViewerState, nativeMode, useViewers, type ViewerMode } from "../../state/viewers";
+import { alignTop, initialViewerState, nativeMode, needsLocalCopy, skipsSample, useViewers, type ViewerMode } from "../../state/viewers";
 import { HexPane } from "./HexPane";
 import { ImagePane } from "./ImagePane";
 import { LinesPane } from "./LinesPane";
@@ -26,9 +26,6 @@ const SAMPLE = 65536;
 
 const toAppError = (e: unknown): AppError =>
   e && typeof e === "object" && "code" in e ? (e as AppError) : { code: "IO", path: null, detail: null };
-
-/** Viste che la WebView carica da un file locale: sul remoto prima si scarica il file. */
-const NEEDS_LOCAL: ViewerMode[] = ["image", "pdf", "video", "audio"];
 
 /** F3: viewer a blocchi di una scheda di file. Lo stato (modalità, codifica, posizione) sta in `useViewers`. */
 export function Viewer({ tabId, path }: { tabId: string; path: string }) {
@@ -56,10 +53,9 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
     (async () => {
       const info = await fileInfo(src);
       if (!useViewers.getState().states[tabId]) {
-        // Immagini, PDF e media remoti si scaricano comunque: il campione non serve, e su un server senza Range la
-        // sua lettura fallirebbe prima del download.
-        const native = nativeMode(name);
-        const skipSample = isVirtual(src) && native !== null && NEEDS_LOCAL.includes(native);
+        // Immagini, PDF e media remoti o d'archivio si scaricano comunque: il campione non serve, e su un server senza
+        // Range la sua lettura fallirebbe prima del download.
+        const skipSample = skipsSample(src, nativeMode(name));
         const [sample, ansi] = await Promise.all([skipSample ? new Uint8Array() : readChunk(src, 0, SAMPLE), ansiEncoding()]);
         if (!live) return; // scheda chiusa o cambiata durante la lettura: lo stato non deve rinascere
         useViewers.getState().set(tabId, { ...initialViewerState(name, sample, ansi, info.size <= SAMPLE), ...(copy && { localCopy: copy }) });
@@ -96,9 +92,9 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
     setCopy(local);
   };
 
-  // Immagini, PDF e media sul remoto: prima il download, poi la vista nativa sulla copia. Annullato, si resta
-  // sull'esadecimale, che legge a blocchi dal server.
-  const needsCopy = !!state && isVirtual(path) && !copy && NEEDS_LOCAL.includes(state.mode);
+  // Immagini, PDF e media sul remoto, e ogni voce d'archivio: prima il download (l'estrazione), poi la lettura dalla
+  // copia. Annullato, si resta sull'esadecimale, che legge dalla sorgente.
+  const needsCopy = needsLocalCopy(path, state?.mode, !!copy);
   useEffect(() => {
     if (!needsCopy) return;
     let live = true;

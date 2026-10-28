@@ -34,11 +34,12 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
   const [error, setError] = useState<AppError | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const instance = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const forceReadOnly = useLayout((s) => !!s.tabs[tabId].file?.readOnly);
   const loaded = !!doc;
   const readOnly = doc?.readOnly ?? false;
 
   useEffect(() => {
-    useEditors.getState().open(tabId, path).catch((e) => setError(toAppError(e)));
+    useEditors.getState().open(tabId, path, forceReadOnly).catch((e) => setError(toAppError(e)));
   }, [tabId, path]);
 
   useEffect(() => {

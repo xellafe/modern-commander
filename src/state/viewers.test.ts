@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "vitest";
-import { alignTop, initialViewerState, nativeMode, useViewers } from "./viewers";
+import { alignTop, initialViewerState, nativeMode, needsLocalCopy, skipsSample, useViewers } from "./viewers";
 
 const W = "windows-1252";
 
@@ -52,4 +52,23 @@ test("the store merges patches per tab and dispose forgets the tab", () => {
 test("a late patch for a closed tab does not bring its state back", () => {
   useViewers.getState().set("gone", { top: 10 });
   expect(useViewers.getState().states.gone).toBeUndefined();
+});
+
+test("archive entries are always extracted to a local copy before reading, remote files only for native views", () => {
+  const arc = "arc://C:\\a.zip/x.txt";
+  expect(needsLocalCopy(arc, "text", false)).toBe(true);
+  expect(needsLocalCopy(arc, "hex", false)).toBe(true);
+  expect(needsLocalCopy(arc, "image", false)).toBe(true);
+  expect(needsLocalCopy(arc, "text", true)).toBe(false); // copia già pronta
+  expect(needsLocalCopy(arc, undefined, false)).toBe(false); // stato non ancora creato
+  expect(needsLocalCopy("sftp://h/a.txt", "text", false)).toBe(false);
+  expect(needsLocalCopy("sftp://h/a.png", "image", false)).toBe(true);
+  expect(needsLocalCopy("C:\\a.png", "image", false)).toBe(false);
+});
+
+test("the sample is skipped for native views of remote files and archive entries, not for local ones", () => {
+  expect(skipsSample("arc://C:\\a.zip/x.png", "image")).toBe(true);
+  expect(skipsSample("sftp://h/a.mp4", "video")).toBe(true);
+  expect(skipsSample("arc://C:\\a.zip/x.txt", null)).toBe(false);
+  expect(skipsSample("C:\\a.png", "image")).toBe(false);
 });

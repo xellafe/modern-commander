@@ -107,8 +107,11 @@ export const retryOptions = (previous: SaveOptions, code: SaveErrorCode): SaveOp
 
 interface EditorsStore {
   docs: Record<string, EditorDoc>;
-  /** Legge il file e crea il modello; già aperto (ritorno alla scheda) non fa niente. Rifiuta con l'errore del backend. */
-  open: (tabId: string, path: string) => Promise<void>;
+  /**
+   * Legge il file e crea il modello; già aperto (ritorno alla scheda) non fa niente. Rifiuta con l'errore del backend.
+   * `readOnly`: il documento non si modifica né si salva (voce di un archivio non scrivibile).
+   */
+  open: (tabId: string, path: string, readOnly?: boolean) => Promise<void>;
   setDirty: (tabId: string, dirty: boolean) => void;
   /**
    * I salvataggi dello stesso file (anche da due schede) vanno uno alla volta; più richieste semplici
@@ -127,7 +130,7 @@ function refreshDirty(tabId: string) {
   if (model) useEditors.getState().setDirty(tabId, model.getAlternativeVersionId() !== savedVersion.get(tabId));
 }
 
-async function load(tabId: string, path: string, current: () => boolean) {
+async function load(tabId: string, path: string, forceReadOnly: boolean, current: () => boolean) {
   // La data si legge prima del contenuto: se il file cambia nel mezzo, il salvataggio lo vedrà come cambiato.
   const [info, ansi, monaco] = await Promise.all([fileInfo(path), ansiEncoding(), loadMonaco()]);
   const decoded = decodeForEditor(await readFile(path, EDITOR_MAX_BYTES), ansi);
@@ -138,7 +141,7 @@ async function load(tabId: string, path: string, current: () => boolean) {
   model.onDidChangeContent(() => refreshDirty(tabId));
   opened.set(tabId, { size: info.size, mtimeReliable: info.mtimeReliable });
   const { text: _text, ...rest } = decoded;
-  useEditors.setState((s) => ({ docs: { ...s.docs, [tabId]: { path, ...rest, modifiedMs: info.modifiedMs, dirty: false } } }));
+  useEditors.setState((s) => ({ docs: { ...s.docs, [tabId]: { path, ...rest, readOnly: rest.readOnly || forceReadOnly, modifiedMs: info.modifiedMs, dirty: false } } }));
 }
 
 /** Un salvataggio: errori in dialogo o avviso, mai rifiutati. */
@@ -171,12 +174,12 @@ async function writeDoc(tabId: string, opts: SaveOptions) {
 export const useEditors = create<EditorsStore>((set, get) => ({
   docs: {},
 
-  open: (tabId, path) => {
+  open: (tabId, path, readOnly = false) => {
     if (get().docs[tabId]) return Promise.resolve();
     const running = loads.get(tabId);
     if (running) return running.promise;
     const entry = {} as { promise: Promise<void> };
-    entry.promise = load(tabId, path, () => loads.get(tabId) === entry).finally(() => {
+    entry.promise = load(tabId, path, readOnly, () => loads.get(tabId) === entry).finally(() => {
       if (loads.get(tabId) === entry) loads.delete(tabId);
     });
     loads.set(tabId, entry);

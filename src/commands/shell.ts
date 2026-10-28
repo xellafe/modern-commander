@@ -3,7 +3,7 @@ import type { MouseEvent } from "react";
 import i18n from "../i18n";
 import { openPath, openWith, shiftPressed, showContextMenu, showProperties, startDrag } from "../ipc/api";
 import type { AppError } from "../ipc/types";
-import { isVirtual, joinPath, sourceCaps, type SourceCaps } from "../lib/paths";
+import { isArchive, isVirtual, joinPath, sourceCaps, type SourceCaps } from "../lib/paths";
 import { useLayout } from "../state/layout";
 import { useSettings } from "../state/settings";
 import type { Row, TabView } from "../state/tabView";
@@ -309,10 +309,12 @@ const DEFS: [string, Command["run"]][] = [
   ["cm_Edit", () => {
     const f = cursorFile();
     if (!f) return;
-    if (!sourceCaps(f.path).write) return useTabViews.getState().showNotice(f.tabId, { code: "READ_ONLY_SOURCE" });
+    // Un archivio non scrivibile (7z, TAR) si apre in sola lettura; il remoto non scrivibile (HTTP) resta un avviso.
+    const readOnly = !sourceCaps(f.path).write;
+    if (readOnly && !isArchive(f.path)) return useTabViews.getState().showNotice(f.tabId, { code: "READ_ONLY_SOURCE" });
     if (useSettings.getState().useExternalEditor && !isVirtual(f.path)) return editFile(f.tabId, f.path);
     const l = useLayout.getState();
-    l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor" });
+    l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor", ...(readOnly && { readOnly }) });
   }],
 ];
 
