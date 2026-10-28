@@ -42,8 +42,8 @@ export function conflictReply(choice: ConflictChoice, applyToAll: boolean, renam
 }
 
 /**
- * Connessioni remote (`sftp://w`) toccate dal job: le schede lì non hanno watcher. Il volume di un archivio remoto è
- * `arc://` + la chiave del contenitore (`arc://sftp://w/rel/a.zip`): conta la connessione del contenitore.
+ * Connessioni remote (`sftp://w`) toccate dal job: le schede lì non hanno watcher. Un archivio remoto dà due volumi,
+ * `arc://` + la chiave del contenitore (`arc://sftp://w/rel/a.zip`) e la sua connessione: contano una volta.
  */
 export const remoteVolumesOf = (job: JobView): string[] => [...new Set(job.volumes.flatMap((v) => {
   const r = parseRemote(v.replace(/^arc:\/\//i, ""));

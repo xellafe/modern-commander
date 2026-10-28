@@ -56,7 +56,8 @@ pub struct JobView {
     pub current: Option<String>,
     /// Media mobile sugli ultimi 2 s.
     pub speed_bps: u64,
-    /// Chiavi di scheduling (`Loc::volume_key`): unità o condivisione in locale, connessione sul remoto.
+    /// Chiavi di scheduling (`Loc::volume_key`): unità o condivisione in locale, connessione sul remoto; per un
+    /// archivio quella dell'archivio (`arc://` + contenitore) e quella del volume del contenitore.
     pub volumes: Vec<String>,
     /// Cartella di destinazione di Copy/Move/Pack (per la barra di stato); `None` per le altre operazioni.
     pub dest: Option<String>,
@@ -274,7 +275,10 @@ impl Queue {
     }
 
     fn enqueue_with(&self, spec: JobSpec, end: Option<mpsc::Sender<JobView>>) -> JobId {
-        let mut volumes: Vec<String> = spec.sources.iter().chain(spec.dest.iter()).map(|l| norm(l).volume_key()).collect();
+        // Un archivio occupa la sua chiave (`arc://` + contenitore) e anche quella del volume del contenitore: un job
+        // nell'archivio e uno sulla sua unità o connessione non girano insieme.
+        let keys = |l: &Loc| [Some(norm(l).volume_key()), l.archive_container().map(|c| norm(c).volume_key())];
+        let mut volumes: Vec<String> = spec.sources.iter().chain(spec.dest.iter()).flat_map(keys).flatten().collect();
         volumes.sort();
         volumes.dedup();
         let mut st = self.lock();
@@ -1801,6 +1805,24 @@ mod tests {
         assert_eq!(entries_of(&z), want);
         assert_eq!(listed(&q, &in_archive(&z, "/conf")), ["a.xml", "b.xml", "n.xml"]);
         assert!(parts_in(d.path()).is_empty());
+    }
+
+    #[test]
+    fn archive_job_also_holds_the_container_volume() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("x.txt", b"x")]);
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/a.zip", &std::fs::read(&z).unwrap());
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let remote = loc("arc://sftp:%2F%2Fm%2Fa.zip/x.txt");
+        let out = d.path().join("out");
+        let id = q.enqueue(job(JobKind::Copy, vec![in_archive(&z, "/x.txt"), remote.clone()], Some(Loc::Local(out.clone())), ConflictPolicy::Skip));
+        let mut want = vec![in_archive(&z, "/").volume_key(), Loc::Local(z.clone()).volume_key(), remote.volume_key(), "sftp://m".to_owned()];
+        want.sort();
+        want.dedup();
+        assert_eq!(q.list()[0].volumes, want);
+        finish(&rx, id);
     }
 
     #[test]
