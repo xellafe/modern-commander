@@ -106,6 +106,11 @@ pub fn free_name(vfs: &Vfs, dst: &Loc) -> Loc {
     if let Loc::Local(p) = dst {
         return Loc::Local(next_free_name(p));
     }
+    free_name_by(dst, |c| vfs.remote(c, Purpose::Transfer).and_then(|(p, path)| p.stat(&path)).is_ok())
+}
+
+/// Come `free_name` per una posizione non locale, con `taken` a dire se un nome è occupato.
+pub(crate) fn free_name_by(dst: &Loc, taken: impl Fn(&Loc) -> bool) -> Loc {
     let name = dst.file_name().unwrap_or_default();
     // Come `Path::file_stem`/`extension`: `.bashrc` non ha estensione.
     let (stem, ext) = match name.rfind('.') {
@@ -115,7 +120,7 @@ pub fn free_name(vfs: &Vfs, dst: &Loc) -> Loc {
     let parent = dst.parent().unwrap_or_else(|| dst.clone());
     (2u64..)
         .map(|n| parent.join(&format!("{stem} ({n}){ext}")))
-        .find(|c| vfs.remote(c, Purpose::Transfer).and_then(|(p, path)| p.stat(&path)).is_err())
+        .find(|c| !taken(c))
         .expect("intervallo infinito")
 }
 

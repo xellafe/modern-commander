@@ -23,6 +23,9 @@ struct Node {
 
 type Nodes = Arc<Mutex<BTreeMap<String, Node>>>;
 
+/// Vedi `MemProvider::on_write`.
+pub type WriteHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct MemProvider {
     nodes: Nodes,
     /// Byte dopo cui `reader` dà `CONNECTION_FAILED` (se il file è più lungo).
@@ -33,7 +36,7 @@ pub struct MemProvider {
     pub writable_dirs: Option<HashSet<String>>,
     /// `false`: date al minuto, come un server FTP senza `MDTM`.
     pub precise_mtime: bool,
-    /// `true`: `list` e `delete` danno `CONNECTION_FAILED`, come una sessione caduta.
+    /// `true`: `list`, `delete` e l'apertura dei writer danno `CONNECTION_FAILED`, come una sessione caduta.
     pub offline: AtomicBool,
     /// `true`: `list` e `delete` danno `TIMEOUT`, come una sessione bloccata (VPN caduta).
     pub stalled: AtomicBool,
@@ -42,8 +45,8 @@ pub struct MemProvider {
     /// `true`: dopo la prima eliminazione ogni `rename` fallisce (`IO`), come una connessione che cade lì.
     pub fail_rename_after_delete: bool,
     deleted: AtomicBool,
-    /// Chiamata a ogni scrittura di un writer, prima di scrivere (per agire a metà di un upload).
-    pub on_write: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Chiamata con il percorso a ogni scrittura di un writer, prima di scrivere (per agire a metà di un upload).
+    pub on_write: Option<WriteHook>,
 }
 
 /// Le connessioni per id.
@@ -103,13 +106,13 @@ impl<R: Read> Read for Counted<R> {
 struct MemWriter {
     nodes: Nodes,
     path: String,
-    on_write: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_write: Option<WriteHook>,
 }
 
 impl Write for MemWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let Some(f) = &self.on_write {
-            f();
+            f(&self.path);
         }
         let mut nodes = self.nodes.lock().unwrap();
         let node = nodes.get_mut(&self.path).ok_or_else(|| std::io::Error::other(err(ErrorCode::NotFound, &self.path)))?;
@@ -229,6 +232,7 @@ impl Provider for MemProvider {
     }
 
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {
+        self.online(path)?;
         let mut nodes = self.nodes.lock().unwrap();
         dir_exists(&nodes, parent(path))?;
         match nodes.get_mut(path) {

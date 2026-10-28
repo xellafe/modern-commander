@@ -1820,11 +1820,9 @@ mod tests {
         let z = d.path().join("z.zip");
         zip_file(&z, &[("a.txt", b"a")]);
         let bytes = std::fs::read(&z).unwrap();
-        // Senza rinomina atomica l'installazione elimina l'originale prima di rinominare: con la connessione caduta
-        // (`offline` vale per `list` e `delete`, e nel job li usa solo il commit) il commit fallisce lì.
-        let mut m = MemProvider::new();
-        m.atomic_replace = false;
-        let m = Arc::new(m);
+        // Connessione caduta: `offline` vale per `list`, `delete` e l'apertura dei writer, e nel job li usa solo
+        // l'upload del commit.
+        let m = Arc::new(MemProvider::new());
         m.add_file("/z.zip", &bytes);
         m.offline.store(true, std::sync::atomic::Ordering::SeqCst);
         let f = d.path().join("f.txt");
@@ -1835,8 +1833,10 @@ mod tests {
         assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Failed, vec![ErrorCode::ConnectionFailed]));
         assert!(exists(&f));
         assert_eq!(m.data("/z.zip").unwrap(), bytes);
-        // Con la connessione di nuovo su: commit, poi la sorgente si elimina.
         m.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+        let names: Vec<String> = m.list("/").unwrap().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["z.zip"], "nessun .mcpart");
+        // Con la connessione di nuovo su: commit, poi la sorgente si elimina.
         assert_eq!(finish(&rx, q.enqueue(move_f())).state, Done);
         assert!(!exists(&f));
         assert_eq!(zip_entries(m.data("/z.zip").unwrap()).into_iter().collect::<Vec<_>>(), [e("a.txt", b"a"), e("f.txt", b"f")]);
@@ -1856,7 +1856,8 @@ mod tests {
             })
             .collect();
         let (tx, started) = mpsc::channel();
-        let (q, rx) = queue(Fake { slow: Some(tx), ..Fake::default() });
+        let fake = Arc::new(Fake { slow: Some(tx), ..Fake::default() });
+        let (q, rx) = queue_shared(fake.clone());
         let id = q.enqueue(job(JobKind::Copy, sources, Some(in_archive(&z, "/")), ConflictPolicy::Ask));
         started.recv_timeout(T).unwrap();
         started.recv_timeout(T).unwrap(); // copia del secondo file in corso
@@ -1864,6 +1865,9 @@ mod tests {
         assert_eq!(finish(&rx, id).state, Cancelled);
         assert_eq!(std::fs::read(&z).unwrap(), before);
         assert!(parts_in(d.path()).is_empty());
+        // Le copie andavano nella cartella di lavoro dell'edit, che non c'è più.
+        let work = fake.copy_dsts.lock().unwrap()[0].parent().unwrap().to_path_buf();
+        assert!(work.starts_with(crate::net::temp::dir()) && !work.exists(), "{work:?}");
     }
 
     #[test]
@@ -1892,6 +1896,11 @@ mod tests {
         assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Failed, vec![ErrorCode::AlreadyExists]));
         assert_eq!(std::fs::read(&z).unwrap(), before);
         assert!(parts_in(d.path()).is_empty());
+        // Da un altro archivio: la sorgente si legge com'è.
+        let two = d.path().join("two.zip");
+        let v = finish(&rx, q.enqueue(job(JobKind::Pack { replace: false }, vec![in_archive(&z, "/p/x.txt")], Some(in_archive(&two, "/")), ConflictPolicy::Ask)));
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(entries_of(&two), [e("x.txt", b"x")]);
     }
 
     #[test]
@@ -1903,7 +1912,7 @@ mod tests {
         let work: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
         let mut m = MemProvider::new();
         let (s, w) = (slot.clone(), work.clone());
-        m.on_write = Some(Arc::new(move || {
+        m.on_write = Some(Arc::new(move |_| {
             let dirs = std::fs::read_dir(crate::net::temp::dir()).into_iter().flatten().flatten().map(|e| e.path());
             w.lock().unwrap().extend(dirs.filter(|p| std::fs::read(p.join("1")).is_ok_and(|b| b == MARK)));
             let _ = s.get().unwrap().cancel(1);
@@ -1948,6 +1957,81 @@ mod tests {
         assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
         assert_eq!(std::fs::read(out.join("conf").join("sub").join("b.xml")).unwrap(), b"b");
         assert_eq!(entries_of(&z), [e("e/", b""), e("e/d/x.txt", b"x"), e("keep.txt", b"k")]);
+    }
+
+    #[test]
+    fn move_folder_out_of_remote_zip_commits_once() {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default();
+        for dir in ["conf/", "conf/sub/"] {
+            w.add_directory(dir, o).unwrap();
+        }
+        for (name, data) in [("conf/a.xml", b"a"), ("conf/sub/b.xml", b"b"), ("keep.txt", b"k")] {
+            w.start_file(name, o).unwrap();
+            w.write_all(data).unwrap();
+        }
+        // Ogni riscrittura del contenitore è un upload su un temporaneo diverso.
+        let uploads: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
+        let mut m = MemProvider::new();
+        let u = uploads.clone();
+        m.on_write = Some(Arc::new(move |path| {
+            u.lock().unwrap().insert(path.to_owned());
+        }));
+        let m = Arc::new(m);
+        m.add_file("/a.zip", &w.finish().unwrap().into_inner());
+        let d = tempfile::tempdir().unwrap();
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let id = q.enqueue(job(JobKind::Move, vec![loc("arc://sftp:%2F%2Fm%2Fa.zip/conf")], Some(Loc::Local(d.path().into())), ConflictPolicy::Ask));
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(std::fs::read(d.path().join("conf").join("sub").join("b.xml")).unwrap(), b"b");
+        assert_eq!(zip_entries(m.data("/a.zip").unwrap()).into_iter().collect::<Vec<_>>(), [e("keep.txt", b"k")]);
+        assert_eq!(uploads.lock().unwrap().len(), 1, "{uploads:?}");
+    }
+
+    #[test]
+    fn same_name_twice_into_one_zip_asks_and_loses_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("a/x.txt", b"da a"), ("b/x.txt", b"da b")]);
+        let (q, rx) = queue(LocalExecutor);
+        let skip_second = |sources: Vec<Loc>, dest: Loc, conflict: &str| {
+            let id = q.enqueue(job(JobKind::Move, sources, Some(dest), ConflictPolicy::Ask));
+            let p = next_prompt(&rx);
+            let Prompt::Conflict { dst, .. } = &p else { panic!("{p:?}") };
+            assert_eq!(dst, conflict);
+            reply_conflict(&q, &p, Decision::Skip, false);
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        };
+        // Dentro lo stesso ZIP: il secondo `x.txt` trova il primo appena spostato.
+        let c = in_archive(&z, "/c");
+        skip_second(vec![in_archive(&z, "/a/x.txt"), in_archive(&z, "/b/x.txt")], c.clone(), &c.join("x.txt").to_string());
+        assert_eq!(entries_of(&z), [e("b/x.txt", b"da b"), e("c/", b""), e("c/x.txt", b"da a")]);
+        // Da due cartelle locali: il secondo trova il primo appena aggiunto, e la sua sorgente resta.
+        let (s1, s2) = (d.path().join("s1"), d.path().join("s2"));
+        for (dir, data) in [(&s1, b"uno"), (&s2, b"due")] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::write(dir.join("f.txt"), data).unwrap();
+        }
+        let sources = vec![Loc::Local(s1.join("f.txt")), Loc::Local(s2.join("f.txt"))];
+        skip_second(sources, in_archive(&z, "/"), &in_archive(&z, "/f.txt").to_string());
+        assert_eq!(entries_of(&z), [e("b/x.txt", b"da b"), e("c/", b""), e("c/x.txt", b"da a"), e("f.txt", b"uno")]);
+        assert!(!exists(&s1.join("f.txt")));
+        assert_eq!(std::fs::read(s2.join("f.txt")).unwrap(), b"due");
+        // Pack con tre sorgenti dallo stesso nome: la politica decide, e il nome nuovo evita anche quelli già aggiunti.
+        let s3 = d.path().join("s3");
+        std::fs::create_dir(&s3).unwrap();
+        std::fs::write(s3.join("f.txt"), b"tre").unwrap();
+        let s4 = d.path().join("s4");
+        std::fs::create_dir(&s4).unwrap();
+        std::fs::write(s4.join("f.txt"), b"quattro").unwrap();
+        let n = d.path().join("n.zip");
+        let sources = [&s2, &s3, &s4].iter().map(|s| Loc::Local(s.join("f.txt"))).collect();
+        let v = finish(&rx, q.enqueue(job(JobKind::Pack { replace: false }, sources, Some(in_archive(&n, "/")), ConflictPolicy::RenameNew)));
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(entries_of(&n), [e("f (2).txt", b"tre"), e("f (3).txt", b"quattro"), e("f.txt", b"due")]);
     }
 
     #[test]
