@@ -3,7 +3,7 @@
 // il bersaglio per cui è partito è ancora quello corrente (`token`). Al cambio si annulla tutto ciò che è in corso.
 import { create } from "zustand";
 import { ansiEncoding, calcHash, cancelRequest, fileInfo, listArchive, nextRequestId, readChunk } from "../ipc/api";
-import type { ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } from "../ipc/types";
+import type { AppError, ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } from "../ipc/types";
 import { detectEncoding } from "../lib/encoding";
 import { renderMarkdown } from "../lib/markdown";
 import { languageFor, loadMonaco } from "../lib/monaco";
@@ -41,7 +41,7 @@ export type Preview =
   /** Archivio non elencato da solo (7z, vedi `ON_DEMAND`): si elenca con `requestArchive`. */
   | { kind: "archiveOnDemand" }
   | { kind: "binary" }
-  | { kind: "error"; code: ErrorCode };
+  | { kind: "error"; code: ErrorCode; detail?: string | null };
 
 export interface InspectorTarget {
   path: string;
@@ -79,6 +79,9 @@ function cancelWork() {
 
 const toCode = (e: unknown): ErrorCode =>
   e && typeof e === "object" && "code" in e ? (e as { code: ErrorCode }).code : "IO";
+
+/** Anteprima d'errore: codice e, se c'è, `detail` (vedi `errorKey`). */
+const toError = (e: unknown): Preview => ({ kind: "error", code: toCode(e), detail: (e as Partial<AppError> | null)?.detail ?? undefined });
 
 /** Avvia una richiesta annullabile: l'id resta in `requests` finché non finisce. */
 async function tracked<T>(run: (id: number) => Promise<T>): Promise<T> {
@@ -138,7 +141,7 @@ async function load(t: InspectorTarget, my: number) {
     if (kind === "markdown") return patch({ preview: { kind: "markdown", html: await renderMarkdown(read), truncated } });
     patch({ preview: { kind: "text", text: read, language, truncated } });
   } catch (e) {
-    patch({ preview: { kind: "error", code: toCode(e) } });
+    patch({ preview: toError(e) });
   }
 }
 
@@ -165,7 +168,7 @@ export const useInspector = create<InspectorState>((set, get) => ({
     set({ preview: { kind: "loading" } });
     tracked((id) => listArchive(id, target.path, ARCHIVE_LIMIT)).then(
       (listing) => my === token && set({ preview: { kind: "archive", listing } }),
-      (e) => my === token && set({ preview: { kind: "error", code: toCode(e) } }),
+      (e) => my === token && set({ preview: toError(e) }),
     );
   },
   requestHash: (algo) => {

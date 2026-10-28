@@ -16,6 +16,8 @@ export interface Notice {
   tabId: string;
   code: ErrorCode;
   path: string | null;
+  /** Il `detail` dell'errore, se c'è (vedi `errorKey`). */
+  detail?: string | null;
 }
 
 export interface MenuItem {
@@ -258,7 +260,7 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
 
   showNotice: (tabId, error) => {
     const e = error as Partial<AppError> | null;
-    set({ notice: { tabId, code: e?.code ?? "IO", path: e?.path ?? null } });
+    set({ notice: { tabId, code: e?.code ?? "IO", path: e?.path ?? null, detail: e?.detail ?? undefined } });
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => set({ notice: null }), 5000);
   },

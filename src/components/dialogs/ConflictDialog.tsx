@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import { nameError } from "../../commands/fileOps";
 import type { AppError, Meta, Prompt, PromptReply } from "../../ipc/types";
 import { formatDate, formatSize, splitName } from "../../lib/format";
@@ -26,7 +27,8 @@ export function useAnswer(prompt: Prompt) {
     try {
       await useJobs.getState().answer(prompt, reply);
     } catch (e) {
-      setError(t(`errors.${(e as Partial<AppError>)?.code ?? "IO"}`));
+      const err = e as Partial<AppError> | null;
+      setError(t(errorKey({ code: err?.code ?? "IO", detail: err?.detail })));
       setBusy(false);
     }
   };

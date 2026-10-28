@@ -1,6 +1,7 @@
 import { Funnel, Search } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import { executeCommand } from "../../commands/registry";
 import { useLayout, type Group as GroupModel } from "../../state/layout";
 import { useTabViews, type MenuItem } from "../../state/tabViews";
@@ -59,7 +60,7 @@ export function Group({ group, active, grow }: { group: GroupModel; active: bool
       {/* Anche sulle schede di file: un salvataggio fallito dell'editor (file in uso, accesso negato) arriva qui. */}
       {notice && (
         <div className="mc-notice" role="alert">
-          {t(`errors.${notice.code}`)}
+          {t(errorKey(notice))}
           {notice.path && <span>{notice.path}</span>}
         </div>
       )}

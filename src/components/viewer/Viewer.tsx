@@ -1,6 +1,7 @@
 import { WrapText } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import { closeTab } from "../../commands/navigation";
 import { ansiEncoding, cancelRequest, fetchTemp, fileInfo, nextRequestId, readChunk } from "../../ipc/api";
 import type { AppError } from "../../ipc/types";
@@ -229,7 +230,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
         <div className="mc-viewer-note">{t("viewer.downloading", { size: formatSize(download, i18n.language) })}</div>
       ) : error ? (
         <div className="mc-viewer-note" role="alert">
-          {t(`errors.${error.code}`)}
+          {t(errorKey(error))}
           {error.path && <span>{error.path}</span>}
           {error.code === "RANGE_UNSUPPORTED" && !copy && (
             <button
