@@ -87,7 +87,7 @@ test("pack submits a pack job", async () => {
   vi.mocked(api.enqueueJob).mockResolvedValue(1);
   const req = { kind: "pack" as const, sources: ["C:\\w\\src"], name: "src.zip", destDir: "D:\\out" };
   vi.mocked(api.fileInfo).mockRejectedValue({ code: "NOT_FOUND" });
-  expect(await packSubmit(req, "src.zip", "D:\\out", false)).toBe(true);
+  expect(await packSubmit(req, "src.zip", "D:\\out", false)).toBe("queued");
   expect(vi.mocked(api.enqueueJob).mock.lastCall?.[0]).toMatchObject({
     kind: { type: "pack", replace: false }, sources: ["C:\\w\\src"], dest: "arc://D:\\out\\src.zip/",
   });
@@ -97,10 +97,31 @@ test("pack submits a pack job", async () => {
   // File esistente: avviso (niente job), poi "Sovrascrivi".
   vi.mocked(api.enqueueJob).mockClear();
   vi.mocked(api.fileInfo).mockResolvedValue({ isDir: false } as never);
-  expect(await packSubmit(req, "src.zip", "D:\\out", false)).toBe(false);
+  expect(await packSubmit(req, "src.zip", "D:\\out", false)).toBe("exists");
   expect(api.enqueueJob).not.toHaveBeenCalled();
-  expect(await packSubmit(req, "src.zip", "D:\\out", true)).toBe(true);
+  expect(await packSubmit(req, "src.zip", "D:\\out", true)).toBe("queued");
   expect(vi.mocked(api.enqueueJob).mock.lastCall?.[0]).toMatchObject({ kind: { type: "pack", replace: true } });
+});
+
+test("pack does not enqueue when the dialog was cancelled or edited during the check", async () => {
+  const req = { kind: "pack" as const, sources: ["C:\\w\\src"], name: "src.zip", destDir: "D:\\out" };
+  vi.mocked(api.enqueueJob).mockReset().mockResolvedValue(1);
+  let current = true;
+  vi.mocked(api.fileInfo).mockImplementation(async () => {
+    current = false; // Annulla (o una modifica) mentre il server risponde
+    throw { code: "NOT_FOUND" };
+  });
+  expect(await packSubmit(req, "src.zip", "D:\\out", false, () => current)).toBe("stale");
+  // Anche con un file che esiste: il risultato di un controllo vecchio non si mostra.
+  current = true;
+  vi.mocked(api.fileInfo).mockImplementation(async () => {
+    current = false;
+    return { isDir: false } as never;
+  });
+  expect(await packSubmit(req, "src.zip", "D:\\out", false, () => current)).toBe("stale");
+  // Sovrascrivi già cliccato, poi Annulla prima dell'invio: niente job.
+  expect(await packSubmit(req, "src.zip", "D:\\out", true, () => false)).toBe("stale");
+  expect(api.enqueueJob).not.toHaveBeenCalled();
 });
 
 test("unpack lists the root into the copy dialog", async () => {
@@ -124,4 +145,15 @@ test("unpack of an empty archive shows a notice, of a non-archive does nothing",
   await executeCommand("cm_UnpackFiles");
   expect(api.listDir).toHaveBeenCalledTimes(1); // solo il caricamento della scheda
   expect(useUi.getState().dialog).toBeNull();
+});
+
+test("unpack from an archive on a server keeps the encoded container in the sources", async () => {
+  await setup("sftp://w/rel", "D:\\out", [f("a.zip"), f("n.txt")]);
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a"), f("b")]);
+  await executeCommand("cm_UnpackFiles");
+  expect(api.listDir).toHaveBeenLastCalledWith("arc://sftp:%2F%2Fw%2Frel%2Fa.zip/");
+  expect(useUi.getState().dialog).toMatchObject({
+    kind: "copyMove", from: "sftp://w/rel", dest: "D:\\out\\a\\",
+    sources: ["arc://sftp:%2F%2Fw%2Frel%2Fa.zip/a", "arc://sftp:%2F%2Fw%2Frel%2Fa.zip/b"],
+  });
 });

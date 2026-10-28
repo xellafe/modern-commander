@@ -42,7 +42,8 @@ function openPack() {
 }
 
 /**
- * OK del dialogo Comprimi. `false` se il file esiste già e `replace` non c'è: il dialogo chiede se sovrascrivere.
+ * OK del dialogo Comprimi. `"exists"`: il file esiste già e `replace` non c'è, il dialogo chiede se sovrascrivere.
+ * `"stale"`: `isCurrent` è diventata falsa durante il controllo (Annulla, nome o cartella cambiati) e il job non parte.
  * ponytail: controllo e job non sono atomici; se il file compare in mezzo, il backend risponde ALREADY_EXISTS.
  */
 export async function packSubmit(
@@ -50,17 +51,22 @@ export async function packSubmit(
   name: string,
   destDir: string,
   replace: boolean,
-): Promise<boolean> {
+  isCurrent: () => boolean = () => true,
+): Promise<"queued" | "exists" | "stale"> {
   const file = joinPath(destDir, zipName(name));
-  if (!replace && (await fileInfo(file).then(() => true, () => false))) return false;
+  const exists = !replace && (await fileInfo(file).then(() => true, () => false));
+  if (!isCurrent()) return "stale";
+  if (exists) return "exists";
   // `dest` è la radice dello ZIP da creare.
   await enqueue({ kind: { type: "pack", replace }, sources: req.sources, dest: formatArchive(file) });
-  return true;
+  return "queued";
 }
 
 async function unpack() {
   const a = archiveUnderCursor();
   if (!a) return;
+  // Gruppo di destinazione e cartella di partenza presi subito: durante l'attesa l'utente può cambiare scheda o gruppo.
+  const t = copyTargets(useLayout.getState());
   let entries;
   try {
     entries = await listDir(a.root);
@@ -72,7 +78,6 @@ async function unpack() {
     views().showNotice(a.tabId, { code: "EMPTY_ARCHIVE" });
     return;
   }
-  const t = copyTargets(useLayout.getState());
   // Il separatore finale dice al backend che la destinazione è una cartella, anche con una sola voce.
   const dest = joinPath(t.dest, unpackFolder(a.name)) + (isVirtual(t.dest) ? "/" : "\\");
   // La radice di un archivio non è mai una sorgente: lo sono le sue voci.

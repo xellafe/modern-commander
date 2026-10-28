@@ -356,6 +356,7 @@
     "packTitle": "Pack into a ZIP",
     "packName": "Pack {{what}} into the archive:",
     "packDest": "In the folder:",
+    "packDestInvalid": "Choose a folder where files can be written (not inside an archive).",
     "packExists": "“{{name}}” already exists. Overwrite it, or change the name.",
     "mkdirLabel": "New folder in {{path}} (\\ creates subfolders):",
     "deleteTitle": "Delete",

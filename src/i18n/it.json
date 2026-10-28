@@ -356,6 +356,7 @@
     "packTitle": "Comprimi in uno ZIP",
     "packName": "Comprimi {{what}} nell'archivio:",
     "packDest": "Nella cartella:",
+    "packDestInvalid": "Scegli una cartella in cui si può scrivere (non dentro un archivio).",
     "packExists": "«{{name}}» esiste già. Sovrascrivilo o cambia il nome.",
     "mkdirLabel": "Nuova cartella in {{path}} (\\ crea le sottocartelle):",
     "deleteTitle": "Elimina",
