@@ -352,6 +352,7 @@
     "deletePermanentTitle": "Elimina definitivamente",
     "deleteText": "Spostare {{what}} nel Cestino?",
     "deletePermanentText": "Eliminare definitivamente {{what}}? L'operazione non si può annullare.",
+    "deleteArchiveNote": "Dentro un archivio non c'è il Cestino: gli elementi vengono eliminati definitivamente dall'archivio.",
     "exitTitle": "Esci da Modern Commander",
     "exitJobs_one": "{{count}} operazione non è finita e verrà annullata.",
     "exitJobs_other": "{{count}} operazioni non sono finite e verranno annullate.",

@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import { cancelJob, listJobs, onJobPrompt, onJobUpdated, replyPrompt } from "../ipc/api";
 import type { JobId, JobKind, JobView, Prompt, PromptReply } from "../ipc/types";
-import { isRemote, joinPath, parseRemote } from "../lib/paths";
+import { isArchive, isRemote, joinPath, parseRemote } from "../lib/paths";
 import { useLayout } from "./layout";
 import { parentPath } from "./tabView";
 import { useTabViews } from "./tabViews";
@@ -44,13 +44,15 @@ export function conflictReply(choice: ConflictChoice, applyToAll: boolean, renam
 /** Volumi del job che sono connessioni remote (`sftp://w`): le schede lì non hanno watcher. */
 export const remoteVolumesOf = (job: JobView): string[] => job.volumes.filter(isRemote);
 
-/** Rilegge le schede sulle connessioni toccate dal job, al posto del watcher che il remoto non ha. */
+/**
+ * Rilegge le schede sulle connessioni toccate dal job, al posto del watcher che il remoto non ha, e tutte le schede
+ * d'archivio aperte. ponytail: anche quelle che il job non ha toccato; la cache dell'indice rende la rilettura economica.
+ */
 function reloadRemoteTabs(job: JobView) {
   const vols = remoteVolumesOf(job);
-  if (!vols.length) return;
   for (const tab of Object.values(useLayout.getState().tabs)) {
     const r = parseRemote(tab.path);
-    if (r && vols.includes(`${r.scheme}://${r.conn}`)) void useTabViews.getState().reload(tab.id);
+    if (isArchive(tab.path) || (r && vols.includes(`${r.scheme}://${r.conn}`))) void useTabViews.getState().reload(tab.id);
   }
 }
 

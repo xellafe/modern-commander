@@ -1,7 +1,7 @@
 import type { DirSize, Drive, Entry } from "../ipc/types";
 import { typeKey } from "../lib/columns";
 import { compileMask } from "../lib/mask";
-import { parseRemote } from "../lib/paths";
+import { formatArchive, parseArchive, parseRemote } from "../lib/paths";
 
 export type SortKey = "name" | "ext" | "size" | "date" | "created" | "accessed" | "type" | "none";
 export interface Row extends Entry {
@@ -56,6 +56,11 @@ export const hasSize = (sizes: Record<string, unknown>, name: string): boolean =
   Object.prototype.hasOwnProperty.call(sizes, name); // Object.hasOwn è ES2022, il target è ES2020
 
 export function parentPath(path: string): string | null {
+  const a = parseArchive(path);
+  if (a) {
+    // Dalla radice dell'archivio si esce nella cartella del contenitore.
+    return a.inner === "/" ? parentPath(a.container) : formatArchive(a.container, a.inner.slice(0, a.inner.lastIndexOf("/")) || "/");
+  }
   const r = parseRemote(path);
   if (r) {
     if (r.path === "/") return null; // radice della connessione

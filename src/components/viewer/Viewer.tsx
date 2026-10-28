@@ -6,7 +6,7 @@ import { ansiEncoding, cancelRequest, fetchTemp, fileInfo, nextRequestId, readCh
 import type { AppError } from "../../ipc/types";
 import { ENCODINGS } from "../../lib/encoding";
 import { formatSize } from "../../lib/format";
-import { folderName, isRemote } from "../../lib/paths";
+import { folderName, isVirtual } from "../../lib/paths";
 import { useLayout } from "../../state/layout";
 import { alignTop, initialViewerState, nativeMode, useViewers, type ViewerMode } from "../../state/viewers";
 import { HexPane } from "./HexPane";
@@ -59,7 +59,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
         // Immagini, PDF e media remoti si scaricano comunque: il campione non serve, e su un server senza Range la
         // sua lettura fallirebbe prima del download.
         const native = nativeMode(name);
-        const skipSample = isRemote(src) && native !== null && NEEDS_LOCAL.includes(native);
+        const skipSample = isVirtual(src) && native !== null && NEEDS_LOCAL.includes(native);
         const [sample, ansi] = await Promise.all([skipSample ? new Uint8Array() : readChunk(src, 0, SAMPLE), ansiEncoding()]);
         if (!live) return; // scheda chiusa o cambiata durante la lettura: lo stato non deve rinascere
         useViewers.getState().set(tabId, { ...initialViewerState(name, sample, ansi, info.size <= SAMPLE), ...(copy && { localCopy: copy }) });
@@ -98,7 +98,7 @@ export function Viewer({ tabId, path }: { tabId: string; path: string }) {
 
   // Immagini, PDF e media sul remoto: prima il download, poi la vista nativa sulla copia. Annullato, si resta
   // sull'esadecimale, che legge a blocchi dal server.
-  const needsCopy = !!state && isRemote(path) && !copy && NEEDS_LOCAL.includes(state.mode);
+  const needsCopy = !!state && isVirtual(path) && !copy && NEEDS_LOCAL.includes(state.mode);
   useEffect(() => {
     if (!needsCopy) return;
     let live = true;

@@ -352,6 +352,7 @@
     "deletePermanentTitle": "Delete permanently",
     "deleteText": "Move {{what}} to the Recycle Bin?",
     "deletePermanentText": "Permanently delete {{what}}? This cannot be undone.",
+    "deleteArchiveNote": "Inside an archive there is no Recycle Bin: the items are removed from the archive for good.",
     "exitTitle": "Exit Modern Commander",
     "exitJobs_one": "{{count}} operation is not finished and will be cancelled.",
     "exitJobs_other": "{{count}} operations are not finished and will be cancelled.",

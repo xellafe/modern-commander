@@ -71,6 +71,30 @@ test("cm_Return on a remote file opens the internal viewer instead of the associ
   expect(activeTab(useLayout.getState()).file).toEqual({ path: "sftp://w/var/log.txt", mode: "viewer" });
 });
 
+test("Enter on an archive opens it as a folder; inside it another archive opens in the viewer", async () => {
+  listDir.mockResolvedValueOnce([f("a.zip"), f("n.txt")]);
+  await useTabViews.getState().load("t1", "C:\\r");
+  useTabViews.getState().update("t1", (v) => ({ ...v, cursor: 1 })); // a.zip
+  listDir.mockResolvedValueOnce([f("b.zip")]);
+  await executeCommand("cm_Return");
+  expect(ctx().path).toBe("arc://C:\\r\\a.zip/");
+  expect(listDir).toHaveBeenLastCalledWith("arc://C:\\r\\a.zip/");
+  expect(api.openPath).not.toHaveBeenCalled();
+  useTabViews.getState().update("t1", (v) => ({ ...v, cursor: 1 })); // b.zip
+  await executeCommand("cm_Return");
+  expect(api.openPath).not.toHaveBeenCalled();
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "arc://C:\\r\\a.zip/b.zip", mode: "viewer" });
+});
+
+test("going up from the archive root lands on the archive file in its folder", async () => {
+  listDir.mockResolvedValueOnce([f("a.zip"), f("n.txt")]);
+  await useTabViews.getState().load("t1", "arc://C:\\r\\a.zip/");
+  listDir.mockResolvedValueOnce([f("a.zip"), f("n.txt")]);
+  await executeCommand("cm_GoToParent");
+  expect(ctx().path).toBe("C:\\r");
+  expect(ctx().cursorRow?.name).toBe("a.zip");
+});
+
 test("sort command on the same key twice reverses the order", async () => {
   await executeCommand("cm_SrcByName"); // già per nome: diventa decrescente
   expect(ctx().view.rows.map((r) => r.name)).toEqual(["..", "sub", "b.txt", "a.txt"]);

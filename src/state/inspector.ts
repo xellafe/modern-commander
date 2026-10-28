@@ -7,7 +7,7 @@ import type { ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } fr
 import { detectEncoding } from "../lib/encoding";
 import { renderMarkdown } from "../lib/markdown";
 import { languageFor, loadMonaco } from "../lib/monaco";
-import { folderName, isRemote, sourceCaps } from "../lib/paths";
+import { folderName, isVirtual, sourceCaps } from "../lib/paths";
 import { looksBinary, previewKind } from "../lib/preview";
 import { cancelTabSizes, computeDirSize } from "./sizeRequests";
 
@@ -113,8 +113,8 @@ async function load(t: InspectorTarget, my: number) {
     }
     const name = folderName(t.path);
     const kind = previewKind(name);
-    // Sul remoto solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni movimento.
-    if (isRemote(t.path) && kind !== null && kind !== "markdown") return patch({ preview: { kind: "none" } });
+    // Sul remoto e negli archivi solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni movimento.
+    if (isVirtual(t.path) && kind !== null && kind !== "markdown") return patch({ preview: { kind: "none" } });
     if (kind === "image" || kind === "pdf" || kind === "video" || kind === "audio") {
       return patch({ preview: { kind, path: t.path } });
     }

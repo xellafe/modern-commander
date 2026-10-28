@@ -97,6 +97,18 @@ test("remoteVolumesOf keeps only the connections among a job's volumes", () => {
   expect(remoteVolumesOf({ ...job(1, null), volumes: ["c:", "sftp://w"] })).toEqual(["sftp://w"]);
 });
 
+test("a job that finishes reloads every open archive tab, even for a job on local volumes", async () => {
+  let emit!: (j: JobView) => void;
+  vi.mocked(api.listJobs).mockResolvedValue([]);
+  vi.mocked(api.onJobUpdated).mockImplementation(async (cb) => ((emit = cb), () => {}));
+  await initJobs();
+  useLayout.setState({ tabs: { a: { id: "a", path: "arc://C:\\r\\a.zip/d" }, b: { id: "b", path: "C:\\" }, c: { id: "c", path: "sftp://w/" } } });
+  const reload = vi.fn(async () => {});
+  useTabViews.setState({ reload });
+  emit({ ...withState(8, "done"), volumes: ["arc://c:\\r\\a.zip", "c:"] });
+  expect(reload.mock.calls).toEqual([["a"]]);
+});
+
 test("a job that finishes reloads the tabs on its remote connections, once", async () => {
   let emit!: (j: JobView) => void;
   vi.mocked(api.listJobs).mockResolvedValue([]);

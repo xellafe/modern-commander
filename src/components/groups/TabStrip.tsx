@@ -5,9 +5,9 @@ import { chordParts } from "../../commands/keys";
 import { chordsOf } from "../../commands/keymap";
 import { closeTab } from "../../commands/navigation";
 import { useKeybindings } from "../../state/keybindings";
-import { DRIVES, folderName, parseRemote } from "../../lib/paths";
+import { DRIVES, folderName, isArchive, parseRemote } from "../../lib/paths";
 import { useConnections } from "../../state/connections";
-import { ConnIcon } from "./ConnIcon";
+import { ArchiveIcon, ConnIcon } from "./ConnIcon";
 import { useEditors } from "../../state/editors";
 import { useLayout, type Group, type Tab } from "../../state/layout";
 
@@ -92,7 +92,9 @@ export function TabStrip({ group }: { group: Group }) {
           onAuxClick={(e) => e.button === 1 && closeTab(id)}
         >
           {tabs[id].file && (tabs[id].file!.mode === "editor" ? <Pencil size={12} aria-hidden /> : <Eye size={12} aria-hidden />)}
-          {!tabs[id].file && parseRemote(tabs[id].path) && <ConnIcon scheme={parseRemote(tabs[id].path)!.scheme} />}
+          {!tabs[id].file && (isArchive(tabs[id].path)
+            ? <ArchiveIcon />
+            : parseRemote(tabs[id].path) && <ConnIcon scheme={parseRemote(tabs[id].path)!.scheme} />)}
           <span className="mc-tab-label">{label(tabs[id])}</span>
           {docs[id]?.dirty && <span className="mc-tab-dirty" role="img" aria-label={t("editor.unsavedTitle")} title={t("editor.unsavedTitle")} />}
           <button

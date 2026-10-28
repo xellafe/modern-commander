@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { ansiEncoding, fileInfo, readFile, writeTextFile } from "../ipc/api";
 import type { AppError } from "../ipc/types";
 import { detectEncoding } from "../lib/encoding";
-import { folderName, isRemote } from "../lib/paths";
+import { folderName, isVirtual } from "../lib/paths";
 import { languageFor, loadMonaco } from "../lib/monaco";
 import { looksBinary } from "../lib/preview";
 import { useTabViews } from "./tabViews";
@@ -154,8 +154,8 @@ async function writeDoc(tabId: string, opts: SaveOptions) {
   const encoding = opts.encoding ?? doc.encoding;
   const args = [doc.path, model.getValue(), encoding, doc.bom, opts.force ? null : doc.modifiedMs] as const;
   try {
-    // Dimensione e scrittura diretta valgono solo sul remoto.
-    const info = await (isRemote(doc.path) ? writeTextFile(...args, !!opts.allowUnsafe, opts.force ? null : (meta?.size ?? null)) : writeTextFile(...args));
+    // Dimensione e scrittura diretta valgono solo sul remoto e negli archivi.
+    const info = await (isVirtual(doc.path) ? writeTextFile(...args, !!opts.allowUnsafe, opts.force ? null : (meta?.size ?? null)) : writeTextFile(...args));
     if (models.get(tabId) !== model) return; // scheda chiusa durante la scrittura
     savedVersion.set(tabId, version);
     opened.set(tabId, { size: info.size, mtimeReliable: info.mtimeReliable });

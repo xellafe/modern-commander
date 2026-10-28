@@ -39,6 +39,17 @@ test("connectionsInUse: folder, file and return paths of the tabs, and volumes o
   expect([...connectionsInUse(tabs, jobs)].sort()).toEqual(["c1", "c2", "c3", "c4"]);
 });
 
+test("connectionsInUse counts the remote container of an open archive, in tabs and in job volumes", () => {
+  const tabs = {
+    a: tab("a", "arc://sftp:%2F%2Fc1%2Fr%2Fa.zip/d"),
+    b: tab("b", "C:\\", { file: { path: "arc://ftp:%2F%2Fc2%2Fa.zip/f.txt", mode: "viewer" } }),
+    c: tab("c", "arc://C:\\r\\local.zip/"),
+  };
+  // Il volume di un job su un archivio è `arc://<contenitore>` non codificato.
+  const jobs = { 1: job(1, "running", ["arc://sftp://c3/x/a.zip", "arc://c:\\r\\local.zip"]) };
+  expect([...connectionsInUse(tabs, jobs)].sort()).toEqual(["c1", "c2", "c3"]);
+});
+
 test("closing the last tab of a connection disconnects it, not before", () => {
   closeTab("a");
   expect(disconnect).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { deleteSources } from "../../commands/fileOps";
+import { isArchive } from "../../lib/paths";
 import { useUi, type DialogRequest } from "../../state/ui";
 import { Dialog, useWhat } from "./Dialog";
 
@@ -23,6 +24,7 @@ export function DeleteConfirm({ req }: { req: Extract<DialogRequest, { kind: "de
       </>}
     >
       <p>{t(req.permanent ? "ops.deletePermanentText" : "ops.deleteText", { what })}</p>
+      {req.sources.some(isArchive) && <p>{t("ops.deleteArchiveNote")}</p>}
     </Dialog>
   );
 }

@@ -2,7 +2,7 @@
 // anche la password non salvata, che alla prossima apertura si richiede.
 import { disconnect } from "../ipc/api";
 import type { JobId, JobView } from "../ipc/types";
-import { parseRemote } from "../lib/paths";
+import { connectionPath, parseRemote } from "../lib/paths";
 import { isFinished, useJobs } from "./jobs";
 import { useLayout, type Tab } from "./layout";
 
@@ -13,7 +13,8 @@ export function connectionsInUse(tabs: Record<string, Tab>, jobs: Record<JobId, 
     ...Object.values(jobs).flatMap((j) => (isFinished(j) ? [] : j.volumes)),
   ];
   return new Set(paths.flatMap((p) => {
-    const r = p ? parseRemote(p) : null;
+    // Un archivio usa la connessione del suo contenitore; nei volumi di un job è `arc://<contenitore>`, non codificato.
+    const r = p ? parseRemote(connectionPath(p).replace(/^arc:\/\//i, "")) : null;
     return r ? [r.conn] : [];
   }));
 }

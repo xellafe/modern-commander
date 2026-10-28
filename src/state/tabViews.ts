@@ -3,13 +3,13 @@ import { listDir, listDrives, nearestExistingAncestor, unwatchDir, watchDir } fr
 import type { AppError, Drive, ErrorCode } from "../ipc/types";
 import { typeKey, visibleColumns } from "../lib/columns";
 import { quickFilterMask } from "../lib/mask";
-import { DRIVES, isRemote, parseRemote, sourceCaps } from "../lib/paths";
+import { DRIVES, connectionPath, folderName, formatArchive, isVirtual, parseArchive, parseRemote, sourceCaps } from "../lib/paths";
 import { ensureConnected } from "./connections";
 import { setTabPath, useLayout } from "./layout";
 import { useRecentDirs } from "./recentDirs";
 import { useSettings } from "./settings";
 import { cancelTabSizes } from "./sizeRequests";
-import { buildRows, emptyView, jumpTo, navigateTo, type Row, type TabView } from "./tabView";
+import { buildRows, emptyView, jumpTo, navigateTo, parentPath, type Row, type TabView } from "./tabView";
 import { ensureTypeNames, useTypeNames } from "./typeNames";
 
 export interface Notice {
@@ -86,13 +86,14 @@ async function fetchListing(path: string, retried = false): Promise<Listing> {
     return { path, entries: await listDir(path) };
   } catch (e) {
     const err = e as AppError;
-    const remote = parseRemote(path);
+    // Un archivio si legge attraverso il suo contenitore: è lì che serve la connessione.
+    const remote = parseRemote(connectionPath(path));
     // Password o impronta: una domanda all'utente e un solo nuovo tentativo.
     if (remote && !retried && RECONNECT.includes(err?.code) && (await ensureConnected(remote.conn, err))) {
       return fetchListing(path, true);
     }
-    // Sul remoto niente risalita: un errore di rete o una cartella sparita vanno solo in notifica.
-    if ((err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") || isRemote(path)) throw e;
+    // Sul remoto e negli archivi niente risalita: un errore di rete o una cartella sparita vanno solo in notifica.
+    if ((err?.code !== "NOT_FOUND" && err?.code !== "NOT_READY") || isVirtual(path)) throw e;
     // Cartella sparita o unità non pronta: si risale all'antenato esistente, altrimenti alle unità.
     const up = await nearestExistingAncestor(path);
     return { ...(await fetchListing(up && up !== path ? up : DRIVES)), error: err };
@@ -146,11 +147,21 @@ export const useTabViews = create<TabViewsState>((set, get) => ({
       try {
         res = await fetchListing(path);
       } catch (e) {
+        // Archivio che non si apre: si torna alla cartella del contenitore, sul file, con l'errore come avviso.
+        // Un errore dentro un archivio già aperto resta un semplice avviso (la scheda non lo lascia).
+        const arc = parseArchive(path);
+        const cur = get().views[tabId];
+        if (arc && parseArchive(cur?.history[cur.historyIndex] ?? "")?.container !== arc.container) {
+          if (seq.get(tabId) !== token) return;
+          await get().load(tabId, parentPath(formatArchive(arc.container))!, { focus: folderName(arc.container) });
+          if (seq.get(tabId) === token + 1) get().showNotice(tabId, e); // `load` ha preso il token successivo: se è ancora l'ultimo
+          return;
+        }
         try {
           // Prima lettura di una scheda (accesso negato…): non resta vuota, mostra le unità. Una scheda
           // remota invece resta sul suo indirizzo, vuota: Ctrl+R riprova (il server può tornare).
           if (get().views[tabId] || path === DRIVES) throw e;
-          res = isRemote(path) ? { path, entries: [], error: e as AppError } : { ...(await fetchListing(DRIVES)), error: e as AppError };
+          res = isVirtual(path) ? { path, entries: [], error: e as AppError } : { ...(await fetchListing(DRIVES)), error: e as AppError };
         } catch {
           if (seq.get(tabId) === token) get().showNotice(tabId, e);
           return;
