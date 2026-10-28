@@ -32,6 +32,8 @@ pub struct IndexEntry {
     pub link: bool,
     /// Il nome originale risaliva (`..`), era assoluto o aveva una lettera di unità.
     pub bad_name: bool,
+    /// TAR GNU sparse: `size` è quella vera, ma nell'archivio ci sono solo i pezzi memorizzati. Non si estrae.
+    pub sparse: bool,
     pub size: u64,
     pub modified_ms: Option<i64>,
     /// Posizione nell'archivio.
@@ -62,10 +64,13 @@ pub struct Index {
     children: HashMap<String, Vec<String>>,
 }
 
-/// Cartella madre e nome di un percorso pulito diverso da `/`.
+/// Cartella madre e nome di un percorso pulito diverso da `/`; un percorso vuoto vale come la radice.
 fn split(path: &str) -> (&str, &str) {
-    let i = path.rfind('/').unwrap_or(0);
-    (if i == 0 { "/" } else { &path[..i] }, &path[i + 1..])
+    match path.rfind('/') {
+        Some(0) => ("/", &path[1..]),
+        Some(i) => (&path[..i], &path[i + 1..]),
+        None => ("/", path),
+    }
 }
 
 impl Index {
@@ -154,7 +159,7 @@ fn too_many(path: &Path) -> AppError {
 }
 
 /// Un errore a richiesta annullata è l'annullamento, non un archivio rotto.
-fn unless_cancelled<T>(r: Result<T, AppError>, cancel: &AtomicBool, path: &Path) -> Result<T, AppError> {
+pub(super) fn unless_cancelled<T>(r: Result<T, AppError>, cancel: &AtomicBool, path: &Path) -> Result<T, AppError> {
     r.map_err(|e| if cancel.load(Ordering::Relaxed) { AppError::new(ErrorCode::Cancelled, Some(path)) } else { e })
 }
 
@@ -171,7 +176,17 @@ pub fn build_zip(file: ContainerFile, cancel: &AtomicBool) -> Result<(Index, zip
     let build = || {
         check()?;
         let mut central = file.clone();
-        let archive = zip::ZipArchive::new(file).map_err(zip_err)?;
+        // Con l'offset da scoprire il crate cerca le intestazioni centrali in tutto il file, dall'inizio: sul remoto
+        // vorrebbe dire scaricarlo. Prima si prova l'archivio dall'inizio del file (il caso normale); solo se non
+        // torna (ZIP autoestraente, dati in testa) si cerca.
+        let known = zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(0) };
+        let archive = match zip::ZipArchive::with_config(known, file.clone()) {
+            Err(zip::result::ZipError::Io(e)) => return Err(io_err(&e, path)),
+            Err(_) => zip::ZipArchive::new(file).map_err(zip_err)?,
+            Ok(a) => a,
+        };
+        // ponytail: il tetto si controlla dopo che il crate ha già letto (e tenuto in memoria) tutta la directory
+        // centrale; la sua memoria è limitata dalla dimensione del file, non da un campo dichiarato.
         if archive.len() > MAX_ENTRIES {
             return Err(too_many(path));
         }
@@ -186,7 +201,7 @@ pub fn build_zip(file: ContainerFile, cancel: &AtomicBool) -> Result<(Index, zip
             let modified_ms = unix_mtime(&mut central, e.central_header_start()).map_err(|e| io_err(&e, path))?.or_else(dos);
             let link = e.is_symlink();
             let is_dir = e.is_dir() && !link;
-            entries.push(IndexEntry { path: p, is_dir, link, bad_name, size: e.size(), modified_ms, order: i as u64, at: EntryAt::Zip(i) });
+            entries.push(IndexEntry { path: p, is_dir, link, bad_name, sparse: false, size: e.size(), modified_ms, order: i as u64, at: EntryAt::Zip(i) });
         }
         Ok((Index::new(ArchiveFormat::Zip, false, entries), archive))
     };
@@ -251,7 +266,7 @@ pub fn build_7z(file: ContainerFile, cancel: &AtomicBool) -> Result<(Index, seve
             let modified_ms = f.has_last_modified_date.then(|| (u64::from(f.last_modified_date()) / 10_000) as i64 - NT_UNIX_DIFF_MS);
             let block = archive.stream_map.file_block_index.get(i).copied().flatten();
             let at = EntryAt::SevenZ { file: i, block };
-            entries.push(IndexEntry { path: p, is_dir: f.is_directory(), link: false, bad_name, size: f.size(), modified_ms, order: i as u64, at });
+            entries.push(IndexEntry { path: p, is_dir: f.is_directory(), link: false, bad_name, sparse: false, size: f.size(), modified_ms, order: i as u64, at });
         }
         Ok((Index::new(ArchiveFormat::SevenZ, archive.is_solid, entries), archive))
     };
@@ -283,7 +298,8 @@ fn index_tar<R: Read>(mut walker: TarWalker<R>, format: ArchiveFormat, path: &Pa
         let link = matches!(h.flag, b'1' | b'2');
         let at = if format == ArchiveFormat::TarGz { EntryAt::TarGz } else { EntryAt::Tar { data: h.data_offset } };
         let order = entries.len() as u64;
-        entries.push(IndexEntry { path: p, is_dir: h.is_dir() && !link, link, bad_name, size: h.shown_size, modified_ms: h.modified_ms, order, at });
+        let sparse = h.flag == b'S';
+        entries.push(IndexEntry { path: p, is_dir: h.is_dir() && !link, link, bad_name, sparse, size: h.shown_size, modified_ms: h.modified_ms, order, at });
     }
     Ok(Index::new(format, format == ArchiveFormat::TarGz, entries))
 }
@@ -356,6 +372,7 @@ mod tests {
         assert_eq!(ix.list("/a/b").unwrap().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["c.txt"]);
         assert!(ix.list("/a/b/c.txt").is_none());
         assert!(ix.stat("/nope").is_none());
+        assert!(ix.stat("").is_none() && ix.list("").is_none()); // niente panico su un percorso vuoto
     }
 
     #[test]

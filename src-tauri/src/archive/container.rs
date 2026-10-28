@@ -14,6 +14,10 @@ use std::sync::Arc;
 /// Lettura anticipata: le intestazioni di ZIP e 7z si leggono a pezzi piccoli e vicini.
 pub(super) const READ_AHEAD: usize = 256 * 1024;
 
+/// Lettura anticipata dopo un salto: un'intestazione letta a salti (inizio e fine di un 7z, intestazione locale di
+/// una voce ZIP) non trascina con sé `READ_AHEAD` byte; chi legge di seguito torna subito a `READ_AHEAD`.
+const JUMP_AHEAD: usize = 64 * 1024;
+
 enum Source {
     Local(std::fs::File),
     /// Il provider si chiede al connettore a ogni lettura: nessuna sessione resta occupata dalla cache.
@@ -104,7 +108,9 @@ impl Read for ContainerFile {
             if out.is_empty() || self.pos >= self.shared.len {
                 return Ok(0);
             }
-            let want = (self.shared.len - self.pos).min(READ_AHEAD as u64) as usize;
+            let sequential = !self.buf.is_empty() && self.pos == self.buf_at + self.buf.len() as u64;
+            let ahead = if sequential { READ_AHEAD } else { JUMP_AHEAD };
+            let want = (self.shared.len - self.pos).min(ahead as u64) as usize;
             self.buf = self.read_at(self.pos, want)?.into();
             self.buf_at = self.pos;
             if self.buf.is_empty() {

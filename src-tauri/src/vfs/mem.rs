@@ -8,7 +8,7 @@ use crate::error::{AppError, ErrorCode};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -37,6 +37,8 @@ pub struct MemProvider {
     pub offline: AtomicBool,
     /// `true`: `list` e `delete` danno `TIMEOUT`, come una sessione bloccata (VPN caduta).
     pub stalled: AtomicBool,
+    /// Byte restituiti da `read_at` e dagli stream di `reader`: quanto si è letto "dalla rete".
+    pub bytes_read: Arc<AtomicU64>,
 }
 
 /// Le connessioni per id.
@@ -78,6 +80,20 @@ impl Read for Broken {
     }
 }
 
+/// Conta i byte letti in `bytes_read`.
+struct Counted<R> {
+    inner: R,
+    count: Arc<AtomicU64>,
+}
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
 /// Scrive direttamente nel nodo: un errore a metà lascia il file incompleto, come su un server vero.
 struct MemWriter {
     nodes: Nodes,
@@ -110,7 +126,7 @@ impl MemProvider {
 
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false) }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default() }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -190,15 +206,17 @@ impl Provider for MemProvider {
         let data = self.file(path)?;
         let start = (offset.min(data.len() as u64)) as usize;
         let end = (start + len as usize).min(data.len());
+        self.bytes_read.fetch_add((end - start) as u64, Ordering::Relaxed);
         Ok(data[start..end].to_vec())
     }
 
     fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
         let data = self.file(path)?;
-        Ok(match self.fail_read_after {
+        let inner: Box<dyn Read + Send> = match self.fail_read_after {
             Some(n) if n < data.len() as u64 => Box::new(Cursor::new(data[..n as usize].to_vec()).chain(Broken)),
             _ => Box::new(Cursor::new(data)),
-        })
+        };
+        Ok(Box::new(Counted { inner, count: self.bytes_read.clone() }))
     }
 
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {

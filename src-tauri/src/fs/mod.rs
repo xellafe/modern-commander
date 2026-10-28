@@ -291,6 +291,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn read_chunk_inside_an_archive() {
+        use std::io::Write;
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&z).unwrap());
+        w.start_file("conf/a.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"0123456789").unwrap();
+        w.finish().unwrap();
+        let vfs = Arc::new(crate::vfs::mem::vfs(&[]));
+        let loc = Loc::archive(Loc::Local(z), "/conf/a.xml");
+        let got = tauri::async_runtime::block_on(on_remote(&vfs, loc, |p, path| content::remote_chunk(p, path, 2, 3))).unwrap();
+        assert_eq!(got, b"234");
+    }
+
+    #[test]
     fn local_only_rejects_archive_locations() {
         assert_eq!(local_only(r"arc://C:\a.zip/x").unwrap_err().code, ErrorCode::Unsupported);
         assert!(local_only(r"C:\a").is_ok());

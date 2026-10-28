@@ -109,8 +109,9 @@ fn parse_pax(mut d: &[u8]) -> (Option<String>, Option<u64>) {
 pub(super) struct TarHeader {
     pub name: String,
     pub flag: u8,
-    /// Byte di dati nell'archivio: zero per collegamenti, cartelle e dispositivi, qualunque cosa dica il campo.
-    #[allow(dead_code)] // per chi legge i dati della voce dal flusso (cursore del TAR.GZ)
+    /// Byte di dati nell'archivio: zero per collegamenti, cartelle e dispositivi, qualunque cosa dica il campo. Chi
+    /// legge i dati li ha da `Read` di `TarWalker`, già limitati a questa lunghezza.
+    #[allow(dead_code)]
     pub data_len: u64,
     /// Dimensione da mostrare: per i file GNU sparse quella vera, non quella memorizzata.
     pub shown_size: u64,
@@ -128,7 +129,8 @@ impl TarHeader {
 
 /// Voci di un TAR da flusso, una alla volta. `skip` scarta i contenuti (lettura o salto). Non si fida di nulla:
 /// le estensioni oltre `MAX_EXT` si scartano e la somma di controllo di ogni intestazione deve tornare. Le voci `L`,
-/// `K`, `x`, `g` non si restituiscono. I dati della voce corrente si scartano alla chiamata successiva.
+/// `K`, `x`, `g` non si restituiscono. I dati della voce corrente si leggono con `Read` (al più `data_len` byte) e
+/// quelli non letti si scartano alla chiamata successiva.
 pub(super) struct TarWalker<R> {
     r: R,
     skip: fn(&mut R, u64) -> io::Result<()>,
@@ -137,11 +139,13 @@ pub(super) struct TarWalker<R> {
     pos: u64,
     /// Inizio dell'intestazione successiva.
     next: u64,
+    /// Fine dei dati della voce corrente.
+    end: u64,
 }
 
 impl<R: Read> TarWalker<R> {
     pub(super) fn new(r: R, skip: fn(&mut R, u64) -> io::Result<()>, path: &Path) -> Self {
-        Self { r, skip, path: path.to_path_buf(), pos: 0, next: 0 }
+        Self { r, skip, path: path.to_path_buf(), pos: 0, next: 0, end: 0 }
     }
 
     fn io(&self, e: io::Error) -> AppError {
@@ -171,6 +175,11 @@ impl<R: Read> TarWalker<R> {
         Ok(ok)
     }
 
+    /// Byte della voce corrente non ancora letti.
+    pub(super) fn entry_left(&self) -> u64 {
+        self.end.saturating_sub(self.pos)
+    }
+
     /// La voce successiva; `None` al primo blocco di zeri (si tollera anche il secondo mancante) o a fine flusso.
     pub(super) fn next_header(&mut self) -> Result<Option<TarHeader>, AppError> {
         if self.next > self.pos {
@@ -181,7 +190,7 @@ impl<R: Read> TarWalker<R> {
         let mut b = [0u8; BLOCK];
         loop {
             if !self.block(&mut b)? || b.iter().all(|&x| x == 0) {
-                self.next = self.pos;
+                (self.next, self.end) = (self.pos, self.pos);
                 return Ok(None);
             }
             if !checksum_ok(&b) {
@@ -236,8 +245,26 @@ impl<R: Read> TarWalker<R> {
             }
             let data_offset = self.pos;
             self.next = data_offset.checked_add(padded(data_len, &self.path)?).ok_or_else(|| self.bad())?;
+            self.end = data_offset + data_len;
             return Ok(Some(TarHeader { name, flag, data_len, shown_size, modified_ms, data_offset }));
         }
+    }
+}
+
+/// I dati della voce corrente; finiti prima di `data_len`, l'archivio è troncato (`UnexpectedEof`).
+impl<R: Read> Read for TarWalker<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.entry_left();
+        if left == 0 || buf.is_empty() {
+            return Ok(0);
+        }
+        let want = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+        let n = self.r.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        self.pos += n as u64;
+        Ok(n)
     }
 }
 

@@ -2,7 +2,7 @@
 //! è fidato: nomi e dimensioni assurdi si rifiutano o si limitano, le voci non superano `limit`.
 
 use super::container::open_local;
-use super::index::{Index, build_7z, build_zip};
+use super::index::{Index, build_7z, build_zip, unless_cancelled};
 use super::tar_walk::{skip_read, skip_seek, walk_tar};
 use super::{ArchiveEntry, ArchiveFormat, ArchiveListing, format_of};
 use crate::error::{AppError, ErrorCode};
@@ -78,12 +78,11 @@ pub fn list_archive(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<Ar
         ArchiveFormat::Tar => list_tar(file()?, false, path, limit, cancel),
         ArchiveFormat::TarGz => list_tar(file()?, true, path, limit, cancel),
     };
-    // Un errore a richiesta annullata è l'annullamento, non un archivio rotto.
-    r.map_err(|e| if cancel.load(Ordering::Relaxed) { AppError::new(ErrorCode::Cancelled, Some(path)) } else { e })
+    unless_cancelled(r, cancel, path)
 }
 
 /// Le prime `limit` voci dell'indice (ZIP e 7z), senza le cartelle implicite.
-fn list_index(index: &Index, path: &Path, limit: usize) -> Result<ArchiveListing, AppError> {
+pub(super) fn list_index(index: &Index, path: &Path, limit: usize) -> Result<ArchiveListing, AppError> {
     let all = index.entries();
     let mut entries = Vec::with_capacity(all.len().min(limit));
     for e in all.iter().take(limit) {

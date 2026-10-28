@@ -1,4 +1,5 @@
-//! Posizione di un elemento: percorso Windows oppure `<schema>://<conn>/<percorso POSIX>`.
+//! Posizione di un elemento: percorso Windows, `<schema>://<conn>/<percorso POSIX>` oppure
+//! `arc://<contenitore>/<percorso POSIX>` dentro un archivio.
 
 use crate::error::{AppError, ErrorCode};
 use crate::paths;
@@ -34,8 +35,9 @@ impl Scheme {
     }
 }
 
-/// Posizione: percorso locale oppure `<schema>://<conn>/<percorso POSIX>` su una connessione salvata.
-/// Il percorso remoto è letterale UTF-8, sempre con `/` iniziale, senza `/` doppi né finali (salvo la radice).
+/// Posizione: percorso locale, `<schema>://<conn>/<percorso POSIX>` su una connessione salvata oppure
+/// `arc://<contenitore codificato>/<percorso POSIX>` dentro un archivio. Il percorso remoto è letterale UTF-8,
+/// sempre con `/` iniziale, senza `/` doppi né finali (salvo la radice).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Loc {
     Local(PathBuf),

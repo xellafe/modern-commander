@@ -1,16 +1,25 @@
-//! Archivi: elenco per l'ispettore (`list`), contenitore e indice in memoria per leggerli come cartelle (`container`, `index`).
+//! Archivi: elenco per l'ispettore (`list`), contenitore e indice in memoria per leggerli come cartelle (`container`,
+//! `index`), provider di cartella in cache (`provider`, `cache`) con lettori a canale e cursori (`pipe`, `cursor`).
 
+pub mod cache;
 pub mod container;
+mod cursor;
 pub mod index;
 pub mod list;
+pub mod pipe;
+pub mod provider;
 pub mod sevenz_guard;
 mod tar_walk;
 
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::fs::blocking;
 use crate::requests::Requests;
+use crate::vfs::loc::Loc;
+use crate::vfs::router::Vfs;
 use serde::Serialize;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tauri::State;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,22 +66,60 @@ pub fn format_of(path: &Path) -> Option<ArchiveFormat> {
     }
 }
 
-/// Elenca le prime `limit` voci di `path`. Si annulla con `cancel_request(request_id)` (errore `CANCELLED`).
+/// Elenca le prime `limit` voci di `path`, locale o remoto. Si annulla con `cancel_request(request_id)` (errore
+/// `CANCELLED`).
 #[tauri::command]
 pub async fn list_archive(
+    vfs: State<'_, Arc<Vfs>>,
     requests: State<'_, Requests>,
     request_id: u64,
     path: String,
     limit: usize,
 ) -> Result<ArchiveListing, AppError> {
-    let path = crate::fs::local_only(&path)?;
+    let loc = Loc::parse(&path)?;
     let guard = requests.register(request_id);
-    blocking(move || list::list_archive(&path, limit, guard.flag())).await?
+    let vfs = vfs.inner().clone();
+    blocking(move || match loc {
+        Loc::Local(p) => list::list_archive(&p, limit, guard.flag()),
+        loc => list_remote(&vfs, &loc, limit, guard.flag()),
+    })
+    .await?
+}
+
+/// Le prime `limit` voci di un archivio remoto, dall'indice in cache: solo ZIP e 7z, che si leggono a salti. TAR e
+/// TAR.GZ remoti si dovrebbero leggere (o scaricare) per intero, e l'ispettore non lo fa.
+fn list_remote(vfs: &Vfs, container: &Loc, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
+    let format = container.file_name().and_then(|n| format_of(Path::new(&n)));
+    match (container, format) {
+        (Loc::Remote { .. }, Some(ArchiveFormat::Zip | ArchiveFormat::SevenZ)) => {
+            let p = vfs.archive(container, cancel)?;
+            list::list_index(p.index(), Path::new(&container.to_string()), limit)
+        }
+        _ => Err(container.error(ErrorCode::Unsupported)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_inspector_lists_zip_but_not_tar() {
+        use crate::vfs::mem::{MemProvider, vfs};
+        let m = std::sync::Arc::new(MemProvider::new());
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file("d/x.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        m.add_file("/a.zip", &w.finish().unwrap().into_inner());
+        m.add_file("/a.tar", &[0; 1024]);
+        let v = vfs(&[("m", &m)]);
+        let no = AtomicBool::new(false);
+        let l = list_remote(&v, &Loc::parse("sftp://m/a.zip").unwrap(), 10, &no).unwrap();
+        assert_eq!((l.entries[0].path.as_str(), l.total), (r"d\x.txt", Some(1)));
+        let e = list_remote(&v, &Loc::parse("sftp://m/a.tar").unwrap(), 10, &no).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        let e = list_remote(&v, &Loc::parse(r"arc://C:\a.zip/b.zip").unwrap(), 10, &no).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Unsupported);
+    }
 
     #[test]
     fn formats_by_extension() {
