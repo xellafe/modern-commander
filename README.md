@@ -53,7 +53,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 - Un file solo ASCII di un utente con ANSI diverso da UTF-8 è rilevato come UTF-8.
 - Il salvataggio scrive su `<file>.<8 cifre>.mcpart`; dopo un crash del processo può restare un residuo `.mcpart`.
 - Immagini, PDF e media passano dall'asset protocol di Tauri: la verifica di Range 206, percorsi UNC, nomi con `#`, `%` e spazi, percorsi oltre 260 caratteri è **da verificare**; per i file che falliscono restano testo ed esadecimale. Vedi [docs/superpowers/fase-2-follow-up.md](docs/superpowers/fase-2-follow-up.md).
-- Archivi: solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'estrazione arriva con la fase 3. 7z con intestazioni cifrate non supportato; RAR escluso. Nell'ispettore ZIP, TAR e TAR.GZ si elencano da soli, il 7z solo su richiesta (pulsante "Mostra contenuto"): il crate non limita la memoria e un 7z costruito ad arte può allocarne molta.
+- Archivi: nell'ispettore solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'apertura come cartella è nella sezione "Archivi (fase 3b)". Nell'ispettore ZIP, TAR e TAR.GZ si elencano da soli, il 7z solo su richiesta (pulsante "Mostra contenuto"): il crate non limita la memoria e un 7z costruito ad arte può allocarne molta.
 
 ## Sorgenti di rete (fase 3a)
 
@@ -73,6 +73,30 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 - Niente chiavi SSH né WebDAV (issue #1, #2), niente SCP. HTTP è in sola lettura.
 - Dove la scrittura sicura (temporaneo e rinomina) non è possibile, il salvataggio diretto chiede conferma.
 - Verifiche manuali e limiti noti: [docs/superpowers/fase-3a-follow-up.md](docs/superpowers/fase-3a-follow-up.md).
+
+## Archivi (fase 3b)
+
+| Tasti | Funzione |
+|---|---|
+| Invio / Ctrl+PgDn | Apre l'archivio sotto il cursore come cartella (ZIP, 7z, TAR, TAR.GZ), anche su un server |
+| Backspace dalla radice | Torna alla cartella che contiene l'archivio |
+| Alt+F5 | Crea uno ZIP dalla selezione nella cartella dell'altro gruppo (anche su un server) |
+| Alt+F9 | Estrae l'archivio sotto il cursore, col dialogo della copia, in una sottocartella con il nome dell'archivio |
+| F5, F6, F7, F8, Shift+F6, F4 | Dentro uno ZIP: aggiungere, spostare, creare cartelle, eliminare (F8 è sempre definitivo), rinominare, modificare un file (il salvataggio sostituisce la voce) |
+
+- **Sola lettura**: 7z, TAR e TAR.GZ si sfogliano ed estraggono, ma non si modificano; F4 su di essi apre in sola lettura.
+- **F3** su una voce la estrae prima nella cartella temporanea dell'app.
+- **Scrittura**: ogni modifica a uno ZIP lo riscrive una sola volta per operazione in un file temporaneo e sostituisce l'originale solo a lavoro finito; errore o annullamento lasciano l'originale intatto.
+
+### Limiti accettati
+
+- Niente RAR, niente archivi annidati, niente archivi cifrati.
+- Dizionario LZMA/LZMA2 (o memoria PPMd) oltre 256 MiB: archivio rifiutato (`ARCHIVE_TOO_DEMANDING`).
+- Un TAR.GZ remoto si scarica per intero; ZIP e 7z remoti si leggono a intervalli.
+- La modifica di un archivio non passa dall'helper elevato: dove serve l'elevazione fallisce.
+- Uno ZIP locale aperto in un altro programma non si sostituisce (`ACCESS_DENIED`, originale intatto).
+- Su FTP/SFTP senza rinomina atomica la sostituzione di uno ZIP elimina l'originale prima della rinomina finale.
+- Verifiche manuali e limiti noti: [docs/superpowers/fase-3b-follow-up.md](docs/superpowers/fase-3b-follow-up.md).
 
 ## Build
 
