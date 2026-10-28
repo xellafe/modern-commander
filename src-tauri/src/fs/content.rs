@@ -294,6 +294,23 @@ pub fn remote_write_text_file(
     remote_file_info(&*p, &path)
 }
 
+/// `write_text_file` di una voce dentro uno ZIP: si codifica come per il remoto e si riscrive l'archivio
+/// (`archive::edit::save_entry`). `allow_unsafe` non c'è: la riscrittura non scrive mai direttamente.
+pub fn archive_write_text_file(
+    vfs: &Vfs,
+    loc: &Loc,
+    text: &str,
+    encoding: &str,
+    bom: bool,
+    expected_modified_ms: Option<i64>,
+    expected_size: Option<u64>,
+) -> Result<FileInfo, AppError> {
+    let bytes = encode_text(text, encoding, bom).map_err(|e| AppError { path: Some(loc.to_string()), ..e })?;
+    crate::archive::edit::save_entry(vfs, loc, &bytes, expected_modified_ms, expected_size)?;
+    let (p, path) = vfs.remote(loc, Purpose::Browse)?;
+    remote_file_info(&*p, &path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +594,78 @@ mod tests {
         remote_write_text_file(&v, &l, "nuovo", "utf-8", false, None, None, true).unwrap();
         assert_eq!(m.data("/d/a.txt").unwrap(), b"nuovo");
         assert_eq!(m.list("/d").unwrap().len(), 1);
+    }
+
+    /// `t.zip` con `conf/a.xml` e `big.bin`; la voce `a.xml` come `Loc`.
+    fn zip_with_xml(d: &Path) -> (PathBuf, Loc) {
+        let z = d.join("t.zip");
+        let mut w = zip::ZipWriter::new(File::create(&z).unwrap());
+        w.start_file("conf/a.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"<a>vecchio</a>").unwrap();
+        w.start_file("big.bin", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(&b"0123456789abcdef".repeat(4096)).unwrap();
+        w.finish().unwrap();
+        let loc = Loc::archive(Loc::Local(z.clone()), "/conf/a.xml");
+        (z, loc)
+    }
+
+    /// Byte compressi e CRC di una voce.
+    fn raw(z: &Path, name: &str) -> (Vec<u8>, u32) {
+        let mut a = zip::ZipArchive::new(File::open(z).unwrap()).unwrap();
+        let i = a.index_for_name(name).unwrap();
+        let mut f = a.by_index_raw(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        (data, f.crc32())
+    }
+
+    #[test]
+    fn save_entry_replaces_one_entry() {
+        let d = tempfile::tempdir().unwrap();
+        let (z, loc) = zip_with_xml(d.path());
+        let v = crate::vfs::mem::vfs(&[]);
+        let before = raw(&z, "big.bin");
+        let old = {
+            let (p, path) = v.remote(&loc, Purpose::Browse).unwrap();
+            p.stat(&path).unwrap() // il provider si rilascia: tiene aperto lo ZIP
+        };
+        let info = archive_write_text_file(&v, &loc, "<a>nuovo</a>", "utf-8", false, old.modified_ms, Some(old.size)).unwrap();
+        assert_eq!(info.size, 12);
+        let text = {
+            let (p, path) = v.remote(&loc, Purpose::Browse).unwrap();
+            remote_whole(&*p, &path, 1000).unwrap()
+        };
+        assert_eq!(text, b"<a>nuovo</a>");
+        assert_eq!(raw(&z, "big.bin"), before);
+        assert_eq!(names(d.path()), ["t.zip"]);
+        // Senza data attesa si sovrascrive; con una dimensione sbagliata no.
+        archive_write_text_file(&v, &loc, "x", "utf-8", false, None, None).unwrap();
+        let e = archive_write_text_file(&v, &loc, "y", "utf-8", false, Some(0), Some(99)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+    }
+
+    #[test]
+    fn save_entry_detects_change() {
+        let d = tempfile::tempdir().unwrap();
+        let (z, loc) = zip_with_xml(d.path());
+        let v = crate::vfs::mem::vfs(&[]);
+        let orig = std::fs::read(&z).unwrap();
+        let (p, path) = v.remote(&loc, Purpose::Browse).unwrap();
+        let old = p.stat(&path).unwrap();
+        let e = crate::archive::edit::save_entry(&v, &loc, b"x", old.modified_ms, Some(old.size + 1)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+        assert_eq!(std::fs::read(&z).unwrap(), orig);
+        assert_eq!(names(d.path()), ["t.zip"]);
+    }
+
+    #[test]
+    fn save_entry_on_7z_is_unsupported() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("t.7z");
+        std::fs::write(&z, b"7z").unwrap();
+        let v = crate::vfs::mem::vfs(&[]);
+        let e = crate::archive::edit::save_entry(&v, &Loc::archive(Loc::Local(z), "/a.txt"), b"x", None, None).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Unsupported);
     }
 
     #[test]

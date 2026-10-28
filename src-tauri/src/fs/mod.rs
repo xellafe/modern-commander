@@ -136,6 +136,10 @@ pub async fn write_text_file(
 ) -> Result<content::FileInfo, AppError> {
     match Loc::parse(&path)? {
         Loc::Local(p) => blocking(move || content::write_text_file(&p, &text, &encoding, bom, expected_modified_ms)).await?,
+        loc @ Loc::Archive { .. } => {
+            let vfs = vfs.inner().clone();
+            blocking(move || content::archive_write_text_file(&vfs, &loc, &text, &encoding, bom, expected_modified_ms, expected_size)).await?
+        }
         loc => {
             let vfs = vfs.inner().clone();
             blocking(move || {
