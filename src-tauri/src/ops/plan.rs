@@ -275,6 +275,11 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
                 if !to_file && ndest.is_within(&ns) {
                     return Err(s.error(ErrorCode::IntoItself));
                 }
+                // Dentro un archivio che è la sorgente o sta sotto di essa: il commit sostituirebbe il contenitore
+                // e lo spostamento eliminerebbe poi l'archivio nuovo.
+                if ndest.archive_container().is_some_and(|c| norm(c).is_within(&ns)) {
+                    return Err(s.error(ErrorCode::IntoItself));
+                }
                 if is_move && !to_file && ns.parent().is_some_and(|p| p.same(&ndest)) {
                     return Err(s.error(ErrorCode::SameFile));
                 }

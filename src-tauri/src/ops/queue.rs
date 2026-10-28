@@ -1784,6 +1784,44 @@ mod tests {
     }
 
     #[test]
+    fn archive_into_itself_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let rel = d.path().join("rel");
+        std::fs::create_dir(&rel).unwrap();
+        let z = rel.join("a.zip");
+        zip_file(&z, &[("a.txt", b"a")]);
+        let before = std::fs::read(&z).unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        // Lo ZIP o la sua cartella dentro lo ZIP stesso (anche scritto in un'altra forma), spostati o copiati.
+        let upper = in_archive(&rel.join("A.ZIP"), "/");
+        for (kind, src, dest) in [
+            (JobKind::Move, z.clone(), in_archive(&z, "/")),
+            (JobKind::Move, rel.clone(), in_archive(&z, "/sub")),
+            (JobKind::Copy, z.clone(), upper),
+            (JobKind::Copy, rel.clone(), in_archive(&z, "/")),
+        ] {
+            let id = q.enqueue(job(kind.clone(), vec![Loc::Local(src.clone())], Some(dest), ConflictPolicy::Overwrite));
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors[0].code), (Failed, ErrorCode::IntoItself), "{kind:?} {src:?}");
+        }
+        let id = q.enqueue(JobSpec { kind: JobKind::Pack { replace: true }, sources: vec![Loc::Local(z.clone())], dest: Some(in_archive(&z, "/")), filter: None, policy: ConflictPolicy::Overwrite });
+        assert_eq!(finish(&rx, id).errors[0].code, ErrorCode::IntoItself);
+        assert_eq!(std::fs::read(&z).unwrap(), before);
+
+        // Lo stesso su un server.
+        let m = Arc::new(MemProvider::new());
+        m.add_dir("/rel");
+        m.add_file("/rel/a.zip", &before);
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        for src in ["sftp://m/rel/a.zip", "sftp://m/rel"] {
+            let id = q.enqueue(rspec(JobKind::Move, &[src], Some(loc("arc://sftp:%2F%2Fm%2Frel%2Fa.zip/")), ConflictPolicy::Overwrite));
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors[0].code), (Failed, ErrorCode::IntoItself), "{src}");
+        }
+        assert_eq!(m.data("/rel/a.zip").unwrap(), before);
+    }
+
+    #[test]
     fn commit_invalidates_index_cache() {
         let d = tempfile::tempdir().unwrap();
         let z = d.path().join("a.zip");
