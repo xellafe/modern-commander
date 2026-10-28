@@ -13,6 +13,7 @@ pub mod source;
 pub mod watch;
 
 use crate::error::{AppError, ErrorCode};
+use crate::ops::queue::Queue;
 use crate::requests::Requests;
 use crate::vfs::loc::Loc;
 use crate::vfs::provider::{Provider, Purpose};
@@ -121,11 +122,13 @@ pub async fn read_file(vfs: State<'_, Arc<Vfs>>, path: String, max: u64) -> Resu
 
 /// Salvataggio dell'editor (vedi `content::write_text_file`); restituisce il `FileInfo` dopo la scrittura. Sul
 /// remoto (`content::remote_write_text_file`) conta anche `expected_size`, e `allow_unsafe` permette la scrittura
-/// diretta dove il server non accetta quella sicura.
+/// diretta dove il server non accetta quella sicura. Dentro uno ZIP è un job della coda, di cui si aspetta la fine
+/// (`content::archive_write_text_file`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn write_text_file(
     vfs: State<'_, Arc<Vfs>>,
+    q: State<'_, Queue>,
     path: String,
     text: String,
     encoding: String,
@@ -137,8 +140,8 @@ pub async fn write_text_file(
     match Loc::parse(&path)? {
         Loc::Local(p) => blocking(move || content::write_text_file(&p, &text, &encoding, bom, expected_modified_ms)).await?,
         loc @ Loc::Archive { .. } => {
-            let vfs = vfs.inner().clone();
-            blocking(move || content::archive_write_text_file(&vfs, &loc, &text, &encoding, bom, expected_modified_ms, expected_size)).await?
+            let (vfs, q) = (vfs.inner().clone(), q.inner().clone());
+            blocking(move || content::archive_write_text_file(&q, &vfs, &loc, &text, &encoding, bom, expected_modified_ms, expected_size)).await?
         }
         loc => {
             let vfs = vfs.inner().clone();

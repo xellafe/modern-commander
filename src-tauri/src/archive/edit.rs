@@ -203,36 +203,6 @@ impl ZipEdit {
     }
 }
 
-/// Salva `bytes` come contenuto della voce `loc` (un `Loc::Archive` in uno ZIP) con una riscrittura dell'archivio.
-/// Con `expected_modified_ms` la voce deve avere ancora quella data (e, se data, quella dimensione), altrimenti
-/// `CHANGED_ON_DISK` senza scrivere; come in `content::remote_write_text_file`. Un archivio non ZIP dà `UNSUPPORTED`.
-pub fn save_entry(vfs: &Vfs, loc: &Loc, bytes: &[u8], expected_modified_ms: Option<i64>, expected_size: Option<u64>) -> Result<(), AppError> {
-    let Loc::Archive { container, path } = loc else { return Err(AppError::new(ErrorCode::InvalidRequest, None)) };
-    let mut edit = ZipEdit::open(vfs, container)?;
-    if let Some(t) = expected_modified_ms {
-        // L'indice in cache può avere fino a 2 s: il confronto è con la voce com'è ora.
-        vfs.archives().invalidate(container);
-        let current = {
-            // Il provider tiene aperto il contenitore: va rilasciato prima della sostituzione.
-            let (p, inner) = vfs.remote(loc, Purpose::Browse)?;
-            match p.stat(&inner) {
-                Ok(s) => Some(s),
-                Err(e) if e.code == ErrorCode::NotFound => None,
-                Err(e) => return Err(e),
-            }
-        };
-        // `unwrap_or(0)` come in `remote_file_info`, da cui l'editor ha preso la data.
-        let same = current.is_some_and(|s| s.modified_ms.unwrap_or(0) == t && expected_size.is_none_or(|n| n == s.size));
-        if !same {
-            return Err(loc.error(ErrorCode::ChangedOnDisk));
-        }
-    }
-    let staged = edit.stage_file()?;
-    std::fs::write(to_extended(&staged), bytes).map_err(|e| AppError::from_io(&e, &staged))?;
-    edit.put(path, staged, Some(now_ms()));
-    edit.commit(vfs, &mut |_| true)
-}
-
 impl Drop for ZipEdit {
     fn drop(&mut self) {
         if let Some(d) = &self.work {

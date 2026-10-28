@@ -18,7 +18,7 @@ use crate::vfs::router::Vfs;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 
 pub type JobId = u64;
@@ -158,6 +158,8 @@ struct Job {
     reply: Option<PromptReply>,
     last_emit: Instant,
     samples: VecDeque<(Instant, u64)>,
+    /// Chi aspetta la fine del job (`enqueue_and_wait`): riceve la vista finale.
+    ends: Vec<mpsc::Sender<JobView>>,
 }
 
 struct State {
@@ -216,6 +218,11 @@ impl Queue {
         }
         job.view.state = state;
         self.emit(job);
+        if state.is_finished() {
+            for end in job.ends.drain(..) {
+                let _ = end.send(job.view.clone());
+            }
+        }
         self.0.cv.notify_all();
     }
 
@@ -255,6 +262,18 @@ impl Queue {
     }
 
     pub fn enqueue(&self, spec: JobSpec) -> JobId {
+        self.enqueue_with(spec, None)
+    }
+
+    /// Accoda il job e ne aspetta la fine (anche dietro altri job sugli stessi volumi): la vista finale.
+    pub fn enqueue_and_wait(&self, spec: JobSpec) -> JobView {
+        let (tx, rx) = mpsc::channel();
+        self.enqueue_with(spec, Some(tx));
+        // Un job non finito non esce mai dall'elenco: la vista finale arriva sempre.
+        rx.recv().expect("vista finale del job")
+    }
+
+    fn enqueue_with(&self, spec: JobSpec, end: Option<mpsc::Sender<JobView>>) -> JobId {
         let mut volumes: Vec<String> = spec.sources.iter().chain(spec.dest.iter()).map(|l| norm(l).volume_key()).collect();
         volumes.sort();
         volumes.dedup();
@@ -288,6 +307,7 @@ impl Queue {
             reply: None,
             last_emit: Instant::now(),
             samples: VecDeque::new(),
+            ends: end.into_iter().collect(),
         };
         st.jobs.push(job);
         let job = st.jobs.last_mut().expect("appena inserito");
@@ -1781,6 +1801,34 @@ mod tests {
         assert_eq!(entries_of(&z), want);
         assert_eq!(listed(&q, &in_archive(&z, "/conf")), ["a.xml", "b.xml", "n.xml"]);
         assert!(parts_in(d.path()).is_empty());
+    }
+
+    #[test]
+    fn editor_save_waits_for_the_job_on_the_same_zip() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("conf/a.xml", b"<a/>"), ("x.txt", b"vecchio")]);
+        std::fs::write(d.path().join("x.txt"), b"nuovo").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        // Un job sullo stesso ZIP, fermo al prompt di conflitto: tiene occupato l'archivio.
+        let first = q.enqueue(job(JobKind::Copy, vec![Loc::Local(d.path().join("x.txt"))], Some(in_archive(&z, "/")), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let entry = in_archive(&z, "/conf/a.xml");
+        let (q2, e2) = (q.clone(), entry.clone());
+        let save = std::thread::spawn(move || crate::fs::content::archive_write_text_file(&q2, &q2.0.vfs, &e2, "<b/>", "utf-8", false, None, None));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!save.is_finished(), "il salvataggio non aspetta il job sullo stesso ZIP");
+        // Il salvataggio è un job anche lui, in coda dietro il primo.
+        let jobs = q.list();
+        assert_eq!((jobs.len(), jobs[1].state, jobs[1].dest.clone()), (2, Queued, Some(entry.to_string())));
+        reply_conflict(&q, &p, Decision::Overwrite, false);
+        assert_eq!(finish(&rx, first).state, Done);
+        let info = save.join().unwrap().unwrap();
+        assert_eq!(info.size, 4);
+        // Nessuna modifica persa: c'è quella del job e quella del salvataggio.
+        let mut want = vec![e("conf/a.xml", b"<b/>"), e("x.txt", b"nuovo")];
+        want.sort();
+        assert_eq!(entries_of(&z), want);
     }
 
     #[test]
