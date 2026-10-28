@@ -45,14 +45,20 @@ pub fn check_header(r: &mut (impl Read + Seek)) -> Result<(), AppError> {
     let io = |e: std::io::Error| AppError { path: None, ..io_err(&e, Path::new("")) };
     let mut start = [0u8; 32];
     r.seek(SeekFrom::Start(0)).and_then(|_| r.read_exact(&mut start)).map_err(io)?;
-    // Firma e versione le controlla il crate. Con l'intestazione di avvio a zero (archivio scritto a metà) il crate
-    // cercherebbe da solo l'intestazione finale e la decodificherebbe senza passare da qui.
+    // Senza firma non è un 7z: i byte a caso non devono sembrare un dizionario enorme. La versione la controlla il crate.
+    if start[..6] != *b"7z\xBC\xAF\x27\x1C" {
+        return Err(corrupt("firma 7z assente"));
+    }
+    // Con l'intestazione di avvio a zero (archivio scritto a metà) il crate cercherebbe da solo l'intestazione
+    // finale e la decodificherebbe senza passare da qui.
     // ponytail: questi archivi si rifiutano; se servono, ripetere qui la stessa ricerca.
     if start[8..].iter().all(|&b| b == 0) {
         return Err(corrupt("intestazione di avvio 7z vuota"));
     }
     let le64 = |i: usize| u64::from_le_bytes(start[i..i + 8].try_into().expect("8 byte"));
     let at = le64(12).checked_add(32).ok_or_else(|| corrupt("intestazione 7z fuori dal file"))?;
+    // ponytail: il crate rilegge l'intestazione dopo il controllo; se il contenitore cambia tra le due letture vede
+    // byte non controllati. Per chiuderlo, passare al crate i byte letti qui.
     let mut header = Vec::new();
     r.seek(SeekFrom::Start(at)).map_err(io)?;
     r.take(le64(20).min(MAX_ENCODED_HEADER)).read_to_end(&mut header).map_err(io)?;
@@ -262,6 +268,11 @@ mod tests {
         empty[8..32].fill(0);
         std::fs::write(&p, empty).unwrap();
         assert_eq!(build(&p).unwrap_err().code, ErrorCode::CorruptArchive);
+        // Senza la firma non è un 7z: danneggiato, non troppo esigente.
+        let mut unsigned = crafted(u32::MAX);
+        unsigned[0] = b'X';
+        std::fs::write(&p, unsigned).unwrap();
+        assert_eq!(build(&p).unwrap_err().code, ErrorCode::CorruptArchive);
     }
 
     #[test]
@@ -270,9 +281,19 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("solid.7z");
         let mut w = ArchiveWriter::create(&p).unwrap();
-        let files = vec![ArchiveEntry::new_file("a.txt"), ArchiveEntry::new_file("d/b.txt")];
-        w.push_archive_entries(files, vec![SourceReader::new(&b"abc"[..]), SourceReader::new(&b"de"[..])]).unwrap();
+        // Con molti nomi lunghi il writer comprime l'intestazione (con poche voci la scrive in chiaro): il controllo
+        // analizza un'intestazione codificata vera, con la CRC in PackInfo.
+        let mut files = vec![ArchiveEntry::new_file("a.txt"), ArchiveEntry::new_file("d/b.txt")];
+        let mut data = vec![SourceReader::new(&b"abc"[..]), SourceReader::new(&b"de"[..])];
+        for i in 0..40 {
+            files.push(ArchiveEntry::new_file(&format!("d/un-nome-piuttosto-lungo-e-ripetuto-{i:02}.txt")));
+            data.push(SourceReader::new(&b"x"[..]));
+        }
+        w.push_archive_entries(files, data).unwrap();
         w.finish().unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        let next = 32 + u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
+        assert_eq!(bytes[next], 0x17);
         let (ix, archive) = build(&p).unwrap();
         assert!(ix.solid);
         assert!(check_blocks(&archive).is_ok());
