@@ -129,6 +129,7 @@ Tutte le verifiche manuali qui sopra sono state fatte con i server di prova in W
 - **Gestore delle connessioni:** pulsante "Importa" con un menu, per ora con la sola voce WinSCP.
 - **Trascinamento tra gruppi:** Maiusc al rilascio sposta (dal drag interno delle schede remote, oppure chiesto a Windows con `shift_pressed`, perché l'evento di drop di Tauri non porta i modificatori); sopra la finestra un'etichetta "Copia/Sposta …" segue il cursore, dove l'immagine della shell non si vede.
 - **FTPS implicito** (PBSZ/PROT e TLS 1.2 per il riuso della sessione) e **viewer remoto senza `Range`** (immagini, PDF e media si scaricano senza leggere il campione): corretti durante le verifiche.
+- **Password non salvata ricordata fino alla chiusura dell'app:** la connessione aperta tiene in memoria la password usata (`Live` in `net/sessions.rs`), ma l'interfaccia non chiamava mai `disconnect`. Ora `src/state/connectionLifetime.ts` chiude la connessione quando nessuna scheda (cartella, file, ritorno) e nessun job non finito la usa più: chiudendo l'ultima scheda, o portandola altrove, la password si richiede.
 
 **Aperti**
 - **Viewer remoto: trascinamento della barra un po' a scatti** (osservazione, non bloccante). Su SFTP i salti (Fine, Home) sono istantanei, ma trascinando la barra ogni posizione legge una finestra dal server. Se serve: durante il trascinamento leggere solo l'ultima posizione (throttle) e mostrare la finestra precedente nel frattempo.
@@ -138,15 +139,16 @@ Tutte le verifiche manuali qui sopra sono state fatte con i server di prova in W
 
 - L'inoltro di `localhost` di WSL 2 (`127.0.0.1` da Windows) a volte perde la coda di un upload quando il client chiude la connessione: con `curl` in FTP semplice 4 upload su 15 sono arrivati troncati con esito 226, mentre verso l'IP della macchina WSL (`hostname -I`) 15 su 15 sono interi. In FTPS vsftpd se ne accorge (manca il `close_notify`) e risponde 426, che l'app mostra come errore di connessione, eliminando il temporaneo. Le prove sui server in WSL vanno fatte sull'IP della macchina WSL, non su `127.0.0.1`.
 - Sempre con l'inoltro di `localhost`, ogni connessione dati passiva aspetta circa 1 s (WSL deve accorgersi della nuova porta in ascolto).
+- L'antivirus aziendale blocca le raffiche di connessioni verso il loopback: i test di `net::http_index` con i server finti su 127.0.0.1 falliscono (`ConnectionFailed`, os error 10053). Con 127.0.0.2 un giro passa e il successivo no, quindi conta la raffica, non l'indirizzo. Le connessioni verso l'IP della macchina WSL (`sftp_live`) non sono bloccate.
 
 ## SFTP su russh
 
 SFTP ora gira su russh 0.65 + russh-sftp 3.0 (libssh2 con WinCNG offriva solo chiavi dell'host RSA). Chiavi dell'host accettate: ed25519, ECDSA P-256/384/521, RSA. `known_hosts` ricorda il tipo di chiave; le voci salvate prima (senza tipo) valgono come RSA, quindi i server già fidati restano fidati senza richieste. Gli algoritmi datati di libssh2 restano in coda alla lista: group14-sha1, group-exchange-sha1, aes-cbc, 3des-cbc, hmac-sha1. Il group exchange accetta gruppi da 2048 a 8192 bit, come libssh2 (il default di russh parte da 3072); un gruppo fuori intervallo dà `CONNECTION_FAILED`. Nuovo errore `HOST_KEY_UNSUPPORTED` (solo tipi di chiave dell'host non gestiti); `ALGORITHM_UNSUPPORTED`, nato per libssh2, ora vale per scambio di chiavi, cifrario o MAC senza accordo.
 
-Verifiche manuali da fare:
-- Server con la sola chiave dell'host ed25519: sshd in WSL con la sola `HostKey /etc/ssh/ssh_host_ed25519_key`, raggiunto sull'IP della macchina WSL (`ip -4 addr show eth0`), non su 127.0.0.1.
-- Server salvato con la versione precedente: resta noto, nessuna richiesta di impronta.
-- Server con soli algoritmi datati, se disponibile.
+Verifiche manuali fatte (sshd di OpenSSH 9.6 in WSL Ubuntu, sull'IP della macchina WSL):
+- Server con la sola chiave dell'host ed25519: impronta chiesta una volta, poi nota; `sftp_live` verde.
+- Server salvato con la versione precedente: nessuna richiesta di impronta, sia con una voce senza tipo verso un sshd che preferisce ed25519 (si negozia RSA), sia con i server reali salvati da libssh2.
+- Server con soli algoritmi datati: group14-sha1 + aes128-cbc + hmac-sha1 e group-exchange-sha1 + 3des-cbc, entrambi con firma `ssh-rsa`; `sftp_live` verde, F3 nell'app.
 
 ## Limiti noti
 
