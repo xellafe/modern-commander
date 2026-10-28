@@ -29,7 +29,7 @@ getrandom = "0.4.3"
 encoding_rs = "0.8.42"
 zip = { version = "9.0.5", default-features = false, features = ["bzip2", "deflate-flate2", "deflate64", "lzma"] }
 flate2 = "1.1.10"
-sevenz-rust2 = { version = "0.24.1", default-features = false }
+sevenz-rust2 = { version = "0.24.1", default-features = false, features = ["bzip2", "deflate"] }
 portable-pty = "0.9.0"
 base64 = "0.23.1"
 suppaftp = { version = "12.2.1", features = ["deprecated", "rustls-ring"] }

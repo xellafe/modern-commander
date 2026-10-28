@@ -4,6 +4,7 @@
 use super::ArchiveFormat;
 use super::container::ContainerFile;
 use super::list::{Cancellable, corrupt, dos_to_ms, io_err};
+use super::sevenz_guard;
 use super::tar_walk::{TarWalker, skip_read, skip_seek};
 use crate::error::{AppError, ErrorCode};
 use crate::vfs::provider::Stat;
@@ -18,6 +19,9 @@ const MAX_ENTRIES: usize = 1_000_000;
 /// Byte di nomi oltre cui l'indice di un TAR non si costruisce: un TAR.GZ di pochi MB può dichiarare milioni di
 /// nomi lunghi `L` da 64 KiB. Negli ZIP i nomi stanno nella directory centrale, quindi nel file.
 const MAX_NAME_BYTES: usize = 128 << 20;
+
+/// Scarto tra l'epoca FILETIME (1601) e Unix, in millisecondi.
+const NT_UNIX_DIFF_MS: i64 = 11_644_473_600_000;
 
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
@@ -214,6 +218,44 @@ fn unix_mtime(r: &mut ContainerFile, at: u64) -> io::Result<Option<i64>> {
         d = &d[4 + len..];
     }
     Ok(None)
+}
+
+/// Indice di un 7z. Il crate non ha limiti di memoria: i decoder dell'intestazione codificata si controllano prima
+/// di `Archive::read`, quelli dei blocchi subito dopo (vedi `sevenz_guard`).
+pub fn build_7z(file: ContainerFile, cancel: &AtomicBool) -> Result<(Index, sevenz_rust2::Archive), AppError> {
+    use sevenz_rust2::{Archive, Error, Password};
+    let name = file.name().to_path_buf();
+    let path = name.as_path();
+    let at_path = |e: AppError| AppError { path: Some(path.to_string_lossy().into_owned()), ..e };
+    let encrypted = || AppError { detail: Some("encrypted".into()), ..AppError::new(ErrorCode::Unsupported, Some(path)) };
+    let build = || {
+        let mut reader = Cancellable::new(file, cancel);
+        sevenz_guard::check_header(&mut reader).map_err(at_path)?;
+        let archive = Archive::read(&mut reader, &Password::empty()).map_err(|e| match e {
+            // Intestazioni cifrate: con la feature `aes256` il crate chiede la password, senza non conosce il metodo.
+            Error::PasswordRequired => encrypted(),
+            Error::UnsupportedCompressionMethod(m) if m.contains("AES") => encrypted(),
+            Error::Io(e, _) | Error::FileOpen(e, _) => io_err(&e, path),
+            e => corrupt(path, e),
+        })?;
+        sevenz_guard::check_blocks(&archive).map_err(at_path)?;
+        if archive.files.len() > MAX_ENTRIES {
+            return Err(too_many(path));
+        }
+        let mut entries = Vec::with_capacity(archive.files.len());
+        for (i, f) in archive.files.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::new(ErrorCode::Cancelled, Some(path)));
+            }
+            let (p, bad_name) = normalize_name(f.name());
+            let modified_ms = f.has_last_modified_date.then(|| (u64::from(f.last_modified_date()) / 10_000) as i64 - NT_UNIX_DIFF_MS);
+            let block = archive.stream_map.file_block_index.get(i).copied().flatten();
+            let at = EntryAt::SevenZ { file: i, block };
+            entries.push(IndexEntry { path: p, is_dir: f.is_directory(), link: false, bad_name, size: f.size(), modified_ms, order: i as u64, at });
+        }
+        Ok((Index::new(ArchiveFormat::SevenZ, archive.is_solid, entries), archive))
+    };
+    unless_cancelled(build(), cancel, path)
 }
 
 /// Indice di un TAR (`gz` falso: i dati si saltano e restano raggiungibili a salti) o di un TAR.GZ (si decomprime

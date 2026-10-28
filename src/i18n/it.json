@@ -283,6 +283,7 @@
     "CHANGED_ON_DISK": "Il file è stato modificato su disco da un altro programma.",
     "UNMAPPABLE_CHARS": "Il testo contiene caratteri che la codifica scelta non sa rappresentare.",
     "CORRUPT_ARCHIVE": "L'archivio è danneggiato o non si può leggere.",
+    "ARCHIVE_TOO_DEMANDING": "Questo archivio richiede troppa memoria per essere aperto (dizionario oltre 256 MB).",
     "AUTH_REQUIRED": "Il server chiede una password.",
     "AUTH_FAILED": "Autenticazione non riuscita: utente o password non validi.",
     "CONNECTION_FAILED": "Connessione al server non riuscita o interrotta.",

@@ -2,7 +2,7 @@
 //! è fidato: nomi e dimensioni assurdi si rifiutano o si limitano, le voci non superano `limit`.
 
 use super::container::open_local;
-use super::index::build_zip;
+use super::index::{Index, build_7z, build_zip};
 use super::tar_walk::{skip_read, skip_seek, walk_tar};
 use super::{ArchiveEntry, ArchiveFormat, ArchiveListing, format_of};
 use crate::error::{AppError, ErrorCode};
@@ -16,9 +16,6 @@ const MAX_NAME: usize = 32 * 1024;
 
 /// Oltre 2^53 - 1 il frontend (numero JS) non rappresenta più le dimensioni con esattezza.
 const MAX_SIZE: u64 = (1 << 53) - 1;
-
-/// Scarto tra l'epoca FILETIME (1601) e Unix, in millisecondi.
-const NT_UNIX_DIFF_MS: i64 = 11_644_473_600_000;
 
 pub(super) fn corrupt(path: &Path, detail: impl ToString) -> AppError {
     AppError { detail: Some(detail.to_string()), ..AppError::new(ErrorCode::CorruptArchive, Some(path)) }
@@ -76,8 +73,8 @@ pub fn list_archive(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<Ar
     let format = format_of(path).ok_or_else(|| AppError::new(ErrorCode::Unsupported, Some(path)))?;
     let file = || open_shared(path).map_err(|e| AppError::from_io(&e, path));
     let r = match format {
-        ArchiveFormat::Zip => list_zip(path, limit, cancel),
-        ArchiveFormat::SevenZ => list_7z(file()?, path, limit, cancel),
+        ArchiveFormat::Zip => build_zip(open_local(path)?, cancel).and_then(|(index, _)| list_index(&index, path, limit)),
+        ArchiveFormat::SevenZ => build_7z(open_local(path)?, cancel).and_then(|(index, _)| list_index(&index, path, limit)),
         ArchiveFormat::Tar => list_tar(file()?, false, path, limit, cancel),
         ArchiveFormat::TarGz => list_tar(file()?, true, path, limit, cancel),
     };
@@ -85,9 +82,8 @@ pub fn list_archive(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<Ar
     r.map_err(|e| if cancel.load(Ordering::Relaxed) { AppError::new(ErrorCode::Cancelled, Some(path)) } else { e })
 }
 
-/// Le prime `limit` voci dell'indice (vedi `index::build_zip`), senza le cartelle implicite.
-fn list_zip(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
-    let (index, _) = build_zip(open_local(path)?, cancel)?;
+/// Le prime `limit` voci dell'indice (ZIP e 7z), senza le cartelle implicite.
+fn list_index(index: &Index, path: &Path, limit: usize) -> Result<ArchiveListing, AppError> {
     let all = index.entries();
     let mut entries = Vec::with_capacity(all.len().min(limit));
     for e in all.iter().take(limit) {
@@ -117,34 +113,6 @@ fn utc_to_ms(year: u16, month: u16, day: u16, hour: u16, minute: u16, second: u1
     let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
     let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
     (days * 86_400 + i64::from(hour) * 3600 + i64::from(minute) * 60 + i64::from(second)) * 1000
-}
-
-fn list_7z(file: std::fs::File, path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
-    use sevenz_rust2::{Archive, Error, Password};
-    // Con `Cancellable` la lettura delle intestazioni si ferma all'annullamento; il crate però non ha un limite di
-    // memoria (decodifica l'intestazione intera con dizionari fino a 4 GiB): per questo l'inspector non lo chiama da solo.
-    let mut reader = Cancellable(BufReader::new(file), cancel);
-    let archive = Archive::read(&mut reader, &Password::empty()).map_err(|e| match e {
-        // Intestazioni cifrate: con la feature `aes256` il crate chiede la password, senza non conosce il metodo.
-        Error::PasswordRequired => AppError { detail: Some("encrypted".into()), ..AppError::new(ErrorCode::Unsupported, Some(path)) },
-        Error::UnsupportedCompressionMethod(m) if m.contains("AES") => {
-            AppError { detail: Some("encrypted".into()), ..AppError::new(ErrorCode::Unsupported, Some(path)) }
-        }
-        Error::Io(e, _) | Error::FileOpen(e, _) => io_err(&e, path),
-        e => corrupt(path, e),
-    })?;
-    let total = archive.files.len();
-    let mut entries = Vec::with_capacity(total.min(limit));
-    for f in archive.files.iter().take(limit) {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(AppError::new(ErrorCode::Cancelled, Some(path)));
-        }
-        let modified = f
-            .has_last_modified_date
-            .then(|| (u64::from(f.last_modified_date()) / 10_000) as i64 - NT_UNIX_DIFF_MS);
-        entries.extend(entry(f.name(), f.is_directory(), f.size(), modified, path)?);
-    }
-    Ok(ArchiveListing { entries, total: Some(total as u64), truncated: total > limit })
 }
 
 /// TAR e TAR.GZ da flusso (vedi `tar_walk`): si legge solo fino a `limit` voci. Il TAR su file salta i contenuti

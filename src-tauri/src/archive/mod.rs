@@ -3,6 +3,7 @@
 pub mod container;
 pub mod index;
 pub mod list;
+pub mod sevenz_guard;
 mod tar_walk;
 
 use crate::error::AppError;
