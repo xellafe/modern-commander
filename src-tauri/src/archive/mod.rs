@@ -17,6 +17,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::fs::blocking;
 use crate::requests::Requests;
 use crate::vfs::loc::Loc;
+use crate::vfs::provider::Purpose;
 use crate::vfs::router::Vfs;
 use serde::Serialize;
 use std::path::Path;
@@ -89,11 +90,14 @@ pub async fn list_archive(
 }
 
 /// Le prime `limit` voci di un archivio remoto, dall'indice in cache: solo ZIP e 7z, che si leggono a salti. TAR e
-/// TAR.GZ remoti si dovrebbero leggere (o scaricare) per intero, e l'ispettore non lo fa.
+/// TAR.GZ remoti si dovrebbero leggere (o scaricare) per intero, e l'ispettore non lo fa; lo stesso per ZIP e 7z su
+/// un server senza letture a salti (HTTP senza `Range`).
 fn list_remote(vfs: &Vfs, container: &Loc, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
     let format = container.file_name().and_then(|n| format_of(Path::new(&n)));
     match (container, format) {
-        (Loc::Remote { .. }, Some(ArchiveFormat::Zip | ArchiveFormat::SevenZ)) => {
+        (Loc::Remote { .. }, Some(ArchiveFormat::Zip | ArchiveFormat::SevenZ))
+            if vfs.remote(container, Purpose::Browse)?.0.caps().ranged_read =>
+        {
             let p = vfs.archive(container, cancel)?;
             list::list_index(p.index(), Path::new(&container.to_string()), limit)
         }
@@ -121,6 +125,21 @@ mod tests {
         assert_eq!(e.code, ErrorCode::Unsupported);
         let e = list_remote(&v, &Loc::parse(r"arc://C:\a.zip/b.zip").unwrap(), 10, &no).unwrap_err();
         assert_eq!(e.code, ErrorCode::Unsupported);
+    }
+
+    #[test]
+    fn remote_inspector_does_not_download_without_ranged_reads() {
+        use crate::vfs::mem::{MemProvider, vfs};
+        let mut m = MemProvider::new();
+        m.ranged_read = false; // HTTP senza Range: leggere l'indice vorrebbe dire scaricare tutto
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file("x.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        m.add_file("/a.zip", &w.finish().unwrap().into_inner());
+        let m = std::sync::Arc::new(m);
+        let v = vfs(&[("m", &m)]);
+        let e = list_remote(&v, &Loc::parse("sftp://m/a.zip").unwrap(), 10, &AtomicBool::new(false)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert_eq!(m.bytes_read.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     #[test]

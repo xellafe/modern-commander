@@ -36,6 +36,8 @@ pub struct MemProvider {
     pub writable_dirs: Option<HashSet<String>>,
     /// `false`: date al minuto, come un server FTP senza `MDTM`.
     pub precise_mtime: bool,
+    /// `false`: niente letture a salti (`Caps::ranged_read`), come un server HTTP senza `Range`.
+    pub ranged_read: bool,
     /// `true`: `list`, `delete` e l'apertura dei writer danno `CONNECTION_FAILED`, come una sessione caduta.
     pub offline: AtomicBool,
     /// `true`: `list` e `delete` danno `TIMEOUT`, come una sessione bloccata (VPN caduta).
@@ -138,7 +140,7 @@ impl MemProvider {
 
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default(), fail_rename_after_delete: false, deleted: AtomicBool::new(false), on_write: None }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, ranged_read: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default(), fail_rename_after_delete: false, deleted: AtomicBool::new(false), on_write: None }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -194,7 +196,7 @@ fn dir_exists(nodes: &BTreeMap<String, Node>, path: &str) -> Result<(), AppError
 
 impl Provider for MemProvider {
     fn caps(&self) -> Caps {
-        Caps { writable: true, atomic_replace: self.atomic_replace, precise_mtime: self.precise_mtime, ranged_read: true }
+        Caps { writable: true, atomic_replace: self.atomic_replace, precise_mtime: self.precise_mtime, ranged_read: self.ranged_read }
     }
 
     fn stat(&self, path: &str) -> Result<Stat, AppError> {
