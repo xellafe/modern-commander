@@ -13,6 +13,7 @@ import { registerShellCommands, suppressNativeContextMenu } from "./commands/she
 import { registerTerminalCommands } from "./commands/terminal";
 import "./styles/tokens.css";
 import i18n, { initI18n } from "./i18n";
+import { initConnectionLifetime } from "./state/connectionLifetime";
 import { useConnections } from "./state/connections";
 import { blockUnloadIfDirty } from "./state/editors";
 import { useHotlist } from "./state/hotlist";
@@ -42,6 +43,8 @@ window.addEventListener("beforeunload", blockUnloadIfDirty);
 initJobs().catch(console.error);
 // Chiusura con operazioni non finite: conferma invece di ucciderle.
 initCloseGuard().catch(console.error);
+// Connessione chiusa (e password non salvata dimenticata) quando nessuna scheda e nessun job la usa più.
+initConnectionLifetime();
 
 async function bootstrap() {
   // Letture indipendenti in parallelo (avvio < 1 s), tutte prima del render: nessuna modifica può
