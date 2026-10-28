@@ -148,7 +148,7 @@ impl ArchiveProvider {
         AppError::new(code, Some(&self.name(path)))
     }
 
-    fn zip_reader(&self, z: &zip::ZipArchive<ContainerFile>, i: usize, name: PathBuf) -> Result<Box<dyn Read + Send>, AppError> {
+    pub(super) fn zip_reader(&self, z: &zip::ZipArchive<ContainerFile>, i: usize, name: PathBuf) -> Result<Box<dyn Read + Send>, AppError> {
         use zip::CompressionMethod;
         let meta = z.by_index_data(i).map_err(|e| zip_error(e, &name))?;
         if meta.encrypted() {

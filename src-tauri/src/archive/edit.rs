@@ -1,9 +1,13 @@
 //! Riscrittura di uno ZIP con un lotto di modifiche (aggiunta o sostituzione, eliminazione, rinomina, nuova
 //! cartella): il nuovo archivio si scrive una volta, copiando già compresse le voci che restano, e prende il posto
 //! dell'originale solo quando è completo. Errore o annullamento eliminano i temporanei e l'originale resta com'era.
+//!
+//! Anche le voci non toccate escono normalizzate come le mostra l'indice: un nome che risaliva o era assoluto si
+//! riscrive pulito, delle voci con lo stesso percorso resta solo l'ultima, il commento dell'archivio si perde. Le
+//! voci con il campo ZIP64 si ricomprimono (vedi `write_zip`).
 
 use super::container::ContainerFile;
-use super::index::{EntryAt, NT_UNIX_DIFF_MS};
+use super::index::{EntryAt, NT_UNIX_DIFF_MS, normalize_name};
 use super::list::{corrupt, io_err};
 use super::provider::ArchiveProvider;
 use super::{ArchiveFormat, format_of};
@@ -144,6 +148,14 @@ impl ZipEdit {
     pub fn abort(self) {}
 
     fn write_and_install(&mut self, vfs: &Vfs, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError> {
+        // Solo percorsi puliti con `/` iniziale, mai la radice: il nome della voce è il percorso senza la prima `/`.
+        let paths = self.ops.iter().flat_map(|op| match op {
+            Op::Put(p, ..) | Op::Mkdir(p) | Op::Delete(p) => [Some(p), None],
+            Op::Rename(a, b) => [Some(a), Some(b)],
+        });
+        if let Some(bad) = paths.flatten().find(|p| p.as_str() == "/" || normalize_name(p).0 != **p) {
+            return Err(AppError::new(ErrorCode::InvalidRequest, Some(Path::new(bad))));
+        }
         // ponytail: tra questo controllo e la rinomina finale un altro programma può ancora scrivere il contenitore.
         if let Some(old) = self.stamp
             && stamp(vfs, &self.container)? != old
@@ -159,14 +171,16 @@ impl ZipEdit {
             None => None,
         };
         let entries = plan(&self.ops, source.as_deref());
-        let zip = source.as_ref().map(|p| p.zip().cloned().ok_or_else(|| self.container.error(ErrorCode::Unsupported))).transpose()?;
+        if source.as_ref().is_some_and(|p| p.zip().is_none()) {
+            return Err(self.container.error(ErrorCode::Unsupported));
+        }
         let container = self.container.clone();
         match &container {
             Loc::Local(p) => {
                 let path = p.to_string_lossy();
                 let tmp = PathBuf::from(part_name(&path));
                 let file = create(&tmp)?; // non creato = niente da eliminare
-                let r = write_zip(file, &tmp, entries, zip, &container, progress).and_then(|_| {
+                let r = write_zip(file, &tmp, entries, source.as_deref(), &container, progress).and_then(|_| {
                     // Il contenitore non resta aperto dall'indice in cache mentre lo si sostituisce: Windows non
                     // sostituisce un file aperto, neanche con la condivisione in eliminazione.
                     // ponytail: una lettura in corso nello stesso istante (estrazione, F3) lo tiene aperto e la
@@ -182,7 +196,7 @@ impl ZipEdit {
             }
             _ => {
                 let tmp = self.work_dir()?.join("new.zip");
-                let written = write_zip(create(&tmp)?, &tmp, entries, zip, &container, progress)?;
+                let written = write_zip(create(&tmp)?, &tmp, entries, source.as_deref(), &container, progress)?;
                 install(vfs, &container, &tmp, self.replace, &mut |n| progress(written + n))
             }
         }
@@ -245,23 +259,24 @@ fn create(path: &Path) -> Result<File, AppError> {
     File::options().read(true).write(true).create_new(true).open(to_extended(path)).map_err(|e| AppError::from_io(&e, path))
 }
 
-/// Scrive in `file` (il temporaneo `tmp`) lo ZIP con `entries`, copiando le voci originali da `zip` senza
-/// ricomprimerle, e dà i byte scritti. `progress` dopo ogni scrittura.
+/// Scrive in `file` (il temporaneo `tmp`) lo ZIP con `entries`, copiando le voci originali da `source` senza
+/// ricomprimerle (tranne quelle con il campo ZIP64), e dà i byte scritti. `progress` dopo ogni scrittura.
 fn write_zip(
     file: File,
     tmp: &Path,
     entries: Vec<(String, Src)>,
-    mut zip: Option<zip::ZipArchive<ContainerFile>>,
+    source: Option<&ArchiveProvider>,
     container: &Loc,
     progress: &mut dyn FnMut(u64) -> bool,
 ) -> Result<u64, AppError> {
+    let mut zip: Option<zip::ZipArchive<ContainerFile>> = source.and_then(|p| p.zip().cloned());
     let tname = tmp.to_string_lossy();
     let cname = PathBuf::from(container.to_string());
     let werr = |e: zip::result::ZipError| match e {
         zip::result::ZipError::Io(e) => stream_error(e, &tname),
         e => corrupt(&cname, e),
     };
-    let mut w = zip::ZipWriter::new(Counted { inner: BufWriter::new(file), pos: 0, done: 0, progress, name: &cname });
+    let mut w = zip::ZipWriter::new(Counted { inner: BufWriter::new(file), pos: 0, done: 0, progress, name: &cname, tmp, failed: None });
     for (path, src) in entries {
         let name = &path[1..];
         match src {
@@ -276,8 +291,25 @@ fn write_zip(
                 if f.encrypted() {
                     return Err(AppError { detail: Some("encrypted".into()), ..AppError::new(ErrorCode::Unsupported, Some(Path::new(&entry))) });
                 }
-                // ponytail: il crate non ricopia il campo UT (data UTC) delle voci invariate; resta la data DOS.
-                w.raw_copy_file_rename(f, if dir { format!("{name}/") } else { name.to_owned() }).map_err(werr)?;
+                let name = if dir { format!("{name}/") } else { name.to_owned() };
+                if !f.extra_data_fields().any(|x| matches!(x, zip::ExtraField::Zip64ExtendedInformation(_))) {
+                    // ponytail: il crate non ricopia il campo UT (data UTC) delle voci invariate; resta la data DOS.
+                    w.raw_copy_file_rename(f, name).map_err(werr)?;
+                    continue;
+                }
+                // La copia grezza ricopierebbe il campo ZIP64 originale come campo qualunque, con dimensioni e offset
+                // di prima: chi legge prende l'ultimo e, se la voce si è spostata, punta ai dati vecchi. Queste voci
+                // si decomprimono e si riscrivono, con un campo ZIP64 nuovo.
+                let o = f.options().compression_method(zip::CompressionMethod::Deflated).large_file(true);
+                drop(f);
+                if dir {
+                    w.add_directory(name, o).map_err(werr)?;
+                } else {
+                    let p = source.expect("voce originale senza archivio");
+                    let mut r = p.zip_reader(z, at, PathBuf::from(&entry))?;
+                    w.start_file(name, o).map_err(werr)?;
+                    io::copy(&mut r, &mut w).map_err(|e| stream_error(e, &tname))?;
+                }
             }
             Src::Dir => w.add_directory(name, options(now_ms())).map_err(werr)?,
             Src::Staged(p, ms) => {
@@ -289,6 +321,10 @@ fn write_zip(
         }
     }
     let c = w.finish().map_err(werr)?;
+    // Un errore che il crate avesse ignorato non passa: dopo il primo il file non è più stato scritto.
+    if let Some(e) = c.failed {
+        return Err(e);
+    }
     let done = c.done;
     let file = c.inner.into_inner().map_err(|e| AppError::from_io(e.error(), tmp))?;
     file.sync_all().map_err(|e| AppError::from_io(&e, tmp))?;
@@ -321,35 +357,65 @@ fn dos_time(ms: i64) -> zip::DateTime {
 }
 
 /// Il file del nuovo archivio: conta i byte (la posizione più avanti raggiunta) e chiede a `progress` se continuare.
+/// Dopo il primo errore (o l'annullamento) scarta tutto senza più chiamare `progress`: così la chiusura che il crate
+/// tenta in `Drop` riesce in silenzio, e il file si elimina. L'errore resta in `failed`.
 struct Counted<'a, W> {
     inner: W,
     pos: u64,
     done: u64,
     progress: &'a mut dyn FnMut(u64) -> bool,
+    /// Contenitore (per l'annullamento) e temporaneo (per gli errori di scrittura).
     name: &'a Path,
+    tmp: &'a Path,
+    failed: Option<AppError>,
+}
+
+impl<W> Counted<'_, W> {
+    fn fail(&mut self, e: AppError) -> io::Error {
+        self.failed = Some(e.clone());
+        io::Error::other(e)
+    }
 }
 
 impl<W: Write> Write for Counted<'_, W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.inner.write(buf)?;
+        if self.failed.is_some() {
+            return Ok(buf.len());
+        }
+        let n = match self.inner.write(buf) {
+            Ok(n) => n,
+            Err(e) => return Err(self.fail(AppError::from_io(&e, self.tmp))),
+        };
         self.pos += n as u64;
         if self.pos > self.done {
             self.done = self.pos;
             if !(self.progress)(self.done) {
-                return Err(io::Error::other(AppError::new(ErrorCode::Cancelled, Some(self.name))));
+                return Err(self.fail(AppError::new(ErrorCode::Cancelled, Some(self.name))));
             }
         }
         Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        match self.failed {
+            Some(_) => Ok(()),
+            None => self.inner.flush().map_err(|e| self.fail(AppError::from_io(&e, self.tmp))),
+        }
     }
 }
 
 impl<W: Seek> Seek for Counted<'_, W> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.pos = self.inner.seek(pos)?;
+        if self.failed.is_some() {
+            let to = match pos {
+                SeekFrom::Start(n) => Some(n),
+                SeekFrom::End(d) => self.done.checked_add_signed(d),
+                SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+            };
+            self.pos = to.unwrap_or(0);
+            return Ok(self.pos);
+        }
+        self.pos = self.inner.seek(pos).map_err(|e| self.fail(AppError::from_io(&e, self.tmp)))?;
         Ok(self.pos)
     }
 }
@@ -408,6 +474,88 @@ mod tests {
         let a = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".repeat(50);
         std::fs::write(&z, zip_bytes(&[("a.txt", &a), ("d/b.txt", b"b"), ("d/c.txt", b"c")])).unwrap();
         (d, z)
+    }
+
+    /// Identificatori dei campi estesi di un'intestazione (locale `PK\x03\x04` o centrale `PK\x01\x02`) a `at`.
+    fn extra_ids(bytes: &[u8], at: u64) -> Vec<u16> {
+        let h = &bytes[at as usize..];
+        let le16 = |i: usize| usize::from(u16::from_le_bytes([h[i], h[i + 1]]));
+        let (name, extra, fixed) = if h[..4] == *b"PK\x01\x02" { (le16(28), le16(30), 46) } else { (le16(26), le16(28), 30) };
+        let mut d = &h[fixed + name..fixed + name + extra];
+        let mut ids = Vec::new();
+        while d.len() >= 4 {
+            ids.push(u16::from_le_bytes([d[0], d[1]]));
+            d = &d[4 + usize::from(u16::from_le_bytes([d[2], d[3]]))..];
+        }
+        ids
+    }
+
+    #[test]
+    fn zip64_entries_are_rewritten_not_copied_with_a_stale_field() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("t.zip");
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let big = zip::write::SimpleFileOptions::default().large_file(true);
+        for (name, data) in [("a.bin", &b"primo"[..]), ("b.bin", b"secondo contenuto"), ("c.txt", b"terzo")] {
+            w.start_file(name, if name == "c.txt" { zip::write::SimpleFileOptions::default() } else { big }).unwrap();
+            w.write_all(data).unwrap();
+        }
+        std::fs::write(&z, w.finish().unwrap().into_inner()).unwrap();
+        let bytes = std::fs::read(&z).unwrap();
+        let mut src = archive(bytes.clone());
+        let b = src.by_index_raw(1).unwrap().central_header_start();
+        assert!(extra_ids(&bytes, b).contains(&1), "la voce di prova deve avere il campo ZIP64");
+        let v = vfs(&[]);
+        let mut e = ZipEdit::open(&v, &Loc::Local(z.clone())).unwrap();
+        e.delete("/a.bin");
+        e.commit(&v, &mut |_| true).unwrap();
+        let bytes = std::fs::read(&z).unwrap();
+        let mut out = archive(bytes.clone());
+        assert_eq!(names(bytes.clone()), ["b.bin", "c.txt"]);
+        // Al più un campo ZIP64, e solo se l'intestazione rimanda a lui con 0xFFFFFFFF (APPNOTE 4.5.3): una copia
+        // del campo originale porterebbe valori (anche l'offset) di prima della riscrittura.
+        let le32 = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        for i in 0..out.len() {
+            let f = out.by_index_raw(i).unwrap();
+            let (local, central) = (f.header_start() as usize, f.central_header_start() as usize);
+            for (at, sentinels) in [(local, vec![local + 18, local + 22]), (central, vec![central + 20, central + 24, central + 42])] {
+                let n = extra_ids(&bytes, at as u64).iter().filter(|&&id| id == 1).count();
+                let wanted = sentinels.iter().any(|&s| le32(s) == u32::MAX);
+                assert!(n <= usize::from(wanted), "{} a {at}: {n} campi ZIP64, sentinella {wanted}", f.name().unwrap());
+            }
+        }
+        let mut text = String::new();
+        out.by_name("b.bin").unwrap().read_to_string(&mut text).unwrap();
+        assert_eq!(text, "secondo contenuto");
+        // La voce senza ZIP64 resta copiata com'era.
+        assert_eq!(raw(bytes, "c.txt").1, src.by_name("c.txt").unwrap().crc32());
+    }
+
+    #[test]
+    fn cancel_calls_progress_once_and_bad_paths_are_rejected() {
+        let (d, z) = local_zip();
+        let orig = std::fs::read(&z).unwrap();
+        let v = vfs(&[]);
+        let c = Loc::Local(z.clone());
+        let mut e = ZipEdit::open(&v, &c).unwrap();
+        e.mkdir("/x");
+        let mut calls = 0;
+        let r = e.commit(&v, &mut |_| {
+            calls += 1;
+            false
+        });
+        assert_eq!((r.unwrap_err().code, calls), (ErrorCode::Cancelled, 1));
+        // Percorsi non puliti: errore, mai un panico, e l'originale resta.
+        for bad in ["", "d", "/d/", "/"] {
+            let mut e = ZipEdit::open(&v, &c).unwrap();
+            e.rename("/d", bad);
+            assert_eq!(e.commit(&v, &mut |_| true).unwrap_err().code, ErrorCode::InvalidRequest, "{bad:?}");
+            let mut e = ZipEdit::open(&v, &c).unwrap();
+            e.put(bad, PathBuf::from("manca"), None);
+            assert_eq!(e.commit(&v, &mut |_| true).unwrap_err().code, ErrorCode::InvalidRequest, "{bad:?}");
+        }
+        assert_eq!(std::fs::read(&z).unwrap(), orig);
+        assert!(parts_in(d.path()).is_empty());
     }
 
     #[test]
