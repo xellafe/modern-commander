@@ -1,6 +1,8 @@
 //! Elenco dell'indice di ZIP, 7z, TAR e TAR.GZ. Solo lettura dell'indice (mai estrazione); l'archivio non
 //! è fidato: nomi e dimensioni assurdi si rifiutano o si limitano, le voci non superano `limit`.
 
+use super::container::open_local;
+use super::index::build_zip;
 use super::tar_walk::{skip_read, skip_seek, walk_tar};
 use super::{ArchiveEntry, ArchiveFormat, ArchiveListing, format_of};
 use crate::error::{AppError, ErrorCode};
@@ -22,15 +24,18 @@ pub(super) fn corrupt(path: &Path, detail: impl ToString) -> AppError {
     AppError { detail: Some(detail.to_string()), ..AppError::new(ErrorCode::CorruptArchive, Some(path)) }
 }
 
-/// Errore di lettura: del sistema (accesso negato, disco...) com'è, altrimenti formato non valido.
+/// Errore di lettura: quello del provider del contenitore o del sistema (accesso negato, disco...) com'è,
+/// altrimenti formato non valido.
 pub(super) fn io_err(e: &io::Error, path: &Path) -> AppError {
+    if let Some(e) = e.get_ref().and_then(|e| e.downcast_ref::<AppError>()) {
+        return e.clone();
+    }
     if e.raw_os_error().is_some() { AppError::from_io(e, path) } else { corrupt(path, e) }
 }
 
 /// Lettore che si interrompe quando la richiesta viene annullata, anche dentro una voce enorme da saltare.
 pub(super) struct Cancellable<'a, R>(R, &'a AtomicBool);
 
-#[cfg(test)]
 impl<'a, R> Cancellable<'a, R> {
     pub(super) fn new(r: R, cancel: &'a AtomicBool) -> Self {
         Self(r, cancel)
@@ -69,41 +74,43 @@ pub(super) fn entry(raw: &str, is_dir: bool, size: u64, modified_ms: Option<i64>
 /// Elenca le prime `limit` voci di `path`; il formato si decide dall'estensione.
 pub fn list_archive(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
     let format = format_of(path).ok_or_else(|| AppError::new(ErrorCode::Unsupported, Some(path)))?;
-    let file = open_shared(path).map_err(|e| AppError::from_io(&e, path))?;
+    let file = || open_shared(path).map_err(|e| AppError::from_io(&e, path));
     let r = match format {
-        ArchiveFormat::Zip => list_zip(BufReader::new(file), path, limit, cancel),
-        ArchiveFormat::SevenZ => list_7z(file, path, limit, cancel),
-        ArchiveFormat::Tar => list_tar(file, false, path, limit, cancel),
-        ArchiveFormat::TarGz => list_tar(file, true, path, limit, cancel),
+        ArchiveFormat::Zip => list_zip(path, limit, cancel),
+        ArchiveFormat::SevenZ => list_7z(file()?, path, limit, cancel),
+        ArchiveFormat::Tar => list_tar(file()?, false, path, limit, cancel),
+        ArchiveFormat::TarGz => list_tar(file()?, true, path, limit, cancel),
     };
     // Un errore a richiesta annullata è l'annullamento, non un archivio rotto.
     r.map_err(|e| if cancel.load(Ordering::Relaxed) { AppError::new(ErrorCode::Cancelled, Some(path)) } else { e })
 }
 
-fn list_zip(reader: BufReader<std::fs::File>, path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
-    let zip_err = |e: zip::result::ZipError| match e {
-        zip::result::ZipError::Io(e) => io_err(&e, path),
-        e => corrupt(path, e),
-    };
-    let archive = zip::ZipArchive::new(reader).map_err(zip_err)?;
-    let total = archive.len();
-    let mut entries = Vec::with_capacity(total.min(limit));
-    for i in 0..total.min(limit) {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(AppError::new(ErrorCode::Cancelled, Some(path)));
-        }
-        // Dall'indice centrale: niente intestazione locale, niente decompressione.
-        let e = archive.by_index_data(i).map_err(zip_err)?;
-        let name = e.name().map(|n| n.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(e.name_raw()).into_owned());
-        let modified = e.last_modified().filter(|d| d.is_valid()).map(|d| dos_to_ms(d.year(), d.month(), d.day(), d.hour(), d.minute(), d.second()));
-        entries.extend(entry(&name, e.is_dir(), e.size(), modified, path)?);
+/// Le prime `limit` voci dell'indice (vedi `index::build_zip`), senza le cartelle implicite.
+fn list_zip(path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
+    let (index, _) = build_zip(open_local(path)?, cancel)?;
+    let all = index.entries();
+    let mut entries = Vec::with_capacity(all.len().min(limit));
+    for e in all.iter().take(limit) {
+        entries.extend(entry(&e.path[1..], e.is_dir, e.size, e.modified_ms, path)?);
     }
-    Ok(ArchiveListing { entries, total: Some(total as u64), truncated: total > limit })
+    Ok(ArchiveListing { entries, total: Some(all.len() as u64), truncated: all.len() > limit })
 }
 
-/// Data e ora DOS (senza fuso) come millisecondi Unix, leggendole come UTC.
-fn dos_to_ms(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) -> i64 {
-    // Giorni dall'epoca per una data del calendario gregoriano (Howard Hinnant, `days_from_civil`).
+/// Data e ora DOS (ora locale di chi ha scritto l'archivio, senza fuso) come millisecondi Unix, lette nel fuso di
+/// questo PC come fanno Explorer e 7-Zip. `None` se Windows non la converte.
+pub(super) fn dos_to_ms(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) -> Option<i64> {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::System::Time::TzSpecificLocalTimeToSystemTime;
+    let (month, day, hour, minute, second) = (month.into(), day.into(), hour.into(), minute.into(), second.into());
+    let local = SYSTEMTIME { wYear: year, wMonth: month, wDay: day, wHour: hour, wMinute: minute, wSecond: second, ..Default::default() };
+    let mut utc = SYSTEMTIME::default();
+    unsafe { TzSpecificLocalTimeToSystemTime(None, &local, &mut utc) }.ok()?;
+    Some(utc_to_ms(utc.wYear, utc.wMonth, utc.wDay, utc.wHour, utc.wMinute, utc.wSecond))
+}
+
+/// Data e ora UTC del calendario gregoriano come millisecondi Unix.
+fn utc_to_ms(year: u16, month: u16, day: u16, hour: u16, minute: u16, second: u16) -> i64 {
+    // Giorni dall'epoca (Howard Hinnant, `days_from_civil`).
     let (y, m, d) = (i64::from(year) - i64::from(month <= 2), i64::from(month), i64::from(day));
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -145,14 +152,14 @@ fn list_7z(file: std::fs::File, path: &Path, limit: usize, cancel: &AtomicBool) 
 fn list_tar(file: std::fs::File, gz: bool, path: &Path, limit: usize, cancel: &AtomicBool) -> Result<ArchiveListing, AppError> {
     let mut reader = Cancellable(BufReader::new(file), cancel);
     if gz {
-        walk_tar(&mut flate2::read::GzDecoder::new(reader), skip_read, path, limit)
+        walk_tar(&mut flate2::read::MultiGzDecoder::new(reader), skip_read, path, limit)
     } else {
         walk_tar(&mut reader, skip_seek, path, limit)
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::error::ErrorCode;
     use std::io::Write;
@@ -179,7 +186,7 @@ mod tests {
         p
     }
 
-    fn tar_into<W: Write>(w: W) -> W {
+    pub(crate) fn tar_into<W: Write>(w: W) -> W {
         let mut b = tar::Builder::new(w);
         let mut h = tar::Header::new_gnu();
         h.set_entry_type(tar::EntryType::Directory);
@@ -292,9 +299,9 @@ mod tests {
     }
 
     #[test]
-    fn dos_dates_become_unix_ms() {
-        assert_eq!(dos_to_ms(2020, 1, 2, 3, 4, 6), 1_577_934_246_000);
-        assert_eq!(dos_to_ms(1980, 1, 1, 0, 0, 0), 315_532_800_000);
+    fn utc_dates_become_unix_ms() {
+        assert_eq!(utc_to_ms(2020, 1, 2, 3, 4, 6), 1_577_934_246_000);
+        assert_eq!(utc_to_ms(1980, 1, 1, 0, 0, 0), 315_532_800_000);
     }
 
     fn gz_file(dir: &Path, name: &str, body: impl FnOnce(&mut flate2::write::GzEncoder<std::fs::File>)) -> std::path::PathBuf {

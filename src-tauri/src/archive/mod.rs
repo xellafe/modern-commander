@@ -1,5 +1,7 @@
-//! Contenuto degli archivi per l'ispettore: solo elenco in sola lettura, mai estrazione.
+//! Archivi: elenco per l'ispettore (`list`), contenitore e indice in memoria per leggerli come cartelle (`container`, `index`).
 
+pub mod container;
+pub mod index;
 pub mod list;
 mod tar_walk;
 
