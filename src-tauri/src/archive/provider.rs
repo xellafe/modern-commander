@@ -131,6 +131,14 @@ impl ArchiveProvider {
         &self.index
     }
 
+    /// L'archivio del crate di uno ZIP (per la riscrittura); `None` per gli altri formati.
+    pub(crate) fn zip(&self) -> Option<&zip::ZipArchive<ContainerFile>> {
+        match &self.data {
+            Data::Zip(z) => Some(z),
+            _ => None,
+        }
+    }
+
     /// Forma testuale di una voce, per gli errori.
     fn name(&self, path: &str) -> PathBuf {
         PathBuf::from(Loc::archive(self.container.clone(), path).to_string())

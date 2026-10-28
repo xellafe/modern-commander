@@ -1,9 +1,11 @@
 //! Archivi: elenco per l'ispettore (`list`), contenitore e indice in memoria per leggerli come cartelle (`container`,
-//! `index`), provider di cartella in cache (`provider`, `cache`) con lettori a canale e cursori (`pipe`, `cursor`).
+//! `index`), provider di cartella in cache (`provider`, `cache`) con lettori a canale e cursori (`pipe`, `cursor`),
+//! riscrittura degli ZIP (`edit`).
 
 pub mod cache;
 pub mod container;
 mod cursor;
+pub mod edit;
 pub mod index;
 pub mod list;
 pub mod pipe;

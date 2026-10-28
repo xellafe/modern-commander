@@ -21,7 +21,7 @@ const MAX_ENTRIES: usize = 1_000_000;
 const MAX_NAME_BYTES: usize = 128 << 20;
 
 /// Scarto tra l'epoca FILETIME (1601) e Unix, in millisecondi.
-const NT_UNIX_DIFF_MS: i64 = 11_644_473_600_000;
+pub(super) const NT_UNIX_DIFF_MS: i64 = 11_644_473_600_000;
 
 #[derive(Debug, Clone)]
 pub struct IndexEntry {

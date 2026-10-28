@@ -39,6 +39,9 @@ pub struct MemProvider {
     pub stalled: AtomicBool,
     /// Byte restituiti da `read_at` e dagli stream di `reader`: quanto si è letto "dalla rete".
     pub bytes_read: Arc<AtomicU64>,
+    /// `true`: dopo la prima eliminazione ogni `rename` fallisce (`IO`), come una connessione che cade lì.
+    pub fail_rename_after_delete: bool,
+    deleted: AtomicBool,
 }
 
 /// Le connessioni per id.
@@ -126,7 +129,7 @@ impl MemProvider {
 
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default() }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default(), fail_rename_after_delete: false, deleted: AtomicBool::new(false) }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -238,6 +241,9 @@ impl Provider for MemProvider {
     }
 
     fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError> {
+        if self.fail_rename_after_delete && self.deleted.load(Ordering::SeqCst) {
+            return Err(err(ErrorCode::Io, to));
+        }
         let mut nodes = self.nodes.lock().unwrap();
         if !nodes.contains_key(from) {
             return Err(err(ErrorCode::NotFound, from));
@@ -278,6 +284,7 @@ impl Provider for MemProvider {
             return Err(err(ErrorCode::Io, path)); // cartella non vuota
         }
         nodes.remove(path);
+        self.deleted.store(true, Ordering::SeqCst);
         Ok(())
     }
 
