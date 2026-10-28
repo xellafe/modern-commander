@@ -637,4 +637,49 @@ mod tests {
         stream_sort(&mut plain, &mem::vfs(&[]));
         assert_eq!(plain[0], loose);
     }
+
+    /// ZIP con `conf/a.xml` e `conf/sub/b.xml`; ritorna il contenitore.
+    fn zip_with_conf(dir: &Path) -> Loc {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for name in ["conf/a.xml", "conf/sub/b.xml"] {
+            w.start_file(name, o).unwrap();
+            w.write_all(b"x").unwrap();
+        }
+        let z = dir.join("a.zip");
+        std::fs::write(&z, w.finish().unwrap().into_inner()).unwrap();
+        Loc::Local(z)
+    }
+
+    fn arc_spec(kind: JobKind, src: Loc, dest: Option<Loc>) -> JobSpec {
+        JobSpec { kind, sources: vec![src], dest, filter: None, policy: ConflictPolicy::Ask }
+    }
+
+    fn names_of(items: &[FileItem]) -> Vec<String> {
+        items.iter().map(|i| i.src.file_name().unwrap()).collect()
+    }
+
+    #[test]
+    fn move_of_an_archive_dir_is_listed_not_renamed() {
+        let d = tempfile::tempdir().unwrap();
+        let z = zip_with_conf(d.path());
+        let conf = Loc::archive(z.clone(), "/conf");
+        // Verso fuori e dentro lo stesso archivio (l'unico caso in cui la `volume_key` coincide).
+        for dest in [Loc::Local(d.path().join("out")), Loc::archive(z.clone(), "/altro")] {
+            let items = expand(&arc_spec(JobKind::Move, conf.clone(), Some(dest.clone()))).unwrap();
+            assert_eq!(names_of(&items), ["conf", "a.xml", "sub", "b.xml"], "{dest}");
+            assert!(items.iter().all(|i| !i.unlisted), "{dest}: {items:?}");
+        }
+    }
+
+    #[test]
+    fn recycle_delete_of_an_archive_dir_is_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let conf = Loc::archive(zip_with_conf(d.path()), "/conf");
+        // Un archivio non ha Cestino: niente elemento unico da elencare dopo, il contenuto è già nell'elenco.
+        let items = expand(&arc_spec(JobKind::Delete { permanent: false }, conf, None)).unwrap();
+        assert_eq!(names_of(&items), ["a.xml", "b.xml", "sub", "conf"]);
+        assert!(items.iter().all(|i| !i.unlisted), "{items:?}");
+    }
 }
