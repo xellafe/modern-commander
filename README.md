@@ -53,7 +53,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 - Un file solo ASCII di un utente con ANSI diverso da UTF-8 è rilevato come UTF-8.
 - Il salvataggio scrive su `<file>.<8 cifre>.mcpart`; dopo un crash del processo può restare un residuo `.mcpart`.
 - Immagini, PDF e media passano dall'asset protocol di Tauri: la verifica di Range 206, percorsi UNC, nomi con `#`, `%` e spazi, percorsi oltre 260 caratteri è **da verificare**; per i file che falliscono restano testo ed esadecimale. Vedi [docs/superpowers/fase-2-follow-up.md](docs/superpowers/fase-2-follow-up.md).
-- Archivi: nell'ispettore solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'apertura come cartella è nella sezione "Archivi (fase 3b)". Nell'ispettore ZIP, TAR e TAR.GZ si elencano da soli, il 7z solo su richiesta (pulsante "Mostra contenuto"): il crate non limita la memoria e un 7z costruito ad arte può allocarne molta.
+- Archivi: nell'ispettore solo l'elenco del contenuto (ZIP, TAR, TAR.GZ, 7z); l'apertura come cartella è nella sezione "Archivi (fase 3b)". Nell'ispettore ZIP, TAR e TAR.GZ si elencano da soli, il 7z solo su richiesta (pulsante "Mostra contenuto"): leggerne l'indice può chiedere molta memoria (il dizionario dell'intestazione, fino a 256 MiB).
 
 ## Sorgenti di rete (fase 3a)
 
@@ -82,16 +82,17 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 | Backspace dalla radice | Torna alla cartella che contiene l'archivio |
 | Alt+F5 | Crea uno ZIP dalla selezione nella cartella dell'altro gruppo (anche su un server) |
 | Alt+F9 | Estrae l'archivio sotto il cursore, col dialogo della copia, in una sottocartella con il nome dell'archivio |
-| F5, F6, F7, F8, Shift+F6, F4 | Dentro uno ZIP: aggiungere, spostare, creare cartelle, eliminare (F8 è sempre definitivo), rinominare, modificare un file (il salvataggio sostituisce la voce) |
+| F5, F6, F7, F8, Shift+F6, F4 | Dentro uno ZIP: aggiungere, spostare, creare cartelle, eliminare (F8 è sempre definitivo), rinominare, modificare un file (il salvataggio sostituisce la voce con un job della coda, visibile in Operazioni) |
 
 - **Sola lettura**: 7z, TAR e TAR.GZ si sfogliano ed estraggono, ma non si modificano; F4 su di essi apre in sola lettura.
 - **F3** su una voce la estrae prima nella cartella temporanea dell'app.
-- **Scrittura**: ogni modifica a uno ZIP lo riscrive una sola volta per operazione in un file temporaneo e sostituisce l'originale solo a lavoro finito; errore o annullamento lasciano l'originale intatto.
+- **Scrittura**: ogni modifica a uno ZIP lo riscrive una sola volta per operazione in un file temporaneo e sostituisce l'originale solo a lavoro finito; errore o annullamento lasciano l'originale intatto. Eccezione: su FTP/SFTP senza rinomina atomica l'originale si elimina appena prima della rinomina finale (vedi sotto). Un solo job di modifica per archivio alla volta.
 
 ### Limiti accettati
 
 - Niente RAR, niente archivi annidati, niente archivi cifrati.
-- Dizionario LZMA/LZMA2 (o memoria PPMd) oltre 256 MiB: archivio rifiutato (`ARCHIVE_TOO_DEMANDING`).
+- Dizionario LZMA/LZMA2 (o memoria PPMd) oltre 256 MiB, o intestazione 7z oltre 128 MiB: archivio rifiutato (`ARCHIVE_TOO_DEMANDING`). Oltre 1.000.000 di voci: `UNSUPPORTED`.
+- L'indice di un TAR tiene in memoria circa 3 volte i byte dei nomi (tetto: 128 MiB di nomi).
 - Un TAR.GZ remoto si scarica per intero; ZIP e 7z remoti si leggono a intervalli.
 - La modifica di un archivio non passa dall'helper elevato: dove serve l'elevazione fallisce.
 - Uno ZIP locale aperto in un altro programma non si sostituisce (`ACCESS_DENIED`, originale intatto).
