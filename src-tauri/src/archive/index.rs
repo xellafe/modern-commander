@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Voci per archivio oltre cui l'indice non si costruisce.
-const MAX_ENTRIES: usize = 1_000_000;
+pub(super) const MAX_ENTRIES: usize = 1_000_000;
 
 /// Byte di nomi oltre cui l'indice di un TAR non si costruisce: un TAR.GZ di pochi MB può dichiarare milioni di
 /// nomi lunghi `L` da 64 KiB. Negli ZIP i nomi stanno nella directory centrale, quindi nel file.
@@ -235,8 +235,8 @@ fn unix_mtime(r: &mut ContainerFile, at: u64) -> io::Result<Option<i64>> {
     Ok(None)
 }
 
-/// Indice di un 7z. Il crate non ha limiti di memoria: i decoder dell'intestazione codificata si controllano prima
-/// di `Archive::read`, quelli dei blocchi subito dopo (vedi `sevenz_guard`).
+/// Indice di un 7z. Il crate non ha limiti di memoria: l'intestazione (decoder e conteggi) si controlla prima di
+/// `Archive::read`, che legge solo le parti controllate; i decoder dei blocchi subito dopo (vedi `sevenz_guard`).
 pub fn build_7z(file: ContainerFile, cancel: &AtomicBool) -> Result<(Index, sevenz_rust2::Archive), AppError> {
     use sevenz_rust2::{Archive, Error, Password};
     let name = file.name().to_path_buf();
@@ -245,8 +245,8 @@ pub fn build_7z(file: ContainerFile, cancel: &AtomicBool) -> Result<(Index, seve
     let encrypted = || AppError { detail: Some("encrypted".into()), ..AppError::new(ErrorCode::Unsupported, Some(path)) };
     let build = || {
         let mut reader = Cancellable::new(file, cancel);
-        sevenz_guard::check_header(&mut reader).map_err(at_path)?;
-        let archive = Archive::read(&mut reader, &Password::empty()).map_err(|e| match e {
+        let mut image = sevenz_guard::check_header(&mut reader).map_err(at_path)?;
+        let archive = Archive::read(&mut image, &Password::empty()).map_err(|e| match e {
             // Intestazioni cifrate: con la feature `aes256` il crate chiede la password, senza non conosce il metodo.
             Error::PasswordRequired => encrypted(),
             Error::UnsupportedCompressionMethod(m) if m.contains("AES") => encrypted(),
