@@ -42,6 +42,8 @@ pub struct MemProvider {
     /// `true`: dopo la prima eliminazione ogni `rename` fallisce (`IO`), come una connessione che cade lì.
     pub fail_rename_after_delete: bool,
     deleted: AtomicBool,
+    /// Chiamata a ogni scrittura di un writer, prima di scrivere (per agire a metà di un upload).
+    pub on_write: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// Le connessioni per id.
@@ -101,10 +103,14 @@ impl<R: Read> Read for Counted<R> {
 struct MemWriter {
     nodes: Nodes,
     path: String,
+    on_write: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Write for MemWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(f) = &self.on_write {
+            f();
+        }
         let mut nodes = self.nodes.lock().unwrap();
         let node = nodes.get_mut(&self.path).ok_or_else(|| std::io::Error::other(err(ErrorCode::NotFound, &self.path)))?;
         node.data.extend_from_slice(buf);
@@ -129,7 +135,7 @@ impl MemProvider {
 
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default(), fail_rename_after_delete: false, deleted: AtomicBool::new(false) }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default(), fail_rename_after_delete: false, deleted: AtomicBool::new(false), on_write: None }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -237,7 +243,7 @@ impl Provider for MemProvider {
                 nodes.insert(path.to_owned(), Node { modified_ms: Some(now_ms()), ..Node::default() });
             }
         }
-        Ok(Box::new(MemWriter { nodes: self.nodes.clone(), path: path.to_owned() }))
+        Ok(Box::new(MemWriter { nodes: self.nodes.clone(), path: path.to_owned(), on_write: self.on_write.clone() }))
     }
 
     fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError> {

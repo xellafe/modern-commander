@@ -369,7 +369,8 @@
       "delete": "Delete",
       "deletePermanent": "Permanent delete",
       "mkdir": "New folder",
-      "rename": "Rename"
+      "rename": "Rename",
+      "pack": "Pack"
     },
     "state": {
       "queued": "queued",

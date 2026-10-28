@@ -1,4 +1,4 @@
-import { Copy, FolderInput, FolderPlus, GripVertical, PencilLine, Play, Pause, Trash2, X, type LucideIcon } from "lucide-react";
+import { Archive, Copy, FolderInput, FolderPlus, GripVertical, PencilLine, Play, Pause, Trash2, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { cancelJob, clearFinished, moveJob, pauseJob, resumeJob } from "../../ipc/api";
@@ -8,7 +8,7 @@ import { isFinished, kindKey, newestJob, progressOf, useJobs } from "../../state
 import "./panel.css";
 
 const ICONS: Record<JobKind["type"], LucideIcon> = {
-  copy: Copy, move: FolderInput, delete: Trash2, mkdir: FolderPlus, rename: PencilLine,
+  copy: Copy, move: FolderInput, delete: Trash2, mkdir: FolderPlus, rename: PencilLine, pack: Archive,
 };
 
 const refresh = () => useJobs.getState().refresh().catch(console.error);

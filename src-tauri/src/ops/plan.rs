@@ -255,9 +255,13 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
             }
             Ok(walker.out)
         }
-        JobKind::Copy | JobKind::Move => {
+        // Pack è una Copy verso la radice di uno ZIP (che può non esistere).
+        JobKind::Copy | JobKind::Move | JobKind::Pack { .. } => {
             let is_move = spec.kind == JobKind::Move;
             let dest = spec.dest.as_ref().ok_or_else(|| invalid(Some(first)))?;
+            if matches!(spec.kind, JobKind::Pack { .. }) && !matches!(dest, Loc::Archive { path, .. } if path == "/") {
+                return Err(invalid(Some(dest)));
+            }
             // Forma comune (`norm`) per i confronti e per costruire le destinazioni.
             let ndest = norm(dest);
             let to_file = file_target(spec, vfs);
@@ -276,10 +280,10 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
                 }
                 // ponytail: stessa unità = stessa lettera/condivisione; un volume montato in una
                 // cartella o un'unità `subst` danno ERROR_NOT_SAME_DEVICE e l'executor ripiega su copia.
-                // Sul remoto la chiave è la connessione: lo spostamento nella stessa è un `Provider::rename`.
+                // Sul remoto la chiave è la connessione: lo spostamento nella stessa è un `Provider::rename`; in un
+                // archivio è il contenitore, e lo spostamento nello stesso è una rinomina nella sua riscrittura.
                 let vol = ns.volume_key();
-                // Mai per le sorgenti in un archivio: le sue cartelle si elencano subito.
-                let rename = is_move && filter.is_none() && !vol.is_empty() && vol == ndest.volume_key() && !matches!(ns, Loc::Archive { .. });
+                let rename = is_move && filter.is_none() && !vol.is_empty() && vol == ndest.volume_key();
                 checked.push((s, e, dst, rename));
             }
             for (s, e, dst, rename) in checked {
@@ -661,15 +665,33 @@ mod tests {
     }
 
     #[test]
-    fn move_of_an_archive_dir_is_listed_not_renamed() {
+    fn move_of_an_archive_dir_is_renamed_only_inside_its_archive() {
         let d = tempfile::tempdir().unwrap();
         let z = zip_with_conf(d.path());
         let conf = Loc::archive(z.clone(), "/conf");
-        // Verso fuori e dentro lo stesso archivio (l'unico caso in cui la `volume_key` coincide).
-        for dest in [Loc::Local(d.path().join("out")), Loc::archive(z.clone(), "/altro")] {
-            let items = expand(&arc_spec(JobKind::Move, conf.clone(), Some(dest.clone()))).unwrap();
-            assert_eq!(names_of(&items), ["conf", "a.xml", "sub", "b.xml"], "{dest}");
-            assert!(items.iter().all(|i| !i.unlisted), "{dest}: {items:?}");
+        let out = Loc::Local(d.path().join("out"));
+        let items = expand(&arc_spec(JobKind::Move, conf.clone(), Some(out))).unwrap();
+        assert_eq!(names_of(&items), ["conf", "a.xml", "sub", "b.xml"]);
+        assert!(items.iter().all(|i| !i.unlisted), "{items:?}");
+        // Dentro lo stesso archivio (anche scritto in un'altra forma) la cartella si rinomina in blocco.
+        let upper = Loc::Local(PathBuf::from(z.to_string().to_uppercase()));
+        let items = expand(&arc_spec(JobKind::Move, conf.clone(), Some(Loc::archive(upper, "/altro")))).unwrap();
+        assert_eq!((names_of(&items), items[0].unlisted), (vec!["conf".to_owned()], true));
+    }
+
+    #[test]
+    fn pack_expands_like_copy_into_an_archive_root() {
+        let d = tempfile::tempdir().unwrap();
+        let a = tree(d.path());
+        let root = Loc::archive(Loc::Local(d.path().join("n.zip")), "/");
+        let pack = |dest: Loc| JobSpec { dest: Some(dest), ..spec(JobKind::Pack { replace: true }, vec![a.clone()], None, None) };
+        let items = expand(&pack(root.clone())).unwrap();
+        assert_eq!(names_of(&items), ["a", "x.txt", "s", "y.txt"]);
+        assert_eq!(items[1].dst, Some(root.join("a").join("x.txt")));
+        assert!(!file_target(&pack(root.clone())));
+        // Solo verso la radice di un archivio.
+        for bad in [root.join("a"), Loc::Local(d.path().join("D"))] {
+            assert_eq!(expand(&pack(bad.clone())).unwrap_err().code, ErrorCode::InvalidRequest, "{bad}");
         }
     }
 

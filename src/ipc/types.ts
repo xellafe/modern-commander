@@ -153,7 +153,9 @@ export type JobKind =
   | { type: "move" }
   | { type: "delete"; permanent: boolean }
   | { type: "mkdir" }
-  | { type: "rename" };
+  | { type: "rename" }
+  /** Copia nella radice di uno ZIP nuovo (`dest` = `arc://<zip>/`); con `replace` sostituisce un file esistente. */
+  | { type: "pack"; replace: boolean };
 
 export type ConflictPolicy = {
   type: "ask" | "overwrite" | "skip" | "overwriteIfNewer" | "overwriteIfLarger" | "renameNew";

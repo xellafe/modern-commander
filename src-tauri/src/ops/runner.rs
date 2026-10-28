@@ -5,13 +5,18 @@
 //!
 //! Un'operazione su posizioni solo locali passa per l'`Executor` (anche quello elevato); con una posizione
 //! remota passa per il provider, e la copia tra provider diversi per `vfs::transfer::copy`.
+//!
+//! Le scritture dentro uno ZIP si accumulano in un `ZipEdit` per contenitore e diventano una sola riscrittura alla
+//! fine del job (`finish`). Le eliminazioni delle sorgenti di un Move verso un archivio, e le cartelle sorgente
+//! rimaste vuote, aspettano quel commit (`deferred`): se fallisce restano dove sono.
 
 use super::conflict::{free_name, resolve, same_loc};
 use super::exec::Executor;
 use super::model::{ConflictPolicy, Decision, FileItem, JobKind, JobSpec, ListEntry, Meta};
-use super::plan::{entries, expand, expand_children, file_target, filter_of, norm};
+use super::plan::{child, entries, expand, expand_children, file_target, filter_of, norm};
 use super::queue::{ErrorAction, Handle, JobState, Prompt, PromptReply};
 use super::rooted::{RootedExecutor, job_roots};
+use crate::archive::edit::ZipEdit;
 use crate::error::{AppError, ErrorCode};
 use crate::fs::listing::FILETIME_UNIX_DIFF_MS;
 use crate::paths::{invalid_windows_name, to_extended};
@@ -71,6 +76,8 @@ pub(crate) fn run(h: &Handle, exec: Arc<dyn Executor>, vfs: &Vfs, spec: &JobSpec
         src_dirs: Vec::new(),
         permanent_under: Vec::new(),
         again: false,
+        edits: Vec::new(),
+        deferred: Vec::new(),
     };
     let items = match expand(spec, vfs) {
         Ok(items) => items,
@@ -103,8 +110,9 @@ pub(crate) fn run(h: &Handle, exec: Arc<dyn Executor>, vfs: &Vfs, spec: &JobSpec
         v.bytes_total = items.iter().map(|i| i.size).sum();
     });
     r.items = items;
+    // Con `Stop` gli edit si scartano (il loro `Drop` elimina i temporanei) e con loro i `deferred`.
     match r.run() {
-        Ok(()) => JobState::Done,
+        Ok(()) => r.finish(),
         Err(Stop) => JobState::Cancelled,
     }
 }
@@ -148,6 +156,11 @@ struct Runner<'a> {
     /// L'elemento corrente è stato elencato e il suo contenuto messo al suo posto (Delete): si
     /// riparte dallo stesso indice senza contarlo.
     again: bool,
+    /// Modifiche in sospeso, una per ZIP, aperte alla prima operazione su quel contenitore.
+    edits: Vec<ZipEdit>,
+    /// Eliminazioni (posizione, cartella) da fare dopo il commit degli edit: le sorgenti di un Move verso un
+    /// archivio e le cartelle sorgente del Move, che si rimuovono solo se vuote.
+    deferred: Vec<(Loc, bool)>,
 }
 
 impl Runner<'_> {
@@ -175,14 +188,77 @@ impl Runner<'_> {
             });
             i += 1;
         }
-        // Figli prima dei genitori (le cartelle sono in pre-ordine); mai ricorsivo: si rimuovono
-        // solo le cartelle rimaste vuote, quelle con elementi saltati o esclusi restano.
-        for dir in std::mem::take(&mut self.src_dirs).iter().rev() {
+        // Figli prima dei genitori (le cartelle sono in pre-ordine), dopo le eliminazioni rimandate.
+        let dirs = std::mem::take(&mut self.src_dirs);
+        self.deferred.extend(dirs.into_iter().rev().map(|d| (d, true)));
+        Ok(())
+    }
+
+    /// Commit degli edit, poi le eliminazioni rimandate, poi il commit degli edit che queste hanno aperto (le
+    /// sorgenti in un archivio, e le sue cartelle che si vedono vuote solo dopo il primo commit).
+    fn finish(&mut self) -> JobState {
+        if let Err(end) = self.commit_all() {
+            return end;
+        }
+        // Cartelle eliminate qui. In un archivio restano voci fino al commit successivo: per la cartella madre contano
+        // come già sparite.
+        // ponytail: ricerca lineare, O(cartelle²); un insieme di percorsi se i Move di alberi enormi lo fanno sentire.
+        let mut gone: Vec<Loc> = Vec::new();
+        for (l, is_dir) in std::mem::take(&mut self.deferred) {
             if !self.h.checkpoint() {
-                return Err(Stop);
+                return JobState::Cancelled;
             }
-            if is_empty_dir(self.vfs, dir) {
-                self.attempt(dir, |r, _| Ok(r.delete_at(dir, true, true)?))?;
+            // Mai ricorsivo: si rimuovono solo le cartelle rimaste vuote, quelle con elementi saltati o esclusi restano.
+            let left = |es: Vec<ListEntry>| es.iter().all(|e| gone.iter().any(|g| g.same(&child(&l, &e.name))));
+            if is_dir && !entries(self.vfs, &l).is_ok_and(left) {
+                continue;
+            }
+            let mut done = false;
+            let r = self.attempt(&l, |r, _| {
+                r.delete_at(&l, is_dir, true)?;
+                done = true;
+                Ok(())
+            });
+            if r.is_err() {
+                return JobState::Cancelled;
+            }
+            if done && is_dir {
+                gone.push(l);
+            }
+        }
+        self.commit_all().err().unwrap_or(JobState::Done)
+    }
+
+    /// Riscrive ogni ZIP modificato. Un errore va nel riepilogo e il job fallisce: gli edit rimasti si scartano e i
+    /// `deferred` non si eseguono. L'avanzamento conta la dimensione stimata del nuovo archivio (vecchio contenitore
+    /// più i file aggiunti), il doppio sul remoto (scrittura e upload).
+    fn commit_all(&mut self) -> Result<(), JobState> {
+        for edit in std::mem::take(&mut self.edits) {
+            if edit.is_empty() {
+                continue;
+            }
+            let c = edit.container().clone();
+            let old = self.vfs.endpoint(&c, Purpose::Transfer).and_then(|(p, path)| p.stat(&path)).map_or(0, |s| s.size);
+            let into = |i: &&FileItem| i.dst.as_ref().and_then(Loc::archive_container).is_some_and(|x| x.same(&c));
+            let added: u64 = self.items.iter().filter(into).map(|i| i.size).sum();
+            let size = (old + added) * if c.is_remote() { 2 } else { 1 };
+            let (h, base) = (self.h, self.bytes);
+            let current = c.to_string();
+            h.update(|v| {
+                v.current = Some(current);
+                v.bytes_total += size;
+            });
+            let r = edit.commit(self.vfs, &mut |n| {
+                h.update(|v| v.bytes_done = base + n);
+                h.checkpoint()
+            });
+            self.bytes += size;
+            if let Err(e) = r {
+                if h.cancelled() {
+                    return Err(JobState::Cancelled);
+                }
+                h.update(|v| v.errors.push(e));
+                return Err(JobState::Failed);
             }
         }
         Ok(())
@@ -306,7 +382,7 @@ impl Runner<'_> {
             JobKind::Delete { permanent } => self.delete(i, item, *permanent || a.permanent),
             JobKind::Mkdir => self.mkdir_all(&norm(src)),
             JobKind::Rename => Ok(self.rename(src, &dst_of(item)?)?),
-            JobKind::Copy | JobKind::Move => {
+            JobKind::Copy | JobKind::Move | JobKind::Pack { .. } => {
                 self.check_name(item)?;
                 if item.is_dir { self.dir(i, item, a) } else { self.file(item, a) }
             }
@@ -347,7 +423,7 @@ impl Runner<'_> {
         if a.created.is_none() {
             let mut dst = dst_of(item)?;
             let mut overwrite = false;
-            if exists(self.vfs, &dst) {
+            if self.found(&dst) {
                 match self.decide(src, &dst)? {
                     Decision::Skip => return Ok(()),
                     Decision::Rename(new) => dst = new,
@@ -372,8 +448,11 @@ impl Runner<'_> {
             a.created = Some(dst);
         }
         if is_move {
-            // Il sorgente si elimina solo dopo che la copia è riuscita.
-            self.delete_at(src, false, true)?;
+            // Il sorgente si elimina solo dopo che la copia è riuscita; verso un archivio, dopo il suo commit.
+            match a.created {
+                Some(Loc::Archive { .. }) => self.deferred.push((src.clone(), false)),
+                _ => self.delete_at(src, false, true)?,
+            }
         }
         Ok(())
     }
@@ -393,7 +472,7 @@ impl Runner<'_> {
         if a.created.is_none() {
             let mut dst = dst_of(item)?;
             let mut merge = false;
-            if exists(self.vfs, &dst) && same_loc(src, &dst) {
+            if self.found(&dst) && same_loc(src, &dst) {
                 // Copia nella propria cartella madre: si può solo rinominare o saltare.
                 match self.decide(src, &dst)? {
                     Decision::Skip => {
@@ -406,7 +485,7 @@ impl Runner<'_> {
                 }
             } else {
                 // Una cartella esistente si unisce; un file al suo posto fa fallire mkdir/move_path.
-                merge = is_real_dir(self.vfs, &dst);
+                merge = self.found(&dst) && is_real_dir(self.vfs, &dst);
             }
             if is_move && (item.unlisted || link) && !merge && filter_of(self.spec).is_none() {
                 match self.move_path(src, &dst, false) {
@@ -519,8 +598,16 @@ impl Runner<'_> {
         }
     }
 
+    /// Una destinazione esistente. Con Pack lo ZIP si crea da zero: quello che c'è già con quel nome non conta.
+    /// Negli altri casi conta l'archivio com'era all'apertura, non le modifiche in sospeso del job.
+    // ponytail: due sorgenti di Pack con lo stesso nome danno una sola voce (l'ultima) senza prompt; servirebbe
+    // chiedere all'edit i nomi in sospeso.
+    fn found(&self, l: &Loc) -> bool {
+        !matches!(self.spec.kind, JobKind::Pack { .. }) && exists(self.vfs, l)
+    }
+
     /// Crea `path` e le cartelle intermedie mancanti; se esiste già dà `ALREADY_EXISTS`.
-    fn mkdir_all(&self, path: &Loc) -> Result<(), Fail> {
+    fn mkdir_all(&mut self, path: &Loc) -> Result<(), Fail> {
         let ancestors = std::iter::successors(Some(path.clone()), Loc::parent);
         let missing: Vec<Loc> = ancestors.take_while(|p| !exists(self.vfs, p)).collect();
         if missing.is_empty() {
@@ -532,15 +619,41 @@ impl Runner<'_> {
         Ok(())
     }
 
-    // Operazioni elementari: in locale con l'esecutore del tentativo, sul remoto con il provider.
+    // Operazioni elementari: in locale con l'esecutore del tentativo, sul remoto con il provider, in un archivio
+    // con l'edit del suo contenitore.
 
     fn remote(&self, l: &Loc) -> Result<(Arc<dyn Provider>, String), AppError> {
         self.vfs.remote(l, Purpose::Transfer)
     }
 
-    fn mkdir_at(&self, d: &Loc) -> Result<(), AppError> {
+    /// L'edit del contenitore di `l` (dentro un archivio), aperto alla prima operazione: con Pack uno ZIP nuovo,
+    /// altrimenti quello esistente (un archivio non ZIP dà `UNSUPPORTED`).
+    fn edit(&mut self, l: &Loc) -> Result<&mut ZipEdit, AppError> {
+        let c = l.archive_container().ok_or_else(|| l.error(ErrorCode::InvalidRequest))?;
+        let i = match self.edits.iter().position(|e| e.container().same(c)) {
+            Some(i) => i,
+            None => {
+                let e = match self.spec.kind {
+                    JobKind::Pack { replace } => ZipEdit::create(c, replace),
+                    _ => ZipEdit::open(self.vfs, c)?,
+                };
+                self.edits.push(e);
+                self.edits.len() - 1
+            }
+        };
+        Ok(&mut self.edits[i])
+    }
+
+    fn mkdir_at(&mut self, d: &Loc) -> Result<(), AppError> {
         match d {
             Loc::Local(p) => self.exec.mkdir(p),
+            Loc::Archive { path, .. } => {
+                if self.found(d) {
+                    return Err(d.error(ErrorCode::AlreadyExists));
+                }
+                self.edit(d)?.mkdir(path);
+                Ok(())
+            }
             r => {
                 let (p, path) = self.remote(r)?;
                 p.mkdir(&path)
@@ -549,10 +662,14 @@ impl Runner<'_> {
     }
 
     /// Sul remoto non c'è Cestino: come sulle unità di rete, `NO_RECYCLE_BIN` e l'utente sceglie se
-    /// eliminare in modo definitivo.
-    fn delete_at(&self, l: &Loc, is_dir: bool, permanent: bool) -> Result<(), AppError> {
+    /// eliminare in modo definitivo. In un archivio l'eliminazione è sempre definitiva.
+    fn delete_at(&mut self, l: &Loc, is_dir: bool, permanent: bool) -> Result<(), AppError> {
         match l {
             Loc::Local(p) => self.exec.delete(p, is_dir, permanent),
+            Loc::Archive { path, .. } => {
+                self.edit(l)?.delete(path);
+                Ok(())
+            }
             r if !permanent => Err(r.error(ErrorCode::NoRecycleBin)),
             r => {
                 let (p, path) = self.remote(r)?;
@@ -571,10 +688,17 @@ impl Runner<'_> {
     /// Spostamento in blocco: `move_path` in locale, `Provider::rename` nella stessa connessione; tra
     /// provider diversi `NOT_SAME_DEVICE`, e chi chiama ripiega su copia ed eliminazione. Lo stesso se si
     /// sovrascrive su un server che non rinomina sopra un file: la copia passa dall'avviso della scrittura
-    /// non sicura.
-    fn move_path(&self, src: &Loc, dst: &Loc, overwrite: bool) -> Result<(), AppError> {
+    /// non sicura. Nello stesso archivio è una rinomina nel suo edit.
+    fn move_path(&mut self, src: &Loc, dst: &Loc, overwrite: bool) -> Result<(), AppError> {
         match (src, dst) {
             (Loc::Local(s), Loc::Local(d)) => self.exec.move_path(s, d, overwrite),
+            (Loc::Archive { path: from, .. }, Loc::Archive { path: to, .. }) if src.volume_key() == dst.volume_key() => {
+                if !overwrite && !src.same(dst) && exists(self.vfs, dst) {
+                    return Err(dst.error(ErrorCode::AlreadyExists));
+                }
+                self.edit(src)?.rename(from, to);
+                Ok(())
+            }
             _ if src.is_remote() && src.volume_key() == dst.volume_key() => {
                 let ((p, from), (_, to)) = (self.remote(src)?, self.remote(dst)?);
                 if overwrite && !p.caps().atomic_replace {
@@ -586,7 +710,7 @@ impl Runner<'_> {
         }
     }
 
-    fn rename(&self, src: &Loc, dst: &Loc) -> Result<(), AppError> {
+    fn rename(&mut self, src: &Loc, dst: &Loc) -> Result<(), AppError> {
         match (src, dst) {
             (Loc::Local(s), Loc::Local(d)) => self.exec.rename(s, d),
             _ => self.move_path(src, dst, false),
@@ -596,9 +720,17 @@ impl Runner<'_> {
     /// Copia di un file: tra due posizioni locali con l'esecutore, altrimenti con `transfer::copy`. Un
     /// "Annulla" sull'avviso della scrittura non sicura diventa `UNSAFE_WRITE`, che salta l'elemento.
     /// Con `flush` una copia locale è su disco prima di tornare (il Move poi elimina la sorgente).
+    /// Verso un archivio il file si copia nella cartella di lavoro del suo edit e si aggiunge con la data della sorgente.
     fn copy_file(&mut self, src: &Loc, dst: &Loc, overwrite: bool, flush: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError> {
         if let (Loc::Local(s), Loc::Local(d)) = (src, dst) {
             return self.exec.copy_file(s, d, overwrite, flush, progress);
+        }
+        if let Loc::Archive { path, .. } = dst {
+            let (m, step) = meta(self.vfs, src)?;
+            let staged = self.edit(dst)?.stage_file()?;
+            self.copy_file(src, &Loc::Local(staged.clone()), false, false, progress)?;
+            self.edit(dst)?.put(path, staged, step.map(|_| m.modified_ms));
+            return Ok(());
         }
         let vfs = self.vfs;
         let mut declined = false;
@@ -638,7 +770,9 @@ fn rebase(d: &Loc, old: &Loc, new: &Loc) -> Option<Loc> {
             let rest = d.strip_prefix(old).ok()?;
             Some(Loc::Local(if rest.as_os_str().is_empty() { new.clone() } else { new.join(rest) }))
         }
-        (Loc::Remote { path, .. }, Loc::Remote { path: o, .. }, _) if d.is_within(old) => Some(new.join(&path[o.len()..])),
+        (Loc::Remote { path, .. } | Loc::Archive { path, .. }, Loc::Remote { path: o, .. } | Loc::Archive { path: o, .. }, _) if d.is_within(old) => {
+            Some(new.join(&path[o.len()..]))
+        }
         _ => None,
     }
 }
@@ -682,13 +816,6 @@ fn is_dir_link(vfs: &Vfs, l: &Loc) -> bool {
 
 fn unsupported_link(l: &Loc) -> AppError {
     AppError { detail: Some("reparse_point".into()), ..l.error(ErrorCode::Unsupported) }
-}
-
-fn is_empty_dir(vfs: &Vfs, l: &Loc) -> bool {
-    match l {
-        Loc::Local(p) => std::fs::read_dir(to_extended(p)).is_ok_and(|mut r| r.next().is_none()),
-        r => entries(vfs, r).is_ok_and(|e| e.is_empty()),
-    }
 }
 
 /// Metadati e precisione della data in ms: 1 in locale, 60 000 se il server non la dà precisa (FTP senza

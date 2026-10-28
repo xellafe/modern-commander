@@ -369,7 +369,8 @@
       "delete": "Eliminazione",
       "deletePermanent": "Eliminazione definitiva",
       "mkdir": "Nuova cartella",
-      "rename": "Rinomina"
+      "rename": "Rinomina",
+      "pack": "Compressione"
     },
     "state": {
       "queued": "in coda",
