@@ -1,6 +1,7 @@
 //! Cache degli archivi aperti: indice, archivio del crate, copia locale e cursore di ogni contenitore restano in
-//! memoria finché il contenitore non cambia (dimensione e data, ricontrollate al più ogni `RECHECK`). Al più
-//! `CAPACITY` archivi: esce il meno usato di recente.
+//! memoria finché il contenitore non cambia (dimensione e data, ricontrollate al più ogni `RECHECK`) e si legge senza
+//! errori. Al più `CAPACITY` archivi: esce il meno usato di recente. Il file contenitore non resta aperto (vedi
+//! `container`).
 
 use super::provider::ArchiveProvider;
 use crate::error::{AppError, ErrorCode};
@@ -82,6 +83,10 @@ impl ArchiveCache {
             let mut held = self.held.lock().unwrap();
             let Some(i) = held.iter().position(|h| h.key == key) else { return Ok(None) };
             let h = held.remove(i);
+            // Dopo un errore di lettura (condivisione o connessione cadute) si rilegge tutto.
+            if h.provider.broken() {
+                return Ok(None);
+            }
             let (recent, provider, stamp) = (h.checked.elapsed() < RECHECK, h.provider.clone(), h.stamp);
             held.push(h);
             if recent {

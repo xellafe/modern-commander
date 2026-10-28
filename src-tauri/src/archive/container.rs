@@ -1,15 +1,22 @@
 //! Il file contenitore di un archivio, locale o remoto, letto come `Read + Seek`. È l'unico punto da cui si apre
 //! un contenitore locale (un `Loc::Archive` non arriva mai a `std::fs`); il remoto si legge con `read_at` del suo
 //! provider. Ogni clone ha posizione e lettura anticipata sue: indice, voci e cursori leggono in modo indipendente.
+//!
+//! Il file locale si apre a richiesta e si chiude dopo `IDLE` senza letture: un archivio in cache non lo tiene aperto
+//! (altrimenti non si potrebbero sostituire lo ZIP né rinominare la sua cartella, e su una condivisione caduta resterebbe
+//! un handle morto). Una lettura fallita segna il contenitore (`broken`) e la cache scarta l'archivio.
 
 use crate::error::{AppError, ErrorCode};
 use crate::fs::content::open_shared;
 use crate::vfs::loc::{Loc, Scheme};
 use crate::vfs::provider::{Connector, Purpose};
 use std::io::{self, Read, Seek, SeekFrom};
+use std::fs::File;
 use std::os::windows::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Lettura anticipata: le intestazioni di ZIP e 7z si leggono a pezzi piccoli e vicini.
 pub(super) const READ_AHEAD: usize = 256 * 1024;
@@ -18,8 +25,14 @@ pub(super) const READ_AHEAD: usize = 256 * 1024;
 /// una voce ZIP) non trascina con sé `READ_AHEAD` byte; chi legge di seguito torna subito a `READ_AHEAD`.
 const JUMP_AHEAD: usize = 64 * 1024;
 
+/// Un contenitore locale senza letture per tanto si chiude: in cache non resta aperto.
+pub(super) const IDLE: Duration = Duration::from_secs(1);
+
+/// Handle aperto di un contenitore locale e ora dell'ultima lettura.
+type Open = Arc<Mutex<Option<(Arc<File>, Instant)>>>;
+
 enum Source {
-    Local(std::fs::File),
+    Local { path: PathBuf, open: Open },
     /// Il provider si chiede al connettore a ogni lettura: nessuna sessione resta occupata dalla cache.
     Remote { connector: Arc<dyn Connector>, scheme: Scheme, conn: String, path: String },
 }
@@ -30,6 +43,38 @@ struct Shared {
     len: u64,
     /// Forma testuale della posizione, per gli errori.
     name: PathBuf,
+    /// L'indice è letto: le letture dopo sono di voci (estrazione, commit) e sul remoto usano una sessione di
+    /// trasferimento; quelle dell'indice la sessione di navigazione, come la lista di una cartella.
+    indexed: AtomicBool,
+    /// Una lettura è fallita: l'archivio non va più servito dalla cache.
+    broken: AtomicBool,
+}
+
+/// Tiene `f` come handle di `open` e avvia il thread che lo chiude dopo `IDLE` senza letture. Chi sta leggendo ne ha
+/// un clone: la chiusura vale dalla lettura successiva, che riapre il file.
+fn keep(open: &Open, f: File) -> Arc<File> {
+    let f = Arc::new(f);
+    *open.lock().unwrap() = Some((f.clone(), Instant::now()));
+    let weak = Arc::downgrade(open);
+    std::thread::spawn(move || {
+        loop {
+            // Senza contenitore (provider eliminato) non c'è più niente da chiudere.
+            let Some(open) = weak.upgrade() else { return };
+            let left = {
+                let mut g = open.lock().unwrap();
+                match g.as_ref() {
+                    Some((_, used)) if used.elapsed() < IDLE => IDLE - used.elapsed(),
+                    _ => {
+                        *g = None;
+                        return;
+                    }
+                }
+            };
+            drop(open);
+            std::thread::sleep(left);
+        }
+    });
+    f
 }
 
 #[derive(Clone)]
@@ -45,7 +90,7 @@ pub fn open(connector: &Arc<dyn Connector>, container: &Loc) -> Result<Container
     match container {
         Loc::Local(p) => open_local(p),
         Loc::Remote { scheme, conn, path } => {
-            let len = connector.provider(*scheme, conn, Purpose::Transfer)?.stat(path)?.size;
+            let len = connector.provider(*scheme, conn, Purpose::Browse)?.stat(path)?.size;
             let source = Source::Remote { connector: connector.clone(), scheme: *scheme, conn: conn.clone(), path: path.clone() };
             Ok(ContainerFile::new(source, len, container.to_string()))
         }
@@ -58,12 +103,25 @@ pub(super) fn open_local(path: &Path) -> Result<ContainerFile, AppError> {
     let err = |e: io::Error| AppError::from_io(&e, path);
     let f = open_shared(path).map_err(err)?;
     let len = f.metadata().map_err(err)?.len();
-    Ok(ContainerFile::new(Source::Local(f), len, path.to_string_lossy().into_owned()))
+    let open = Open::default();
+    keep(&open, f);
+    Ok(ContainerFile::new(Source::Local { path: path.to_path_buf(), open }, len, path.to_string_lossy().into_owned()))
 }
 
 impl ContainerFile {
     fn new(source: Source, len: u64, name: String) -> Self {
-        Self { shared: Arc::new(Shared { source, len, name: name.into() }), pos: 0, buf: Arc::from([]), buf_at: 0 }
+        let shared = Shared { source, len, name: name.into(), indexed: AtomicBool::new(false), broken: AtomicBool::new(false) };
+        Self { shared: Arc::new(shared), pos: 0, buf: Arc::from([]), buf_at: 0 }
+    }
+
+    /// Indice letto: da qui le letture sono di voci (vedi `Shared::indexed`).
+    pub(super) fn set_indexed(&self) {
+        self.shared.indexed.store(true, Ordering::Relaxed);
+    }
+
+    /// Una lettura del contenitore è fallita (file sparito, condivisione o connessione cadute).
+    pub(super) fn broken(&self) -> bool {
+        self.shared.broken.load(Ordering::Relaxed)
     }
 
     #[allow(clippy::len_without_is_empty)]
@@ -79,8 +137,30 @@ impl ContainerFile {
     /// Fino a `len` byte da `offset`, più corto solo a fine file. Gli errori del provider viaggiano dentro
     /// `io::Error::other` (vedi `list::io_err`).
     fn read_at(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+        let r = self.read_source(offset, len);
+        if r.is_err() {
+            self.shared.broken.store(true, Ordering::Relaxed);
+            if let Source::Local { open, .. } = &self.shared.source {
+                *open.lock().unwrap() = None; // un handle morto (condivisione caduta) non si riusa
+            }
+        }
+        r
+    }
+
+    fn read_source(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
         match &self.shared.source {
-            Source::Local(f) => {
+            Source::Local { path, open } => {
+                let held = {
+                    let mut g = open.lock().unwrap();
+                    g.as_mut().map(|(f, used)| {
+                        *used = Instant::now();
+                        f.clone()
+                    })
+                };
+                let f = match held {
+                    Some(f) => f,
+                    None => keep(open, open_shared(path)?),
+                };
                 let mut buf = vec![0; len];
                 let mut n = 0;
                 while n < len {
@@ -94,10 +174,10 @@ impl ContainerFile {
                 buf.truncate(n);
                 Ok(buf)
             }
-            Source::Remote { connector, scheme, conn, path } => connector
-                .provider(*scheme, conn, Purpose::Transfer)
-                .and_then(|p| p.read_at(path, offset, len as u32))
-                .map_err(io::Error::other),
+            Source::Remote { connector, scheme, conn, path } => {
+                let purpose = if self.shared.indexed.load(Ordering::Relaxed) { Purpose::Transfer } else { Purpose::Browse };
+                connector.provider(*scheme, conn, purpose).and_then(|p| p.read_at(path, offset, len as u32)).map_err(io::Error::other)
+            }
         }
     }
 }

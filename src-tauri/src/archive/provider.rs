@@ -104,7 +104,7 @@ impl ArchiveProvider {
         let format = container.file_name().and_then(|n| format_of(Path::new(&n))).ok_or_else(|| container.error(ErrorCode::Unsupported))?;
         let (writable, ranged) = match container {
             Loc::Remote { scheme, conn, .. } => {
-                let caps = connector.provider(*scheme, conn, Purpose::Transfer)?.caps();
+                let caps = connector.provider(*scheme, conn, Purpose::Browse)?.caps();
                 (caps.writable, caps.ranged_read)
             }
             _ => (true, true),
@@ -124,11 +124,17 @@ impl ArchiveProvider {
         };
         // Gli errori della copia locale nominano il contenitore, non il temporaneo.
         let (index, data) = built.map_err(|e| if copy.is_some() { AppError { path: Some(container.to_string()), ..e } } else { e })?;
+        file.set_indexed();
         Ok(Self { container: container.clone(), index, data, file, writable, cursor: Slot::default(), _copy: copy })
     }
 
     pub fn index(&self) -> &Index {
         &self.index
+    }
+
+    /// Una lettura del contenitore è fallita: la cache non deve più servire questo archivio.
+    pub(super) fn broken(&self) -> bool {
+        self.file.broken()
     }
 
     /// L'archivio del crate di uno ZIP (per la riscrittura); `None` per gli altri formati.
@@ -430,6 +436,71 @@ mod tests {
         std::fs::write(&z, zip_bytes(&[("a", b"1"), ("b", b"2"), ("c", b"3")])).unwrap();
         v.archives().invalidate(&Loc::Local(z.clone()));
         assert_eq!(list(), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn idle_container_is_not_kept_open() {
+        let d = tempfile::tempdir().unwrap();
+        let rel = d.path().join("rel");
+        std::fs::create_dir(&rel).unwrap();
+        let z = rel.join("a.zip");
+        std::fs::write(&z, zip_bytes(&[("a", b"1")])).unwrap();
+        let v = vfs(&[]);
+        let loc = at(&Loc::Local(z.clone()));
+        let wait = || std::thread::sleep(container::IDLE + Duration::from_millis(500));
+        assert_eq!(names(&*v.remote(&loc, Purpose::Browse).unwrap().0, "/"), ["a"]);
+        assert_eq!(read_all(&*v.remote(&loc, Purpose::Browse).unwrap().0, "/a"), b"1");
+        wait();
+        // L'archivio resta in cache, ma il file no: dopo la pausa si riapre per leggere.
+        assert_eq!(read_all(&*v.remote(&loc, Purpose::Browse).unwrap().0, "/a"), b"1");
+        wait();
+        // F5 Sovrascrivi sullo ZIP, poi la rinomina della cartella che lo contiene, con l'executor dell'app
+        // (`MoveFileExW`: con il file aperto entrambe danno `ACCESS_DENIED`, anche se aperto con condivisione totale).
+        use crate::ops::exec::{Executor, LocalExecutor};
+        let new = d.path().join("new.zip");
+        std::fs::write(&new, zip_bytes(&[("b", b"2")])).unwrap();
+        LocalExecutor.move_path(&new, &z, true).unwrap();
+        LocalExecutor.rename(&rel, &d.path().join("rel2")).unwrap();
+    }
+
+    #[test]
+    fn read_error_evicts_the_archive_from_the_cache() {
+        let m = Arc::new(MemProvider::new());
+        // La voce grande sta fuori dalla finestra letta con l'indice: leggerla torna al server.
+        m.add_file("/a.zip", &zip_bytes(&[("big", &noise(1, 600_000)), ("a", b"1")]));
+        let v = vfs(&[("m", &m)]);
+        let loc = at(&Loc::parse("sftp://m/a.zip").unwrap());
+        let (p, _) = v.remote(&loc, Purpose::Browse).unwrap();
+        m.delete("/a.zip", false).unwrap();
+        assert!(p.read_at("/big", 0, 10).is_err());
+        // Prima del ricontrollo (2 s): l'archivio in cache non serve più, si rilegge (e qui non c'è).
+        assert_eq!(v.remote(&loc, Purpose::Browse).err().map(|e| e.code), Some(ErrorCode::NotFound));
+    }
+
+    /// Connettore che annota lo scopo di ogni provider chiesto.
+    struct Recording(Arc<MemProvider>, std::sync::Mutex<Vec<Purpose>>);
+
+    impl Connector for Recording {
+        fn provider(&self, _: crate::vfs::loc::Scheme, _: &str, purpose: Purpose) -> Result<Arc<dyn Provider>, AppError> {
+            self.1.lock().unwrap().push(purpose);
+            Ok(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn index_reads_browse_and_entry_reads_transfer() {
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/a.zip", &zip_bytes(&[("big", &noise(1, 600_000)), ("a", b"1")]));
+        let rec = Arc::new(Recording(m, Default::default()));
+        let connector: Arc<dyn Connector> = rec.clone();
+        let cache = crate::archive::cache::ArchiveCache::new();
+        let p = cache.open(&connector, &Loc::parse("sftp://m/a.zip").unwrap(), &AtomicBool::new(false)).unwrap();
+        let taken = || std::mem::take(&mut *rec.1.lock().unwrap());
+        // Come la lista: nessuna sessione di trasferimento (su FTP una connessione in più).
+        assert!(taken().iter().all(|&p| p == Purpose::Browse));
+        assert_eq!(p.read_at("/big", 0, 3).unwrap().len(), 3);
+        let t = taken();
+        assert!(!t.is_empty() && t.iter().all(|&p| p == Purpose::Transfer));
     }
 
     /// Sostituisce ogni `from` con `to` (stessa lunghezza).
