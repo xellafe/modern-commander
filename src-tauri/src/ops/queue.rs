@@ -400,8 +400,9 @@ fn valid_rename(new: &Loc, dst: &Loc) -> bool {
             };
             new.is_absolute() && n.file_name().is_some() && same_parent && !same_path(&n, &d)
         }
-        // Remoto: già pulito (`Loc::parse`); la stessa cartella vuol dire anche la stessa connessione.
-        (Loc::Remote { .. }, Loc::Remote { .. }) => new.file_name().is_some() && new.parent() == dst.parent() && new != dst,
+        // Remoto o d'archivio: già pulito (`Loc::parse`); la stessa cartella vuol dire anche la stessa connessione
+        // (o lo stesso archivio).
+        (Loc::Remote { .. }, Loc::Remote { .. }) | (Loc::Archive { .. }, Loc::Archive { .. }) => new.file_name().is_some() && new.parent() == dst.parent() && new != dst,
         _ => false,
     }
 }
@@ -1586,5 +1587,12 @@ mod tests {
         let id = q.enqueue(rspec(JobKind::Copy, &sources, Some(loc("sftp://m/d")), ConflictPolicy::OverwriteIfNewer));
         assert_eq!(finish(&rx, id).state, Done);
         assert_eq!((m.data("/d/a").unwrap(), m.data("/d/b").unwrap()), (b"vecchio".to_vec(), b"nuovo".to_vec()));
+    }
+
+    #[test]
+    fn valid_rename_inside_one_archive() {
+        let l = |s: &str| Loc::parse(s).unwrap();
+        assert!(valid_rename(&l(r"arc://C:\a.zip/d/y"), &l(r"arc://C:\a.zip/d/x")));
+        assert!(!valid_rename(&l(r"arc://C:\b.zip/d/y"), &l(r"arc://C:\a.zip/d/x")));
     }
 }

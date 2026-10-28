@@ -20,6 +20,8 @@ impl Vfs {
         match loc {
             Loc::Remote { scheme, conn, path } => Ok((self.connector.provider(*scheme, conn, purpose)?, path.clone())),
             Loc::Local(_) => Err(AppError::new(ErrorCode::InvalidRequest, None)),
+            // Ancora nessun provider d'archivio: lo sostituisce il Task 4.
+            Loc::Archive { .. } => Err(AppError::new(ErrorCode::Unsupported, None)),
         }
     }
 
@@ -28,7 +30,7 @@ impl Vfs {
     pub fn endpoint(&self, loc: &Loc, purpose: Purpose) -> Result<(Arc<dyn Provider>, String), AppError> {
         match loc {
             Loc::Local(p) => Ok((Arc::new(LocalProvider), p.to_string_lossy().into_owned())),
-            Loc::Remote { .. } => self.remote(loc, purpose),
+            Loc::Remote { .. } | Loc::Archive { .. } => self.remote(loc, purpose),
         }
     }
 }

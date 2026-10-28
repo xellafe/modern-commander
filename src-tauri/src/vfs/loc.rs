@@ -40,6 +40,8 @@ impl Scheme {
 pub enum Loc {
     Local(PathBuf),
     Remote { scheme: Scheme, conn: String, path: String },
+    /// Dentro un archivio: `container` è `Local` o `Remote` (mai `Archive`) e ha un nome di file; `path` è POSIX pulito.
+    Archive { container: Box<Loc>, path: String },
 }
 
 /// Senza eco dell'input: un URL incollato potrebbe contenere `utente:password@`.
@@ -63,12 +65,67 @@ fn clean(p: &str) -> String {
     format!("/{}", parts.join("/"))
 }
 
+/// Parent di un percorso POSIX pulito; `None` per la radice.
+fn posix_parent(path: &str) -> Option<&str> {
+    let i = path.rfind('/').filter(|_| path != "/")?;
+    Some(if i == 0 { "/" } else { &path[..i] })
+}
+
+/// `a` coincide con `b` o è al suo interno, per componenti.
+fn posix_within(a: &str, b: &str) -> bool {
+    a == b || b == "/" || a.strip_prefix(b).is_some_and(|r| r.starts_with('/'))
+}
+
+/// Codifica del contenitore dentro `arc://`: solo `%` e `/` (il resto è già leggibile e non ambiguo).
+fn encode_container(c: &Loc) -> String {
+    c.to_string().replace('%', "%25").replace('/', "%2F")
+}
+
+/// Inverso di `encode_container`: accetta solo `%25` e `%2F`/`%2f`, ogni altro `%` è un errore.
+fn decode_container(s: &str) -> Result<String, AppError> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let esc = rest.get(i + 1..i + 3).ok_or_else(invalid)?;
+        out.push(match esc {
+            "25" => '%',
+            "2F" | "2f" => '/',
+            _ => return Err(invalid()),
+        });
+        rest = &rest[i + 3..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 impl Loc {
+    /// Posizione `path` dentro l'archivio `container` (locale o remoto, mai un altro archivio).
+    pub fn archive(container: Loc, path: &str) -> Loc {
+        debug_assert!(!matches!(container, Loc::Archive { .. }));
+        Loc::Archive { container: Box::new(container), path: clean(path) }
+    }
+
+    pub fn archive_container(&self) -> Option<&Loc> {
+        match self {
+            Loc::Archive { container, .. } => Some(container),
+            _ => None,
+        }
+    }
+
     pub fn parse(s: &str) -> Result<Loc, AppError> {
         // Un prefisso `xx://` con almeno due caratteri alfanumerici è uno schema; `C://x` resta locale.
         let Some((head, rest)) = s.split_once("://") else { return Ok(Loc::Local(PathBuf::from(s))) };
         if head.len() < 2 || !head.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) {
             return Ok(Loc::Local(PathBuf::from(s)));
+        }
+        if head.eq_ignore_ascii_case("arc") {
+            let (enc, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            let container = Loc::parse(&decode_container(enc)?)?;
+            if matches!(container, Loc::Archive { .. }) || container.file_name().is_none() {
+                return Err(invalid());
+            }
+            return Ok(Loc::archive(container, path));
         }
         let scheme = Scheme::lookup(&head.to_ascii_lowercase()).ok_or_else(invalid)?;
         let (conn, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
@@ -88,6 +145,7 @@ impl Loc {
                 conn: conn.clone(),
                 path: clean(&format!("{path}/{name}")),
             },
+            Loc::Archive { container, path } => Loc::archive((**container).clone(), &format!("{path}/{name}")),
         }
     }
 
@@ -95,17 +153,17 @@ impl Loc {
         match self {
             Loc::Local(p) => p.parent().map(|p| Loc::Local(p.to_path_buf())),
             Loc::Remote { scheme, conn, path } => {
-                let i = path.rfind('/').filter(|_| path != "/")?;
-                let path = if i == 0 { "/" } else { &path[..i] };
+                let path = posix_parent(path)?;
                 Some(Loc::Remote { scheme: *scheme, conn: conn.clone(), path: path.to_owned() })
             }
+            Loc::Archive { container, path } => Some(Loc::archive((**container).clone(), posix_parent(path)?)),
         }
     }
 
     pub fn file_name(&self) -> Option<String> {
         match self {
             Loc::Local(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()),
-            Loc::Remote { path, .. } => path.rsplit('/').next().filter(|n| !n.is_empty()).map(str::to_owned),
+            Loc::Remote { path, .. } | Loc::Archive { path, .. } => path.rsplit('/').next().filter(|n| !n.is_empty()).map(str::to_owned),
         }
     }
 
@@ -119,9 +177,10 @@ impl Loc {
                 Loc::Remote { scheme: s1, conn: c1, path: a },
                 Loc::Remote { scheme: s2, conn: c2, path: b },
             ) => {
-                s1 == s2
-                    && c1 == c2
-                    && (a == b || b == "/" || a.strip_prefix(b.as_str()).is_some_and(|r| r.starts_with('/')))
+                s1 == s2 && c1 == c2 && posix_within(a, b)
+            }
+            (Loc::Archive { container: c1, path: a }, Loc::Archive { container: c2, path: b }) => {
+                c1.same(c2) && posix_within(a, b)
             }
             _ => false,
         }
@@ -132,6 +191,7 @@ impl Loc {
             (Loc::Local(a), Loc::Local(b)) => {
                 paths::same_path(&paths::normalize_lexical(a), &paths::normalize_lexical(b))
             }
+            (Loc::Archive { container: c1, path: a }, Loc::Archive { container: c2, path: b }) => c1.same(c2) && a == b,
             _ => self == other,
         }
     }
@@ -141,18 +201,25 @@ impl Loc {
         match self {
             Loc::Local(p) => paths::volume_key(p),
             Loc::Remote { scheme, conn, .. } => format!("{}://{conn}", scheme.as_str()),
+            // Il file contenitore, non il suo volume: due archivi sullo stesso disco hanno chiavi diverse, due
+            // forme dello stesso file (`C:\A.ZIP`, `c:\a.zip`) la stessa.
+            Loc::Archive { container, .. } => match &**container {
+                Loc::Local(p) => format!("arc://{}", paths::normalize_lexical(p).to_string_lossy().to_lowercase()),
+                c => format!("arc://{c}"),
+            },
         }
     }
 
     pub fn as_local(&self) -> Option<&Path> {
         match self {
             Loc::Local(p) => Some(p),
-            Loc::Remote { .. } => None,
+            Loc::Remote { .. } | Loc::Archive { .. } => None,
         }
     }
 
+    /// Fuori dal file system locale (remoto o dentro un archivio).
     pub fn is_remote(&self) -> bool {
-        matches!(self, Loc::Remote { .. })
+        matches!(self, Loc::Remote { .. } | Loc::Archive { .. })
     }
 
     /// Errore su questa posizione: `path` è la sua forma testuale.
@@ -166,6 +233,7 @@ impl fmt::Display for Loc {
         match self {
             Loc::Local(p) => write!(f, "{}", p.to_string_lossy()),
             Loc::Remote { scheme, conn, path } => write!(f, "{}://{conn}{path}", scheme.as_str()),
+            Loc::Archive { container, path } => write!(f, "arc://{}{path}", encode_container(container)),
         }
     }
 }
@@ -294,5 +362,40 @@ mod tests {
         assert!(!format!("{e:?}").contains("pw"));
         let e = serde_json::from_str::<Loc>("\"sftp://u:pw@h/x\"").unwrap_err();
         assert!(!e.to_string().contains("pw"));
+    }
+
+    #[test]
+    fn archive_roundtrip_local_and_remote_container() {
+        let l = Loc::parse(r"arc://C:\rel\app.zip/conf/a b%#.xml").unwrap();
+        assert_eq!(l, Loc::Archive { container: Box::new(Loc::Local(r"C:\rel\app.zip".into())), path: "/conf/a b%#.xml".into() });
+        assert_eq!(l.to_string(), r"arc://C:\rel\app.zip/conf/a b%#.xml");
+        let r = Loc::archive(Loc::parse("sftp://w/rel/100%/app.zip").unwrap(), "/");
+        assert_eq!(r.to_string(), "arc://sftp:%2F%2Fw%2Frel%2F100%25%2Fapp.zip/");
+        assert_eq!(Loc::parse(&r.to_string()).unwrap(), r);
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(serde_json::from_str::<Loc>(&json).unwrap(), r);
+    }
+
+    #[test]
+    fn archive_parse_rejects_nesting_and_bad_escapes() {
+        let nested = format!("arc://{}/x", Loc::parse(r"arc://C:\a.zip/b.zip").unwrap().to_string().replace('%', "%25").replace('/', "%2F"));
+        for bad in [nested.as_str(), "arc://C:\\a.zip%41/x", "arc:///x", "arc://sftp:%2F%2Fw%2F/x"] {
+            assert_eq!(Loc::parse(bad).unwrap_err().code, ErrorCode::InvalidRequest, "{bad}");
+        }
+    }
+
+    #[test]
+    fn archive_navigation_and_keys() {
+        let root = Loc::parse(r"arc://C:\a.zip/").unwrap();
+        let f = root.join("d").join("..").join("e");
+        assert_eq!(f.to_string(), r"arc://C:\a.zip/e");
+        assert_eq!(f.parent().unwrap(), root);
+        assert_eq!(root.parent(), None);
+        assert_eq!(root.file_name(), None);
+        assert!(f.is_within(&root) && !f.is_within(&Loc::parse(r"arc://C:\b.zip/").unwrap()));
+        assert!(Loc::parse(r"arc://c:\A.ZIP/e").unwrap().same(&f));
+        assert_eq!(Loc::parse(r"arc://c:\A.ZIP/").unwrap().volume_key(), root.volume_key());
+        assert_ne!(root.volume_key(), Loc::parse(r"C:\a.zip").unwrap().volume_key());
+        assert!(root.is_remote() && root.as_local().is_none());
     }
 }

@@ -29,12 +29,12 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + '
     })
 }
 
-/// Percorso locale per i comandi che sulle sorgenti remote non valgono: `UNSUPPORTED` per una posizione remota,
-/// che così non arriva mai a `std::fs` né alla shell.
+/// Percorso locale per i comandi che sulle sorgenti remote non valgono: `UNSUPPORTED` per una posizione remota o
+/// dentro un archivio, che così non arriva mai a `std::fs` né alla shell.
 pub(crate) fn local_only(path: &str) -> Result<PathBuf, AppError> {
     match Loc::parse(path)? {
         Loc::Local(p) => Ok(p),
-        Loc::Remote { .. } => Err(AppError::new(ErrorCode::Unsupported, None)),
+        Loc::Remote { .. } | Loc::Archive { .. } => Err(AppError::new(ErrorCode::Unsupported, None)),
     }
 }
 
@@ -71,15 +71,15 @@ pub async fn nearest_existing_ancestor(path: String) -> Result<Option<PathBuf>, 
     blocking(move || listing::nearest_existing_ancestor(&path)).await
 }
 
-/// Percorsi in forma lunga (i nomi 8.3 del drop da Explorer); quelli non risolvibili, e le posizioni remote,
-/// restano invariati.
+/// Percorsi in forma lunga (i nomi 8.3 del drop da Explorer); quelli non risolvibili, e le posizioni remote
+/// o d'archivio, restano invariati.
 #[tauri::command]
 pub async fn normalize_paths(paths: Vec<String>) -> Result<Vec<PathBuf>, AppError> {
     blocking(move || {
         paths
             .iter()
             .map(|p| match Loc::parse(p) {
-                Ok(Loc::Remote { .. }) => PathBuf::from(p),
+                Ok(loc) if loc.is_remote() => PathBuf::from(p),
                 _ => listing::long_path(Path::new(p)),
             })
             .collect()
@@ -284,4 +284,15 @@ pub async fn calc_hash(
     let path = local_only(&path)?;
     let guard = requests.register(request_id);
     blocking(move || hash::hash_file(&path, algo, guard.flag())).await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_only_rejects_archive_locations() {
+        assert_eq!(local_only(r"arc://C:\a.zip/x").unwrap_err().code, ErrorCode::Unsupported);
+        assert!(local_only(r"C:\a").is_ok());
+    }
 }
