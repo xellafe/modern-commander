@@ -187,7 +187,7 @@ test("markdown is rendered without raw html; image, pdf, video read nothing", as
 });
 
 test("remote file: metadata and text preview only, no media or archive", async () => {
-  for (const name of ["a.png", "a.pdf", "a.mp4", "a.zip", "a.7z"]) {
+  for (const name of ["a.png", "a.pdf", "a.mp4", "a.tar", "a.tgz"]) {
     set(`sftp://h/${name}`);
     await sleep(DEBOUNCE_MS + 10);
     expect(state()).toMatchObject({ info: INFO, preview: { kind: "none" } });
@@ -198,6 +198,40 @@ test("remote file: metadata and text preview only, no media or archive", async (
   set("sftp://h/a.txt");
   await sleep(DEBOUNCE_MS + 10);
   expect(state().preview).toMatchObject({ kind: "text", text: "ciao" });
+});
+
+test("inspector lists a remote zip but not a remote tar.gz; a remote 7z stays on demand", async () => {
+  const listing: ArchiveListing = { entries: [], total: 0, truncated: false };
+  listArchive.mockResolvedValue(listing);
+  set("sftp://m/a.zip");
+  await sleep(DEBOUNCE_MS + 10);
+  expect(listArchive).toHaveBeenCalledWith(expect.any(Number), "sftp://m/a.zip", ARCHIVE_LIMIT);
+  expect(state().preview).toEqual({ kind: "archive", listing });
+  listArchive.mockClear();
+  for (const name of ["a.tar.gz", "a.tar", "a.tgz"]) {
+    set(`sftp://m/${name}`);
+    await sleep(DEBOUNCE_MS + 10);
+    expect(state().preview).toEqual({ kind: "none" });
+  }
+  set("sftp://m/a.7z");
+  await sleep(DEBOUNCE_MS + 10);
+  expect(state().preview).toEqual({ kind: "archiveOnDemand" });
+  expect(listArchive).not.toHaveBeenCalled();
+});
+
+test("archive entry: text preview only, no hash, no nested archive listing", async () => {
+  for (const name of ["x.png", "in.zip"]) {
+    set(`arc://C:\\a.zip/${name}`);
+    await sleep(DEBOUNCE_MS + 10);
+    expect(state().preview).toEqual({ kind: "none" });
+  }
+  expect(listArchive).not.toHaveBeenCalled();
+  readChunk.mockResolvedValue(enc("ciao"));
+  set("arc://C:\\a.zip/x.txt");
+  await sleep(DEBOUNCE_MS + 10);
+  expect(state().preview).toMatchObject({ kind: "text", text: "ciao" });
+  state().requestHash("sha256");
+  expect(calcHash).not.toHaveBeenCalled();
 });
 
 test("folder: size arrives, but not if the target changed meanwhile", async () => {

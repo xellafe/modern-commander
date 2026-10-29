@@ -19,6 +19,7 @@ export type ErrorCode =
   | "CHANGED_ON_DISK"
   | "UNMAPPABLE_CHARS"
   | "CORRUPT_ARCHIVE"
+  | "ARCHIVE_TOO_DEMANDING"
   | "AUTH_REQUIRED"
   | "AUTH_FAILED"
   | "CONNECTION_FAILED"
@@ -31,6 +32,8 @@ export type ErrorCode =
   | "READ_ONLY_SOURCE"
   | "RANGE_UNSUPPORTED"
   | "ALGORITHM_UNSUPPORTED"
+  /** Solo frontend: l'archivio da estrarre non ha voci. */
+  | "EMPTY_ARCHIVE"
   | "IO";
 
 export interface AppError {
@@ -152,7 +155,9 @@ export type JobKind =
   | { type: "move" }
   | { type: "delete"; permanent: boolean }
   | { type: "mkdir" }
-  | { type: "rename" };
+  | { type: "rename" }
+  /** Copia nella radice di uno ZIP nuovo (`dest` = `arc://<zip>/`); con `replace` sostituisce un file esistente. */
+  | { type: "pack"; replace: boolean };
 
 export type ConflictPolicy = {
   type: "ask" | "overwrite" | "skip" | "overwriteIfNewer" | "overwriteIfLarger" | "renameNew";

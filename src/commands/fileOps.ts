@@ -1,7 +1,7 @@
 // Comandi sui file (Task 16): copia, spostamento, rinomina, nuova cartella, eliminazione, selezione per maschera.
 import { enqueueJob, fileInfo, normalizePaths, shiftPressed } from "../ipc/api";
 import type { ConflictPolicy, JobId, JobSpec } from "../ipc/types";
-import { folderName, isRemote, joinPath, normalizePath, parseRemote, sourceCaps } from "../lib/paths";
+import { folderName, formatArchive, isArchive, isVirtual, joinPath, normalizePath, parseArchive, parseRemote, sourceCaps } from "../lib/paths";
 import { useJobs, waitForJob } from "../state/jobs";
 import { targetGroup, useLayout, type LayoutState } from "../state/layout";
 import { useSettings } from "../state/settings";
@@ -26,18 +26,20 @@ const INVALID_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
 /** Chiave i18n dell'errore di un nome di file o cartella dentro `base`, `null` se è valido. */
 export function nameError(name: string, base = ""): string | null {
   if (!name.trim()) return "ops.nameEmpty";
-  // Sul server vale POSIX: solo `/` e NUL, più `.` e `..` che il backend risolverebbe come percorso.
-  if (isRemote(base)) return /[/\0]/.test(name) || name === "." || name === ".." ? "ops.nameInvalid" : null;
+  // Sul server e nell'archivio vale POSIX: solo `/` e NUL, più `.` e `..` che il backend risolverebbe come percorso.
+  if (isVirtual(base)) return /[/\0]/.test(name) || name === "." || name === ".." ? "ops.nameInvalid" : null;
   // Windows toglie in silenzio punti e spazi finali: meglio rifiutarli che creare un nome diverso.
   return INVALID_CHARS.test(name) || /[. ]$/.test(name) ? "ops.nameInvalid" : null;
 }
 
 const ABS_ROOT = /^(?:[A-Za-z]:\\|\\\\[^\\/]+\\[^\\/]+\\)/;
 
-/** Su una scheda remota un `/` iniziale è la radice del server: `/etc` → `sftp://w/etc`. */
+/** Su una scheda remota un `/` iniziale è la radice del server (`/etc` → `sftp://w/etc`), in un archivio la sua radice. */
 function serverAbsolute(base: string, input: string): string {
+  if (!input.startsWith("/")) return input;
   const r = parseRemote(base);
-  return r && input.startsWith("/") ? `${r.scheme}://${r.conn}${input}` : input;
+  const a = parseArchive(base);
+  return r ? `${r.scheme}://${r.conn}${input}` : a ? formatArchive(a.container, input) : input;
 }
 
 /**
@@ -47,11 +49,12 @@ function serverAbsolute(base: string, input: string): string {
 export function mkdirTarget(base: string, input: string): { path: string; focus: string | null } | { error: string } {
   const s = serverAbsolute(base, input.trim());
   const r = parseRemote(s);
-  const root = r ? `${r.scheme}://${r.conn}/` : (ABS_ROOT.exec(s)?.[0] ?? "");
+  const a = parseArchive(s);
+  const root = r ? `${r.scheme}://${r.conn}/` : a ? formatArchive(a.container) : (ABS_ROOT.exec(s)?.[0] ?? "");
   if (!root && !sourceCaps(base).write) return { error: "ops.nameInvalid" };
   const where = root || base;
-  const sep = isRemote(where) ? "/" : "\\";
-  const parts = (r ? r.path : s.slice(root.length)).split(sep).filter(Boolean);
+  const sep = isVirtual(where) ? "/" : "\\";
+  const parts = (r ? r.path : a ? a.inner : s.slice(root.length)).split(sep).filter(Boolean);
   if (!parts.length) return { error: "ops.nameEmpty" };
   for (const p of parts) {
     const e = nameError(p, where);
@@ -60,8 +63,8 @@ export function mkdirTarget(base: string, input: string): { path: string; focus:
   const rel = parts.join(sep);
   if (!root) return { path: joinPath(base, rel), focus: parts[0] };
   const path = root + rel;
-  // Sul server i nomi distinguono maiuscole e minuscole.
-  const same = r ? parentPath(path) === base : parentPath(path)?.toLowerCase() === base.toLowerCase();
+  // Sul server e nell'archivio i nomi distinguono maiuscole e minuscole.
+  const same = r || a ? parentPath(path) === base : parentPath(path)?.toLowerCase() === base.toLowerCase();
   return { path, focus: same ? parts[parts.length - 1] : null };
 }
 
@@ -74,15 +77,15 @@ export function resolveDest(base: string, input: string): string | null {
   const s = input.trim();
   if (!s) return null;
   const p = normalizePath(serverAbsolute(base, s));
-  const abs = /^(?:[A-Za-z]:\\|\\\\)/.test(p) || isRemote(p) ? p
+  const abs = /^(?:[A-Za-z]:\\|\\\\)/.test(p) || isVirtual(p) ? p
     : !sourceCaps(base).write ? null
-    : isRemote(base) ? normalizePath(joinPath(base, s)) : joinPath(base, p);
-  const sep = abs && isRemote(abs) ? "/" : "\\";
+    : isVirtual(base) ? normalizePath(joinPath(base, s)) : joinPath(base, p);
+  const sep = abs && isVirtual(abs) ? "/" : "\\";
   return abs && /[\\/]$/.test(s) && !abs.endsWith(sep) ? abs + sep : abs;
 }
 
-// Sul server i nomi distinguono maiuscole e minuscole.
-const noTrailing = (p: string) => (isRemote(p) ? p.replace(/\/+$/, "") : p.replace(/\\+$/, "").toLowerCase());
+// Sul server e nell'archivio i nomi distinguono maiuscole e minuscole.
+const noTrailing = (p: string) => (isVirtual(p) ? p.replace(/\/+$/, "") : p.replace(/\\+$/, "").toLowerCase());
 
 /** OK disattivato: destinazione uguale alla cartella delle sorgenti con un solo gruppo o per uno spostamento. */
 export const mustChangeDest = (req: { from: string; move: boolean; requireChange: boolean }, dest: string | null) =>
@@ -91,7 +94,7 @@ export const mustChangeDest = (req: { from: string; move: boolean; requireChange
 const views = () => useTabViews.getState();
 const ui = () => useUi.getState();
 
-const enqueue = (spec: Omit<JobSpec, "filter" | "policy"> & Partial<JobSpec>) =>
+export const enqueue = (spec: Omit<JobSpec, "filter" | "policy"> & Partial<JobSpec>) =>
   enqueueJob({ filter: null, policy: { type: "ask" }, ...spec });
 
 /** Dopo un job riuscito porta il cursore su `name`, se la scheda è ancora in quella cartella. */
@@ -102,7 +105,7 @@ async function focusWhenDone(id: JobId, tabId: string, base: string, name: strin
 }
 
 /** Contesto dei comandi sulle selezioni; `null` nella lista delle unità o senza elementi. */
-function selection() {
+export function selection() {
   const ctx = activeTabContext();
   const sources = ctx.markedOrCursor.flatMap((r) => (r.drive ? [] : [joinPath(ctx.path, r.name)]));
   return sources.length ? { ...ctx, sources } : null;
@@ -111,7 +114,7 @@ function selection() {
 /** Sorgente in sola lettura: su HTTP la notifica al posto del backend, nella lista delle unità niente (come prima). */
 function readOnly(tabId: string, path: string): boolean {
   if (sourceCaps(path).write) return false;
-  if (isRemote(path)) views().showNotice(tabId, { code: "READ_ONLY_SOURCE" });
+  if (isVirtual(path)) views().showNotice(tabId, { code: "READ_ONLY_SOURCE" });
   return true;
 }
 
@@ -135,7 +138,7 @@ export async function startCopyMove(
 ) {
   // `Loc` toglie il `/` finale di un indirizzo remoto: per un file solo verso `dir/` il nome lo mette il frontend.
   const [src] = req.sources;
-  if (req.sources.length === 1 && isRemote(dest) && dest.endsWith("/") && (await fileInfo(src).then((i) => !i.isDir, () => false))) {
+  if (req.sources.length === 1 && isVirtual(dest) && dest.endsWith("/") && (await fileInfo(src).then((i) => !i.isDir, () => false))) {
     dest = joinPath(dest, folderName(src));
   }
   return enqueue({
@@ -159,7 +162,7 @@ export async function dropOnGroup(groupId: string, paths: string[], move?: boole
   // drop nativi lo stato del tasto si chiede al sistema subito dopo il rilascio, prima di ogni altra attesa.
   move ??= await shiftPressed();
   // normalizePaths riguarda i percorsi di Explorer: un indirizzo remoto (drag tra i gruppi dell'app) non ci passa.
-  const sources = paths.some(isRemote) ? paths : await normalizePaths(paths);
+  const sources = paths.some(isVirtual) ? paths : await normalizePaths(paths);
   const dest = l.tabs[g.activeTabId].path;
   ui().openDialog({
     kind: "copyMove", move, sources,
@@ -188,6 +191,8 @@ export const deleteSources = (sources: string[], permanent: boolean) =>
 async function openDelete(permanent: boolean) {
   const sel = selection();
   if (!sel || readOnly(sel.tabId, sel.path)) return;
+  // Dentro un archivio non c'è il Cestino: si elimina sempre in modo definitivo (e la conferma lo dice).
+  permanent ||= isArchive(sel.path);
   if (useSettings.getState().confirmDelete) ui().openDialog({ kind: "delete", permanent, sources: sel.sources });
   else await deleteSources(sel.sources, permanent);
 }

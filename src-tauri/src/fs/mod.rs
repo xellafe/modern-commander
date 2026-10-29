@@ -13,6 +13,7 @@ pub mod source;
 pub mod watch;
 
 use crate::error::{AppError, ErrorCode};
+use crate::ops::queue::Queue;
 use crate::requests::Requests;
 use crate::vfs::loc::Loc;
 use crate::vfs::provider::{Provider, Purpose};
@@ -29,12 +30,12 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + '
     })
 }
 
-/// Percorso locale per i comandi che sulle sorgenti remote non valgono: `UNSUPPORTED` per una posizione remota,
-/// che così non arriva mai a `std::fs` né alla shell.
+/// Percorso locale per i comandi che sulle sorgenti remote non valgono: `UNSUPPORTED` per una posizione remota o
+/// dentro un archivio, che così non arriva mai a `std::fs` né alla shell.
 pub(crate) fn local_only(path: &str) -> Result<PathBuf, AppError> {
     match Loc::parse(path)? {
         Loc::Local(p) => Ok(p),
-        Loc::Remote { .. } => Err(AppError::new(ErrorCode::Unsupported, None)),
+        Loc::Remote { .. } | Loc::Archive { .. } => Err(AppError::new(ErrorCode::Unsupported, None)),
     }
 }
 
@@ -71,15 +72,15 @@ pub async fn nearest_existing_ancestor(path: String) -> Result<Option<PathBuf>, 
     blocking(move || listing::nearest_existing_ancestor(&path)).await
 }
 
-/// Percorsi in forma lunga (i nomi 8.3 del drop da Explorer); quelli non risolvibili, e le posizioni remote,
-/// restano invariati.
+/// Percorsi in forma lunga (i nomi 8.3 del drop da Explorer); quelli non risolvibili, e le posizioni remote
+/// o d'archivio, restano invariati.
 #[tauri::command]
 pub async fn normalize_paths(paths: Vec<String>) -> Result<Vec<PathBuf>, AppError> {
     blocking(move || {
         paths
             .iter()
             .map(|p| match Loc::parse(p) {
-                Ok(Loc::Remote { .. }) => PathBuf::from(p),
+                Ok(loc) if loc.is_remote() => PathBuf::from(p),
                 _ => listing::long_path(Path::new(p)),
             })
             .collect()
@@ -96,6 +97,10 @@ pub async fn list_drives()-> Result<Vec<drives::Drive>, AppError> {
 pub async fn file_info(vfs: State<'_, Arc<Vfs>>, path: String) -> Result<content::FileInfo, AppError> {
     match Loc::parse(&path)? {
         Loc::Local(p) => blocking(move || content::file_info(&p)).await?,
+        loc @ Loc::Archive { .. } => {
+            let vfs = vfs.inner().clone();
+            blocking(move || content::archive_file_info(&vfs, &loc)).await?
+        }
         loc => on_remote(&vfs, loc, content::remote_file_info).await,
     }
 }
@@ -121,11 +126,13 @@ pub async fn read_file(vfs: State<'_, Arc<Vfs>>, path: String, max: u64) -> Resu
 
 /// Salvataggio dell'editor (vedi `content::write_text_file`); restituisce il `FileInfo` dopo la scrittura. Sul
 /// remoto (`content::remote_write_text_file`) conta anche `expected_size`, e `allow_unsafe` permette la scrittura
-/// diretta dove il server non accetta quella sicura.
+/// diretta dove il server non accetta quella sicura. Dentro uno ZIP è un job della coda, di cui si aspetta la fine
+/// (`content::archive_write_text_file`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn write_text_file(
     vfs: State<'_, Arc<Vfs>>,
+    q: State<'_, Queue>,
     path: String,
     text: String,
     encoding: String,
@@ -136,6 +143,10 @@ pub async fn write_text_file(
 ) -> Result<content::FileInfo, AppError> {
     match Loc::parse(&path)? {
         Loc::Local(p) => blocking(move || content::write_text_file(&p, &text, &encoding, bom, expected_modified_ms)).await?,
+        loc @ Loc::Archive { .. } => {
+            let (vfs, q) = (vfs.inner().clone(), q.inner().clone());
+            blocking(move || content::archive_write_text_file(&q, &vfs, &loc, &text, &encoding, bom, expected_modified_ms, expected_size)).await?
+        }
         loc => {
             let vfs = vfs.inner().clone();
             blocking(move || {
@@ -284,4 +295,30 @@ pub async fn calc_hash(
     let path = local_only(&path)?;
     let guard = requests.register(request_id);
     blocking(move || hash::hash_file(&path, algo, guard.flag())).await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_chunk_inside_an_archive() {
+        use std::io::Write;
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&z).unwrap());
+        w.start_file("conf/a.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"0123456789").unwrap();
+        w.finish().unwrap();
+        let vfs = Arc::new(crate::vfs::mem::vfs(&[]));
+        let loc = Loc::archive(Loc::Local(z), "/conf/a.xml");
+        let got = tauri::async_runtime::block_on(on_remote(&vfs, loc, |p, path| content::remote_chunk(p, path, 2, 3))).unwrap();
+        assert_eq!(got, b"234");
+    }
+
+    #[test]
+    fn local_only_rejects_archive_locations() {
+        assert_eq!(local_only(r"arc://C:\a.zip/x").unwrap_err().code, ErrorCode::Unsupported);
+        assert!(local_only(r"C:\a").is_ok());
+    }
 }

@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { parentPath } from "./tabView";
 
-export interface FileRef { path: string; mode: "viewer" | "editor" }
+export interface FileRef {
+  path: string;
+  mode: "viewer" | "editor";
+  /** Editor aperto in sola lettura (voce di un archivio non scrivibile). */
+  readOnly?: boolean;
+}
 /**
  * `path` è sempre una cartella (per un file: quella che lo contiene); `file` ne fa una scheda di viewer/editor.
  * `returnTo`: la scheda attiva quando questa è stata aperta, a cui si torna chiudendola.

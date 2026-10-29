@@ -3,9 +3,13 @@
 //! programma sta scrivendo (log, per esempio). Qui c'è anche il salvataggio del testo dell'editor.
 
 use super::listing::FILETIME_UNIX_DIFF_MS;
+use crate::archive::edit::ZipEdit;
 use crate::error::{AppError, ErrorCode};
+use crate::net::temp;
+use crate::ops::model::{ConflictPolicy, JobKind, JobSpec};
+use crate::ops::queue::{JobState, Queue};
 use crate::ops::exec::{PART_SUFFIX, from_win, wide};
-use crate::paths::to_extended;
+use crate::paths::{invalid_windows_name, to_extended};
 use crate::vfs::loc::Loc;
 use crate::vfs::provider::{Provider, Purpose, stream_error};
 use crate::vfs::router::Vfs;
@@ -75,6 +79,20 @@ pub fn remote_file_info(p: &dyn Provider, path: &str) -> Result<FileInfo, AppErr
         attributes: 0,
         mtime_reliable: p.caps().precise_mtime,
     })
+}
+
+/// `file_info` di una voce d'archivio. Le date DOS di uno ZIP sono a 2 s, ma il salvataggio dell'editor controlla
+/// anche dimensione e data del contenitore: la data è affidabile quanto quella del contenitore (sempre in locale, la
+/// precisione del server sul remoto), così F4 non chiede conferma come per un FTP senza `MDTM`.
+pub fn archive_file_info(vfs: &Vfs, loc: &Loc) -> Result<FileInfo, AppError> {
+    let Loc::Archive { container, .. } = loc else { return Err(AppError::new(ErrorCode::InvalidRequest, None)) };
+    let (p, path) = vfs.remote(loc, Purpose::Browse)?;
+    let info = remote_file_info(&*p, &path)?;
+    let mtime_reliable = match &**container {
+        Loc::Local(_) => true,
+        c => vfs.remote(c, Purpose::Browse)?.0.caps().precise_mtime,
+    };
+    Ok(FileInfo { mtime_reliable, ..info })
 }
 
 /// Fino a `len` byte da `offset`; oltre la fine del file il risultato è più corto o vuoto.
@@ -292,6 +310,61 @@ pub fn remote_write_text_file(
         r => r?,
     }
     remote_file_info(&*p, &path)
+}
+
+/// `write_text_file` di una voce dentro uno ZIP. Si codifica come per il remoto e, con `expected_modified_ms`, la
+/// voce deve avere ancora quella data (e, se data, quella dimensione), altrimenti `CHANGED_ON_DISK` senza scrivere.
+/// Poi il testo va in un temporaneo locale e un job della coda lo copia sulla voce (Sovrascrivi): la riscrittura
+/// dell'archivio si mette in fila con gli altri job sullo stesso ZIP e si vede, con avanzamento e annullamento, nella
+/// vista Operazioni. Si aspetta la fine del job: il suo errore (`CANCELLED` se annullato) è quello del salvataggio.
+/// `allow_unsafe` non c'è: la riscrittura non scrive mai direttamente.
+#[allow(clippy::too_many_arguments)]
+pub fn archive_write_text_file(
+    q: &Queue,
+    vfs: &Vfs,
+    loc: &Loc,
+    text: &str,
+    encoding: &str,
+    bom: bool,
+    expected_modified_ms: Option<i64>,
+    expected_size: Option<u64>,
+) -> Result<FileInfo, AppError> {
+    let Loc::Archive { container, .. } = loc else { return Err(AppError::new(ErrorCode::InvalidRequest, None)) };
+    // Solo ZIP: un altro formato dà `UNSUPPORTED` subito, non un job fallito.
+    ZipEdit::open(vfs, container)?;
+    let bytes = encode_text(text, encoding, bom).map_err(|e| AppError { path: Some(loc.to_string()), ..e })?;
+    if let Some(t) = expected_modified_ms {
+        // L'indice in cache può avere fino a 2 s: il confronto è con la voce com'è ora.
+        vfs.archives().invalidate(container);
+        let (p, inner) = vfs.remote(loc, Purpose::Browse)?;
+        let current = match p.stat(&inner) {
+            Ok(s) => Some(s),
+            Err(e) if e.code == ErrorCode::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        // `unwrap_or(0)` come in `remote_file_info`, da cui l'editor ha preso la data.
+        let same = current.is_some_and(|s| s.modified_ms.unwrap_or(0) == t && expected_size.is_none_or(|n| n == s.size));
+        if !same {
+            return Err(loc.error(ErrorCode::ChangedOnDisk));
+        }
+    }
+    // Il temporaneo ha il nome della voce: è la sorgente che il job mostra.
+    let dir = temp::dir().join(format!("save-{}", uuid::Uuid::new_v4().simple()));
+    let name = loc.file_name().filter(|n| !invalid_windows_name(n)).unwrap_or_else(|| "testo".into());
+    let staged = dir.join(name);
+    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&staged, &bytes)).map_err(|e| AppError::from_io(&e, &staged));
+    let end = written.map(|()| {
+        let spec = JobSpec { kind: JobKind::Copy, sources: vec![Loc::Local(staged)], dest: Some(loc.clone()), filter: None, policy: ConflictPolicy::Overwrite };
+        q.enqueue_and_wait(spec)
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    let end = end?;
+    match (end.state, end.errors.into_iter().next()) {
+        (JobState::Done, None) => {}
+        (JobState::Cancelled, _) => return Err(loc.error(ErrorCode::Cancelled)),
+        (_, e) => return Err(e.unwrap_or_else(|| loc.error(ErrorCode::Io))),
+    }
+    archive_file_info(vfs, loc)
 }
 
 #[cfg(test)]
@@ -577,6 +650,118 @@ mod tests {
         remote_write_text_file(&v, &l, "nuovo", "utf-8", false, None, None, true).unwrap();
         assert_eq!(m.data("/d/a.txt").unwrap(), b"nuovo");
         assert_eq!(m.list("/d").unwrap().len(), 1);
+    }
+
+    /// `t.zip` con `conf/a.xml` e `big.bin`; la voce `a.xml` come `Loc`.
+    fn zip_with_xml(d: &Path) -> (PathBuf, Loc) {
+        let z = d.join("t.zip");
+        let mut w = zip::ZipWriter::new(File::create(&z).unwrap());
+        w.start_file("conf/a.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"<a>vecchio</a>").unwrap();
+        w.start_file("big.bin", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(&b"0123456789abcdef".repeat(4096)).unwrap();
+        w.finish().unwrap();
+        let loc = Loc::archive(Loc::Local(z.clone()), "/conf/a.xml");
+        (z, loc)
+    }
+
+    /// Byte compressi e CRC di una voce.
+    fn raw(z: &Path, name: &str) -> (Vec<u8>, u32) {
+        let mut a = zip::ZipArchive::new(File::open(z).unwrap()).unwrap();
+        let i = a.index_for_name(name).unwrap();
+        let mut f = a.by_index_raw(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        (data, f.crc32())
+    }
+
+    /// Coda con l'executor locale e il `Vfs` senza connessioni (per i salvataggi dentro uno ZIP).
+    fn queue() -> (Queue, std::sync::Arc<Vfs>) {
+        use std::sync::Arc;
+        let v = Arc::new(crate::vfs::mem::vfs(&[]));
+        let elevate: crate::ops::queue::Elevate = Arc::new(|| panic!("helper elevato non previsto"));
+        (Queue::new(Arc::new(crate::ops::exec::LocalExecutor), elevate, v.clone(), Arc::new(|_| {})), v)
+    }
+
+    #[test]
+    fn archive_entry_date_is_as_reliable_as_its_container() {
+        let d = tempfile::tempdir().unwrap();
+        let (_z, loc) = zip_with_xml(d.path());
+        let (q, v) = queue();
+        // Le date DOS sono a 2 s, ma il salvataggio controlla anche dimensione e data del contenitore: su un disco
+        // locale l'editor non deve chiedere conferma come per un server FTP senza date precise.
+        assert!(archive_file_info(&v, &loc).unwrap().mtime_reliable);
+        let info = archive_write_text_file(&q, &v, &loc, "x", "utf-8", false, None, None).unwrap();
+        assert!(info.mtime_reliable);
+        // Sul remoto vale la precisione del server del contenitore.
+        let mut m = crate::vfs::mem::MemProvider::new();
+        m.precise_mtime = false;
+        let m = std::sync::Arc::new(m);
+        m.add_file("/t.zip", &std::fs::read(d.path().join("t.zip")).unwrap());
+        let rv = crate::vfs::mem::vfs(&[("m", &m)]);
+        let remote = Loc::archive(Loc::parse("ftp://m/t.zip").unwrap(), "/conf/a.xml");
+        assert!(!archive_file_info(&rv, &remote).unwrap().mtime_reliable);
+    }
+
+    #[test]
+    fn save_entry_replaces_one_entry() {
+        let d = tempfile::tempdir().unwrap();
+        let (z, loc) = zip_with_xml(d.path());
+        let (q, v) = queue();
+        let before = raw(&z, "big.bin");
+        let old = {
+            let (p, path) = v.remote(&loc, Purpose::Browse).unwrap();
+            p.stat(&path).unwrap() // il provider si rilascia: appena letto, tiene aperto lo ZIP per un po'
+        };
+        let info = archive_write_text_file(&q, &v, &loc, "<a>nuovo</a>", "utf-8", false, old.modified_ms, Some(old.size)).unwrap();
+        assert_eq!(info.size, 12);
+        let text = {
+            let (p, path) = v.remote(&loc, Purpose::Browse).unwrap();
+            remote_whole(&*p, &path, 1000).unwrap()
+        };
+        assert_eq!(text, b"<a>nuovo</a>");
+        assert_eq!(raw(&z, "big.bin"), before);
+        assert_eq!(names(d.path()), ["t.zip"]);
+        // Senza data attesa si sovrascrive; con una dimensione sbagliata no.
+        archive_write_text_file(&q, &v, &loc, "x", "utf-8", false, None, None).unwrap();
+        let e = archive_write_text_file(&q, &v, &loc, "y", "utf-8", false, Some(0), Some(99)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+    }
+
+    #[test]
+    fn save_entry_detects_change() {
+        let d = tempfile::tempdir().unwrap();
+        let (z, loc) = zip_with_xml(d.path());
+        let (q, v) = queue();
+        let orig = std::fs::read(&z).unwrap();
+        let old = {
+            let (p, path) = v.remote(&loc, Purpose::Browse).unwrap();
+            p.stat(&path).unwrap() // il provider si rilascia: appena letto, tiene aperto lo ZIP per un po'
+        };
+        let e = archive_write_text_file(&q, &v, &loc, "x", "utf-8", false, old.modified_ms, Some(old.size + 1)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+        // Con data e dimensione giuste il job salva.
+        let info = archive_write_text_file(&q, &v, &loc, "x", "utf-8", false, old.modified_ms, Some(old.size)).unwrap();
+        assert_eq!(info.size, 1);
+        std::fs::write(&z, &orig).unwrap();
+        // Il job che salva è nella coda, come gli altri.
+        assert_eq!(q.list().iter().map(|j| (j.state, j.dest.clone())).collect::<Vec<_>>(), [(JobState::Done, Some(loc.to_string()))]);
+        let e = archive_write_text_file(&q, &v, &loc, "x", "utf-8", false, Some(0), None).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ChangedOnDisk);
+        assert_eq!(std::fs::read(&z).unwrap(), orig);
+        assert_eq!(names(d.path()), ["t.zip"]);
+    }
+
+    #[test]
+    fn save_entry_on_7z_is_unsupported() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("t.7z");
+        std::fs::write(&z, b"7z").unwrap();
+        let (q, v) = queue();
+        let e = archive_write_text_file(&q, &v, &Loc::archive(Loc::Local(z), "/a.txt"), "x", "utf-8", false, None, None).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert!(q.list().is_empty());
+        assert_eq!(e.code, ErrorCode::Unsupported);
     }
 
     #[test]

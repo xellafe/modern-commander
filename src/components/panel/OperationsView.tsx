@@ -1,6 +1,7 @@
-import { Copy, FolderInput, FolderPlus, GripVertical, PencilLine, Play, Pause, Trash2, X, type LucideIcon } from "lucide-react";
+import { Archive, Copy, FolderInput, FolderPlus, GripVertical, PencilLine, Play, Pause, Trash2, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import { cancelJob, clearFinished, moveJob, pauseJob, resumeJob } from "../../ipc/api";
 import type { JobKind, JobView } from "../../ipc/types";
 import { formatEta, formatSize } from "../../lib/format";
@@ -8,7 +9,7 @@ import { isFinished, kindKey, newestJob, progressOf, useJobs } from "../../state
 import "./panel.css";
 
 const ICONS: Record<JobKind["type"], LucideIcon> = {
-  copy: Copy, move: FolderInput, delete: Trash2, mkdir: FolderPlus, rename: PencilLine,
+  copy: Copy, move: FolderInput, delete: Trash2, mkdir: FolderPlus, rename: PencilLine, pack: Archive,
 };
 
 const refresh = () => useJobs.getState().refresh().catch(console.error);
@@ -126,7 +127,7 @@ function JobRow({ job: j, dragging, dropBefore, onGrip }: {
               <summary>{t("ops.errorCount", { count: j.errors.length })}</summary>
               <ul>
                 {j.errors.map((e, i) => (
-                  <li key={i}>{t(`errors.${e.code}`)} <span className="mc-path">{e.path}</span></li>
+                  <li key={i}>{t(errorKey(e))} <span className="mc-path">{e.path}</span></li>
                 ))}
               </ul>
             </details>

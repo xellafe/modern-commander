@@ -1,11 +1,11 @@
 import { ChevronRight } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { DRIVES, normalizePath, parseRemote, pathCrumbs } from "../../lib/paths";
+import { DRIVES, connectionPath, isArchive, normalizePath, parseRemote, pathCrumbs } from "../../lib/paths";
 import { isTypedAddress, resolveTypedAddress, useConnections } from "../../state/connections";
 import { useTabViews } from "../../state/tabViews";
 import { useUi } from "../../state/ui";
-import { ConnIcon } from "./ConnIcon";
+import { ArchiveIcon, ConnIcon } from "./ConnIcon";
 
 // Segmenti cliccabili; un click sullo spazio vuoto apre il campo di testo (Invio naviga, Esc annulla).
 export function Breadcrumb({ tabId, path }: { tabId: string; path: string }) {
@@ -13,7 +13,8 @@ export function Breadcrumb({ tabId, path }: { tabId: string; path: string }) {
   const [editing, setEditing] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const go = (p: string) => void useTabViews.getState().load(tabId, p);
-  const remote = parseRemote(path);
+  // Un archivio remoto mostra la connessione del suo contenitore.
+  const remote = parseRemote(connectionPath(path));
   const connName = useConnections((s) => (remote ? s.nameOf(remote.conn) : ""));
   useEffect(() => {
     input.current?.focus();
@@ -50,12 +51,14 @@ export function Breadcrumb({ tabId, path }: { tabId: string; path: string }) {
   const crumbs = path === DRIVES ? [{ label: t("groups.drives"), path }] : pathCrumbs(path);
   // Sul remoto il primo segmento è la connessione: il suo nome al posto dell'id.
   if (remote) crumbs[0] = { ...crumbs[0], label: connName };
+  const archiveAt = crumbs.findIndex((c) => isArchive(c.path)); // il crumb del file dell'archivio, la sua radice
   return (
     <div className="mc-crumb" onClick={(e) => e.target === e.currentTarget && setEditing(true)} title={path}>
       {remote && <ConnIcon scheme={remote.scheme} size={11} />}
       {crumbs.map((c, i) => (
         <Fragment key={c.path}>
           {i > 0 && <ChevronRight size={11} className="sep" aria-hidden />}
+          {i === archiveAt && <ArchiveIcon size={11} />}
           {i === crumbs.length - 1
             ? <b>{c.label}</b>
             : <span className="seg" onClick={() => go(c.path)}>{c.label}</span>}

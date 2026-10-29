@@ -2,9 +2,12 @@ import { expect, test, vi } from "vitest";
 
 vi.mock("../ipc/api");
 import * as api from "../ipc/api";
-import { activateGroup, initialLayout } from "../state/layout";
-import type { DialogRequest } from "../state/ui";
-import { copyTargets, mkdirTarget, mustChangeDest, nameError, resolveDest, startCopyMove } from "./fileOps";
+import { activateGroup, initialLayout, useLayout } from "../state/layout";
+import { useSettings } from "../state/settings";
+import { useTabViews } from "../state/tabViews";
+import { useUi, type DialogRequest } from "../state/ui";
+import { copyTargets, mkdirTarget, mustChangeDest, nameError, registerFileOpCommands, resolveDest, startCopyMove } from "./fileOps";
+import { executeCommand } from "./registry";
 
 test("mustChangeDest blocks the source folder for a single group or a move, not for a copy", () => {
   const req = (move: boolean, requireChange: boolean) => ({ from: "C:\\a", move, requireChange });
@@ -109,6 +112,73 @@ test("remote names forbid only '/' and NUL; remote destinations resolve with '/'
 
   expect(mustChangeDest({ from: "sftp://w/a", move: true, requireChange: false }, "sftp://w/a/")).toBe(true);
   expect(mustChangeDest({ from: "sftp://w/a", move: true, requireChange: false }, "sftp://w/A")).toBe(false);
+});
+
+test("archive locations behave like remote ones for names, destinations and new folders", () => {
+  const z = "arc://C:\\r\\a.zip/conf";
+  expect(nameError("a:b", z)).toBeNull();
+  expect(nameError("a/b", z)).toBe("ops.nameInvalid");
+  expect(nameError("..", z)).toBe("ops.nameInvalid");
+  expect(resolveDest("C:\\r", z)).toBe(z); // una destinazione digitata in una scheda ZIP
+  expect(resolveDest(z, "sub")).toBe(`${z}/sub`);
+  expect(resolveDest(z, "/x/")).toBe("arc://C:\\r\\a.zip/x/");
+  expect(resolveDest("arc://C:\\r\\a.7z/", "sub")).toBeNull(); // relativa a un archivio in sola lettura
+  expect(mkdirTarget(z, "a:b/c")).toEqual({ path: `${z}/a:b/c`, focus: "a:b" });
+  expect(mkdirTarget(z, "/new")).toEqual({ path: "arc://C:\\r\\a.zip/new", focus: null });
+  expect(mkdirTarget(z, "/conf/n")).toEqual({ path: `${z}/n`, focus: "n" });
+  expect(mkdirTarget("arc://C:\\r\\a.7z/", "x")).toEqual({ error: "ops.nameInvalid" });
+  expect(mustChangeDest({ from: z, move: true, requireChange: false }, `${z}/`)).toBe(true);
+});
+
+// Comandi su una scheda sorgente (g1, `C:\r`, cursore su x.txt) con un'altra scheda a destra.
+async function setup(paths: [string, string], confirmDelete = true) {
+  vi.mocked(api.watchDir).mockResolvedValue();
+  vi.mocked(api.unwatchDir).mockResolvedValue();
+  vi.mocked(api.enqueueJob).mockClear();
+  const l = initialLayout(paths);
+  useLayout.setState(l);
+  useTabViews.setState({ views: {}, notice: null });
+  useUi.setState({ dialog: null });
+  useSettings.setState({ confirmDelete });
+  const [g1] = l.groups;
+  const t1 = g1.activeTabId;
+  vi.mocked(api.listDir).mockResolvedValueOnce([
+    { name: "x.txt", isDir: false, size: 1, modifiedMs: 0, createdMs: 0, accessedMs: 0, attributes: 0, isSymlink: false },
+  ]);
+  await useTabViews.getState().load(t1, paths[0]);
+  useTabViews.getState().update(t1, (v) => ({ ...v, cursor: 1 }));
+}
+
+test("copy into a zip tab proposes the archive location; into a 7z, nothing (not writable)", async () => {
+  registerFileOpCommands();
+  await setup(["C:\\r", "arc://C:\\r\\a.zip/conf"]);
+  await executeCommand("cm_Copy");
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", sources: ["C:\\r\\x.txt"], dest: "arc://C:\\r\\a.zip/conf" });
+  await setup(["C:\\r", "arc://C:\\r\\a.7z/"]);
+  await executeCommand("cm_Copy");
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", dest: "" });
+  // Dalla scheda 7z, spostare o eliminare non si può: avviso, niente coda.
+  await setup(["arc://C:\\r\\a.7z/", "C:\\r"]);
+  await executeCommand("cm_RenMov");
+  await executeCommand("cm_Delete");
+  expect(useUi.getState().dialog).toBeNull();
+  expect(useTabViews.getState().notice?.code).toBe("READ_ONLY_SOURCE");
+});
+
+test("inside an archive deleting is always permanent, with or without confirmation", async () => {
+  registerFileOpCommands();
+  const z = "arc://C:\\r\\a.zip/";
+  await setup([z, "C:\\r"], false);
+  await executeCommand("cm_Delete");
+  expect(api.enqueueJob).toHaveBeenCalledOnce();
+  expect(vi.mocked(api.enqueueJob).mock.lastCall?.[0]).toMatchObject({ kind: { type: "delete", permanent: true }, sources: [`${z}x.txt`] });
+  await setup([z, "C:\\r"], true);
+  await executeCommand("cm_Delete");
+  expect(useUi.getState().dialog).toEqual({ kind: "delete", permanent: true, sources: [`${z}x.txt`] });
+  // Su un disco locale F8 resta nel Cestino.
+  await setup(["C:\\r", z], true);
+  await executeCommand("cm_Delete");
+  expect(useUi.getState().dialog).toMatchObject({ kind: "delete", permanent: false });
 });
 
 test("a single file copied to a remote 'dir/' keeps its name: the backend drops the trailing '/'", async () => {

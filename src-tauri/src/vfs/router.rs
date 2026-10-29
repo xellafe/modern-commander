@@ -1,25 +1,41 @@
-//! Instradamento delle posizioni remote al provider della loro connessione.
+//! Instradamento delle posizioni remote al provider della loro connessione, e di quelle dentro un archivio al
+//! provider dell'archivio (in cache).
 
 use super::local::LocalProvider;
 use super::loc::Loc;
 use super::provider::{Connector, Provider, Purpose};
+use crate::archive::cache::ArchiveCache;
+use crate::archive::provider::ArchiveProvider;
 use crate::error::{AppError, ErrorCode};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 pub struct Vfs {
     connector: Arc<dyn Connector>,
+    archives: ArchiveCache,
 }
 
 impl Vfs {
     pub fn new(connector: Arc<dyn Connector>) -> Self {
-        Self { connector }
+        Self { connector, archives: ArchiveCache::new() }
     }
 
-    /// Provider e percorso POSIX di una posizione remota; un percorso locale dà `INVALID_REQUEST`.
+    pub fn archives(&self) -> &ArchiveCache {
+        &self.archives
+    }
+
+    /// L'archivio `container` dalla cache; `cancel` interrompe la lettura dell'indice.
+    pub(crate) fn archive(&self, container: &Loc, cancel: &AtomicBool) -> Result<Arc<ArchiveProvider>, AppError> {
+        self.archives.open(&self.connector, container, cancel)
+    }
+
+    /// Provider e percorso POSIX di una posizione remota o dentro un archivio (il provider dell'archivio, con il
+    /// percorso interno); un percorso locale dà `INVALID_REQUEST`.
     pub fn remote(&self, loc: &Loc, purpose: Purpose) -> Result<(Arc<dyn Provider>, String), AppError> {
         match loc {
             Loc::Remote { scheme, conn, path } => Ok((self.connector.provider(*scheme, conn, purpose)?, path.clone())),
             Loc::Local(_) => Err(AppError::new(ErrorCode::InvalidRequest, None)),
+            Loc::Archive { container, path } => Ok((self.archives.provider(&self.connector, container)?, path.clone())),
         }
     }
 
@@ -28,7 +44,7 @@ impl Vfs {
     pub fn endpoint(&self, loc: &Loc, purpose: Purpose) -> Result<(Arc<dyn Provider>, String), AppError> {
         match loc {
             Loc::Local(p) => Ok((Arc::new(LocalProvider), p.to_string_lossy().into_owned())),
-            Loc::Remote { .. } => self.remote(loc, purpose),
+            Loc::Remote { .. } | Loc::Archive { .. } => self.remote(loc, purpose),
         }
     }
 }

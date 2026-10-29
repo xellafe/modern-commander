@@ -61,6 +61,34 @@ test("a first load failing with another error shows the drives instead of an emp
   expect(useTabViews.getState().notice?.path).toBe("D:\\b");
 });
 
+test("failed archive open goes back to the container's folder, cursor on the archive, with the error as a notice", async () => {
+  listDir.mockResolvedValueOnce([f("a.zip"), f("z")]);
+  await useTabViews.getState().load("t1", "C:\\r");
+  listDir.mockRejectedValueOnce({ code: "CORRUPT_ARCHIVE", path: "arc://C:\\r\\a.zip/", detail: null }).mockResolvedValueOnce([f("a.zip"), f("z")]);
+  await useTabViews.getState().load("t1", "arc://C:\\r\\a.zip/");
+  expect(useLayout.getState().tabs["t1"].path).toBe("C:\\r");
+  const v = useTabViews.getState().views["t1"];
+  expect(v.rows[v.cursor].name).toBe("a.zip");
+  expect(useTabViews.getState().notice?.code).toBe("CORRUPT_ARCHIVE");
+  expect(nearestExistingAncestor).not.toHaveBeenCalled();
+  // Anche da una scheda mai caricata (sessione ripristinata con un archivio aperto).
+  useTabViews.setState({ views: {}, notice: null });
+  listDir.mockRejectedValueOnce({ code: "ARCHIVE_TOO_DEMANDING" }).mockResolvedValueOnce([f("a.zip")]);
+  await useTabViews.getState().load("t1", "arc://C:\\r\\a.zip/d");
+  expect(useLayout.getState().tabs["t1"].path).toBe("C:\\r");
+  expect(useTabViews.getState().notice?.code).toBe("ARCHIVE_TOO_DEMANDING");
+});
+
+test("an error inside an archive already open stays a notice: the tab does not leave the archive", async () => {
+  listDir.mockResolvedValueOnce([f("d")]);
+  await useTabViews.getState().load("t1", "arc://C:\\r\\a.zip/");
+  listDir.mockRejectedValueOnce({ code: "NOT_FOUND", path: "arc://C:\\r\\a.zip/gone", detail: null });
+  await useTabViews.getState().load("t1", "arc://C:\\r\\a.zip/gone");
+  expect(useLayout.getState().tabs["t1"].path).toBe("arc://C:\\r\\a.zip/");
+  expect(useTabViews.getState().notice?.code).toBe("NOT_FOUND");
+  expect(nearestExistingAncestor).not.toHaveBeenCalled();
+});
+
 test("reload keeps cursor on the same name", async () => {
   listDir.mockResolvedValueOnce([f("a"), f("b"), f("c")]);
   await useTabViews.getState().load("t1", "D:\\a");

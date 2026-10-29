@@ -66,7 +66,7 @@ impl BlockSource for RemoteFile {
 pub fn open_source(vfs: &Vfs, loc: &Loc) -> Result<Box<dyn BlockSource>, AppError> {
     match loc {
         Loc::Local(p) => Ok(Box::new(LocalFile::open(p)?)),
-        Loc::Remote { .. } => {
+        Loc::Remote { .. } | Loc::Archive { .. } => {
             let (provider, path) = vfs.remote(loc, Purpose::Browse)?;
             let len = provider.stat(&path)?.size;
             Ok(Box::new(RemoteFile { provider, path, len }))

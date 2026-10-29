@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import type { ErrorAction, Prompt } from "../../ipc/types";
 import { Dialog } from "./Dialog";
 import { useAnswer } from "./ConflictDialog";
@@ -31,7 +32,7 @@ export function ErrorDialog({ prompt }: { prompt: ErrorPrompt }) {
       </>}
     >
       {/* `detail` è tecnico (testo di sistema o codice interno): solo come suggerimento. */}
-      <p title={e.detail ?? undefined}>{t(`errors.${e.code}`)}</p>
+      <p title={e.detail ?? undefined}>{t(errorKey(e))}</p>
       {e.path && <div className="mc-path">{e.path}</div>}
       <label className="mc-check">
         <input type="checkbox" checked={all} onChange={(ev) => setAll(ev.target.checked)} />

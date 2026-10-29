@@ -1,6 +1,7 @@
 //! Copia di un file tra provider diversi (download, upload, da remoto a remoto): si scrive un temporaneo
 //! `<nome>.<8 cifre esadecimali>.mcpart` accanto alla destinazione e lo si rinomina sul nome finale. Se il server
-//! non lo permette, si scrive direttamente sul file, ma solo con la conferma dell'utente.
+//! non lo permette, si scrive direttamente sul file, ma solo con la conferma dell'utente. `install` è la variante
+//! senza scrittura diretta, per un file locale già completo (lo ZIP riscritto).
 
 use super::loc::Loc;
 use super::provider::{Purpose, stream_error};
@@ -59,7 +60,7 @@ pub fn write<R: Read>(
     let existing = dp.stat(&dpath).ok();
     // I permessi POSIX del file che si sostituisce; in locale non ci sono.
     let mode = existing.as_ref().filter(|_| dst.is_remote()).and_then(|s| s.mode);
-    let tmp = format!("{dpath}.{}{PART_SUFFIX}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let tmp = part_name(&dpath);
     let safe = if existing.is_some() && replace && !dp.caps().atomic_replace {
         None
     } else {
@@ -95,6 +96,53 @@ pub fn write<R: Read>(
         let _ = dp.delete(if used_tmp { &tmp } else { &dpath }, false);
     }
     r
+}
+
+/// Il temporaneo accanto a `path`: `<path>.<8 cifre esadecimali>.mcpart`.
+pub(crate) fn part_name(path: &str) -> String {
+    format!("{path}.{}{PART_SUFFIX}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+}
+
+/// Carica il file locale `local` (completo) sulla destinazione remota `dst` senza mai scrivere su `dst`: upload su un
+/// temporaneo accanto e rinomina. Senza rinomina atomica, con `replace`, si elimina `dst` dopo l'upload completo e si
+/// rinomina il temporaneo; se quest'ultima rinomina fallisce, il temporaneo (l'unica copia completa) resta e l'errore
+/// lo nomina. Ogni altro errore, o l'annullamento da `progress(byte)`, elimina il temporaneo e lascia `dst` com'era.
+/// Senza `replace` un `dst` esistente dà `ALREADY_EXISTS`; un temporaneo rifiutato (`ACCESS_DENIED`) è un errore.
+pub fn install(vfs: &Vfs, dst: &Loc, local: &Path, replace: bool, progress: &mut dyn FnMut(u64) -> bool) -> Result<(), AppError> {
+    let Loc::Remote { scheme, conn, .. } = dst else { return Err(dst.error(ErrorCode::InvalidRequest)) };
+    let (dp, dpath) = vfs.endpoint(dst, Purpose::Transfer)?;
+    let existing = dp.stat(&dpath).ok();
+    if existing.is_some() && !replace {
+        return Err(dst.error(ErrorCode::AlreadyExists));
+    }
+    let tmp = part_name(&dpath);
+    let w = dp.writer(&tmp, true)?;
+    let mut deleted = false;
+    let r = (|| {
+        let lname = local.to_string_lossy();
+        let mut f = std::fs::File::open(crate::paths::to_extended(local)).map_err(|e| AppError::from_io(&e, local))?;
+        pump(&mut f, w, &lname, &tmp, progress)?;
+        if let Some(mode) = existing.as_ref().and_then(|s| s.mode) {
+            let _ = dp.set_meta(&tmp, None, Some(mode));
+        }
+        if existing.is_none() || dp.caps().atomic_replace {
+            return dp.rename(&tmp, &dpath, replace);
+        }
+        dp.delete(&dpath, false)?;
+        deleted = true;
+        dp.rename(&tmp, &dpath, false)
+    })();
+    match r {
+        Err(e) if deleted => {
+            let tmp = Loc::Remote { scheme: *scheme, conn: conn.clone(), path: tmp };
+            Err(AppError { path: Some(tmp.to_string()), ..e })
+        }
+        Err(e) => {
+            let _ = dp.delete(&tmp, false);
+            Err(e)
+        }
+        ok => ok,
+    }
 }
 
 /// Copia a blocchi; il writer si chiude prima di tornare (anche dopo un errore).
@@ -266,5 +314,74 @@ mod tests {
         let e = copy(&v, &loc("sftp://m/manca"), &loc("sftp://m/d/f"), true, &mut |_| true, &mut |_| true);
         assert_eq!(e.unwrap_err().code, ErrorCode::NotFound);
         assert_eq!(m.data("/d/f").unwrap(), b"vecchio");
+    }
+
+    /// `/d/f.zip` con `vecchio` su un server senza rinomina atomica, e il file locale da installare (1 MiB).
+    fn install_setup(m: MemProvider) -> (Arc<MemProvider>, tempfile::TempDir, std::path::PathBuf) {
+        let mut m = m;
+        m.atomic_replace = false;
+        let m = Arc::new(m);
+        m.add_file("/d/f.zip", b"vecchio");
+        let d = tempfile::tempdir().unwrap();
+        let local = d.path().join("new.zip");
+        std::fs::write(&local, big()).unwrap();
+        (m, d, local)
+    }
+
+    #[test]
+    fn remote_install_failure_keeps_original() {
+        let (m, _d, local) = install_setup(MemProvider::new());
+        let v = vfs(&[("m", &m)]);
+        let dst = loc("sftp://m/d/f.zip");
+        // La connessione cade a metà upload: `dst` non si tocca (né eliminato né troncato).
+        let mm = m.clone();
+        let e = install(&v, &dst, &local, true, &mut |n| {
+            if n >= 2 * BLOCK as u64 {
+                mm.offline.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            true
+        });
+        assert_eq!(e.unwrap_err().code, ErrorCode::ConnectionFailed);
+        assert_eq!(m.data("/d/f.zip").unwrap(), b"vecchio");
+        // ponytail: con la connessione caduta il temporaneo remoto non si può eliminare; il `MemProvider` non ha
+        // sessioni nuove. L'eliminazione del temporaneo si verifica con l'annullamento.
+        m.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+        let before = names(&m, "/d");
+        let mut blocks = 0;
+        let e = install(&v, &dst, &local, true, &mut |_| {
+            blocks += 1;
+            blocks < 2
+        });
+        assert_eq!(e.unwrap_err().code, ErrorCode::Cancelled);
+        assert_eq!(m.data("/d/f.zip").unwrap(), b"vecchio");
+        assert_eq!(names(&m, "/d"), before, "nessun nuovo .mcpart");
+    }
+
+    #[test]
+    fn install_without_atomic_replace_deletes_then_renames() {
+        let (m, _d, local) = install_setup(MemProvider::new());
+        m.set_meta("/d/f.zip", None, Some(0o640)).unwrap();
+        let v = vfs(&[("m", &m)]);
+        let dst = loc("sftp://m/d/f.zip");
+        // Senza `replace` un `dst` esistente si rifiuta prima dell'upload.
+        let e = install(&v, &dst, &local, false, &mut |_| unreachable!());
+        assert_eq!(e.unwrap_err().code, ErrorCode::AlreadyExists);
+        install(&v, &dst, &local, true, &mut |_| true).unwrap();
+        assert_eq!(m.data("/d/f.zip").unwrap(), big());
+        assert_eq!(m.stat("/d/f.zip").unwrap().mode, Some(0o640));
+        assert_eq!(names(&m, "/d"), ["f.zip"]);
+    }
+
+    #[test]
+    fn install_reports_temp_name_when_final_rename_fails() {
+        let mut m = MemProvider::new();
+        m.fail_rename_after_delete = true;
+        let (m, _d, local) = install_setup(m);
+        let v = vfs(&[("m", &m)]);
+        let e = install(&v, &loc("sftp://m/d/f.zip"), &local, true, &mut |_| true).unwrap_err();
+        let path = e.path.unwrap();
+        assert!(path.ends_with(PART_SUFFIX), "{path}");
+        // Il temporaneo è l'unica copia completa: resta.
+        assert_eq!(m.data(path.strip_prefix("sftp://m").unwrap()).unwrap(), big());
     }
 }

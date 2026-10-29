@@ -3,7 +3,7 @@ import type { MouseEvent } from "react";
 import i18n from "../i18n";
 import { openPath, openWith, shiftPressed, showContextMenu, showProperties, startDrag } from "../ipc/api";
 import type { AppError } from "../ipc/types";
-import { isRemote, joinPath, sourceCaps, type SourceCaps } from "../lib/paths";
+import { isArchive, isVirtual, joinPath, sourceCaps, type SourceCaps } from "../lib/paths";
 import { useLayout } from "../state/layout";
 import { useSettings } from "../state/settings";
 import type { Row, TabView } from "../state/tabView";
@@ -17,7 +17,7 @@ export function rowsAt(view: TabView, i: number): Row[] {
   return view.marked.has(row.name) ? view.rows.filter((r) => view.marked.has(r.name)) : [row];
 }
 
-/** Percorsi per la shell; senza righe la cartella corrente stessa. Nella lista delle unità solo le unità, sul remoto niente. */
+/** Percorsi per la shell; senza righe la cartella corrente stessa. Nella lista delle unità solo le unità, sul remoto e negli archivi niente. */
 export function shellPaths(dir: string, rows: Row[]): string[] {
   const shell = sourceCaps(dir).shell;
   if (!rows.length) return shell ? [dir] : [];
@@ -54,10 +54,10 @@ export function appMenuItems(caps: SourceCaps, rows: Row[]): { commandId: string
   return ids.filter(([, on]) => on).map(([commandId]) => ({ commandId, labelKey: `commands.${commandId}` }));
 }
 
-/** Dopo un'azione del menu (Elimina, Rinomina…) la lista si aggiorna da sola col watcher. Sul remoto il menu è dell'app. */
+/** Dopo un'azione del menu (Elimina, Rinomina…) la lista si aggiorna da sola col watcher. Sul remoto e negli archivi il menu è dell'app. */
 function showMenu(tabId: string, rows: Row[], x: number, y: number) {
   const dir = useLayout.getState().tabs[tabId].path;
-  if (isRemote(dir)) return useTabViews.getState().setOverlay({ kind: "appMenu", tabId, items: appMenuItems(sourceCaps(dir), rows), x, y });
+  if (isVirtual(dir)) return useTabViews.getState().setOverlay({ kind: "appMenu", tabId, items: appMenuItems(sourceCaps(dir), rows), x, y });
   const paths = shellPaths(dir, rows);
   if (!paths.length) return;
   const pt = toPhysical(x, y, window.devicePixelRatio || 1);
@@ -76,7 +76,7 @@ export function rowContextMenu(tabId: string, i: number | null, e: MouseEvent) {
   const v = views.views[tabId];
   if (!v) return;
   if (i !== null) views.update(tabId, (w) => ({ ...w, cursor: i }));
-  if (isRemote(useLayout.getState().tabs[tabId].path)) {
+  if (isVirtual(useLayout.getState().tabs[tabId].path)) {
     // Sul remoto le voci devono riguardare le righe su cui agiranno i comandi (marcate, altrimenti il cursore), come in TC:
     // il tasto destro su una riga non marcata toglie le marcature e la fa unico bersaglio.
     const row = i === null ? undefined : v.rows[i];
@@ -255,7 +255,7 @@ export function trackDragOut(tabId: string, i: number, e: MouseEvent, drop: Drop
     if (!(ev.buttons & 1)) return stop();
     if (!pastDragThreshold(ev.clientX - x0, ev.clientY - y0)) return;
     stop();
-    void (isRemote(useLayout.getState().tabs[tabId].path) ? dragInApp(tabId, name, drop) : dragOut(tabId, name));
+    void (isVirtual(useLayout.getState().tabs[tabId].path) ? dragInApp(tabId, name, drop) : dragOut(tabId, name));
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", stop);
@@ -304,15 +304,17 @@ const DEFS: [string, Command["run"]][] = [
     const l = useLayout.getState();
     if (f) l.openFileTab(l.activeGroupId, { path: f.path, mode: "viewer" });
   }],
-  // F4: editor interno in una scheda, oppure (impostazione) il programma esterno come nella fase 1. Sul remoto sempre
+  // F4: editor interno in una scheda, oppure (impostazione) il programma esterno come nella fase 1. Sul remoto e negli archivi sempre
   // l'interno: l'esterno richiederebbe download, sorveglianza della copia e ricaricamento.
   ["cm_Edit", () => {
     const f = cursorFile();
     if (!f) return;
-    if (!sourceCaps(f.path).write) return useTabViews.getState().showNotice(f.tabId, { code: "READ_ONLY_SOURCE" });
-    if (useSettings.getState().useExternalEditor && !isRemote(f.path)) return editFile(f.tabId, f.path);
+    // Un archivio non scrivibile (7z, TAR) si apre in sola lettura; il remoto non scrivibile (HTTP) resta un avviso.
+    const readOnly = !sourceCaps(f.path).write;
+    if (readOnly && !isArchive(f.path)) return useTabViews.getState().showNotice(f.tabId, { code: "READ_ONLY_SOURCE" });
+    if (useSettings.getState().useExternalEditor && !isVirtual(f.path)) return editFile(f.tabId, f.path);
     const l = useLayout.getState();
-    l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor" });
+    l.openFileTab(l.activeGroupId, { path: f.path, mode: "editor", ...(readOnly && { readOnly }) });
   }],
 ];
 

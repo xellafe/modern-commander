@@ -6,7 +6,7 @@ use super::ArchiveListing;
 use super::list::{corrupt, entry, io_err};
 use crate::error::AppError;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const BLOCK: usize = 512;
 
@@ -63,10 +63,15 @@ pub(super) fn skip_read<R: Read>(r: &mut R, n: u64) -> io::Result<()> {
     if io::copy(&mut r.by_ref().take(n), &mut io::sink())? == n { Ok(()) } else { Err(io::ErrorKind::UnexpectedEof.into()) }
 }
 
-/// Scarta `n` byte con un salto: per il TAR su file, senza leggere i contenuti.
+/// Scarta `n` byte con un salto: per il TAR su file, senza leggere i contenuti. Saltare oltre la fine riesce, quindi
+/// la lunghezza si controlla qui: un TAR troncato dentro i dati di una voce è danneggiato.
 pub(super) fn skip_seek<R: Read + Seek>(r: &mut R, n: u64) -> io::Result<()> {
     let n = i64::try_from(n).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-    r.seek(SeekFrom::Current(n)).map(drop)
+    let to = r.seek(SeekFrom::Current(n))?;
+    if to > r.seek(SeekFrom::End(0))? {
+        return Err(io::ErrorKind::UnexpectedEof.into());
+    }
+    r.seek(SeekFrom::Start(to)).map(drop)
 }
 
 /// Dimensione di `size` byte di dati più il riempimento fino a 512.
@@ -100,76 +105,181 @@ fn parse_pax(mut d: &[u8]) -> (Option<String>, Option<u64>) {
     (name, size)
 }
 
-/// Elenca un TAR da flusso, fino a `limit` voci. `skip` scarta i contenuti (lettura o salto). Non si fida di
-/// nulla: le estensioni oltre `MAX_EXT` si scartano, la somma di controllo di ogni intestazione deve tornare e
-/// la memoria resta limitata da `limit` voci più il tetto sui nomi. Le voci `L`, `K`, `x`, `g` non si elencano.
-/// Il totale è noto solo se l'archivio è stato letto tutto entro il limite.
-pub(super) fn walk_tar<R: Read>(
-    r: &mut R,
+/// Intestazione di una voce TAR, con le estensioni GNU `L` e PAX `x` già applicate.
+pub(super) struct TarHeader {
+    pub name: String,
+    pub flag: u8,
+    /// Byte di dati nell'archivio: zero per collegamenti, cartelle e dispositivi, qualunque cosa dica il campo. Chi
+    /// legge i dati li ha da `Read` di `TarWalker`, già limitati a questa lunghezza.
+    #[allow(dead_code)]
+    pub data_len: u64,
+    /// Dimensione da mostrare: per i file GNU sparse quella vera, non quella memorizzata.
+    pub shown_size: u64,
+    pub modified_ms: Option<i64>,
+    /// Inizio dei dati, dall'inizio del TAR.
+    pub data_offset: u64,
+}
+
+impl TarHeader {
+    /// Cartella anche col solo nome a `/` finale (TAR vecchi).
+    pub fn is_dir(&self) -> bool {
+        self.flag == b'5' || self.name.ends_with('/')
+    }
+}
+
+/// Voci di un TAR da flusso, una alla volta. `skip` scarta i contenuti (lettura o salto). Non si fida di nulla:
+/// le estensioni oltre `MAX_EXT` si scartano e la somma di controllo di ogni intestazione deve tornare. Le voci `L`,
+/// `K`, `x`, `g` non si restituiscono. I dati della voce corrente si leggono con `Read` (al più `data_len` byte) e
+/// quelli non letti si scartano alla chiamata successiva.
+pub(super) struct TarWalker<R> {
+    r: R,
     skip: fn(&mut R, u64) -> io::Result<()>,
-    path: &Path,
-    limit: usize,
-) -> Result<ArchiveListing, AppError> {
-    let io = |e: io::Error| io_err(&e, path);
-    let bad = || corrupt(path, "intestazione TAR non valida");
-    let mut entries = Vec::new();
-    // Nome (GNU `L` o PAX `path`) e dimensione (PAX `size`) per la sola voce seguente.
-    let (mut long_name, mut pax_size): (Option<String>, Option<u64>) = (None, None);
-    let mut b = [0u8; BLOCK];
-    // Il primo blocco di zeri chiude l'archivio (si tollera anche il secondo mancante).
-    while read_block(r, &mut b).map_err(io)? && b.iter().any(|&x| x != 0) {
-        if !checksum_ok(&b) {
-            return Err(bad());
+    path: PathBuf,
+    /// Byte letti o saltati dall'inizio.
+    pos: u64,
+    /// Inizio dell'intestazione successiva.
+    next: u64,
+    /// Fine dei dati della voce corrente.
+    end: u64,
+}
+
+impl<R: Read> TarWalker<R> {
+    pub(super) fn new(r: R, skip: fn(&mut R, u64) -> io::Result<()>, path: &Path) -> Self {
+        Self { r, skip, path: path.to_path_buf(), pos: 0, next: 0, end: 0 }
+    }
+
+    fn io(&self, e: io::Error) -> AppError {
+        io_err(&e, &self.path)
+    }
+
+    fn bad(&self) -> AppError {
+        corrupt(&self.path, "intestazione TAR non valida")
+    }
+
+    fn skip(&mut self, n: u64) -> Result<(), AppError> {
+        (self.skip)(&mut self.r, n).map_err(|e| self.io(e))?;
+        self.pos += n;
+        Ok(())
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), AppError> {
+        self.r.read_exact(buf).map_err(|e| self.io(e))?;
+        self.pos += buf.len() as u64;
+        Ok(())
+    }
+
+    /// Un blocco intero; `false` a fine flusso esatta.
+    fn block(&mut self, b: &mut [u8; BLOCK]) -> Result<bool, AppError> {
+        let ok = read_block(&mut self.r, b).map_err(|e| self.io(e))?;
+        self.pos += if ok { BLOCK as u64 } else { 0 };
+        Ok(ok)
+    }
+
+    /// Byte della voce corrente non ancora letti.
+    pub(super) fn entry_left(&self) -> u64 {
+        self.end.saturating_sub(self.pos)
+    }
+
+    /// La voce successiva; `None` al primo blocco di zeri (si tollera anche il secondo mancante) o a fine flusso.
+    pub(super) fn next_header(&mut self) -> Result<Option<TarHeader>, AppError> {
+        if self.next > self.pos {
+            self.skip(self.next - self.pos)?;
         }
-        let flag = b[156];
-        let size = parse_num(&b[124..136]).ok_or_else(bad)?;
-        match flag {
-            b'L' | b'x' | b'X' if size <= MAX_EXT => {
-                let mut payload = vec![0u8; size as usize];
-                r.read_exact(&mut payload).map_err(io)?;
-                skip(r, padded(size, path)? - size).map_err(io)?;
-                if flag == b'L' {
-                    long_name = Some(c_str(&payload));
-                } else {
-                    let (name, sz) = parse_pax(&payload);
-                    (long_name, pax_size) = (name.or(long_name), sz.or(pax_size));
+        // Nome (GNU `L` o PAX `path`) e dimensione (PAX `size`) per la sola voce seguente.
+        let (mut long_name, mut pax_size): (Option<String>, Option<u64>) = (None, None);
+        let mut b = [0u8; BLOCK];
+        loop {
+            if !self.block(&mut b)? || b.iter().all(|&x| x == 0) {
+                (self.next, self.end) = (self.pos, self.pos);
+                return Ok(None);
+            }
+            if !checksum_ok(&b) {
+                return Err(self.bad());
+            }
+            let flag = b[156];
+            let size = parse_num(&b[124..136]).ok_or_else(|| self.bad())?;
+            match flag {
+                b'L' | b'x' | b'X' if size <= MAX_EXT => {
+                    let mut payload = vec![0u8; size as usize];
+                    self.read_exact(&mut payload)?;
+                    self.skip(padded(size, &self.path)? - size)?;
+                    // Un nome vuoto non indica nessuna voce: estrarla vorrebbe dire scrivere sulla cartella.
+                    if flag == b'L' {
+                        let name = c_str(&payload);
+                        if name.is_empty() {
+                            return Err(corrupt(&self.path, "nome lungo GNU vuoto"));
+                        }
+                        long_name = Some(name);
+                    } else {
+                        let (name, sz) = parse_pax(&payload);
+                        if name.as_deref() == Some("") {
+                            return Err(corrupt(&self.path, "path PAX vuoto"));
+                        }
+                        (long_name, pax_size) = (name.or(long_name), sz.or(pax_size));
+                    }
+                    continue;
                 }
-                continue;
+                // Troppo grandi o da ignorare: si scartano (con le grandi vale il nome dell'intestazione).
+                b'L' | b'x' | b'X' | b'K' | b'g' => {
+                    self.skip(padded(size, &self.path)?)?;
+                    continue;
+                }
+                _ => {}
             }
-            // Troppo grandi o da ignorare: si scartano (con le grandi vale il nome dell'intestazione).
-            b'L' | b'x' | b'X' | b'K' | b'g' => {
-                skip(r, padded(size, path)?).map_err(io)?;
-                continue;
+            let data_len = if matches!(flag, b'1'..=b'6') { 0 } else { pax_size.unwrap_or(size) };
+            let name = long_name.unwrap_or_else(|| {
+                let (name, prefix) = (c_str(&b[..100]), c_str(&b[345..500]));
+                // Il prefisso esiste solo in ustar (`ustar\0`); in GNU quei byte sono altro.
+                if &b[257..263] == b"ustar\0" && !prefix.is_empty() { format!("{prefix}/{name}") } else { name }
+            });
+            let modified_ms = parse_num(&b[136..148]).filter(|&t| t > 0).and_then(|t| i64::try_from(t).ok()?.checked_mul(1000));
+            // GNU sparse: si salta quanto memorizzato (più i blocchi di mappa), si mostra la dimensione vera.
+            let sparse = flag == b'S';
+            let shown_size = if sparse { parse_num(&b[483..495]).unwrap_or(data_len) } else { data_len };
+            let mut more_map = sparse && b[482] == 1;
+            while more_map {
+                if !self.block(&mut b)? {
+                    return Err(self.bad());
+                }
+                more_map = b[504] == 1;
             }
-            _ => {}
+            let data_offset = self.pos;
+            self.next = data_offset.checked_add(padded(data_len, &self.path)?).ok_or_else(|| self.bad())?;
+            self.end = data_offset + data_len;
+            return Ok(Some(TarHeader { name, flag, data_len, shown_size, modified_ms, data_offset }));
         }
-        let pax = pax_size.take();
-        // Collegamenti, cartelle e dispositivi non hanno dati, qualunque cosa dica il campo.
-        let data = if matches!(flag, b'1'..=b'6') { 0 } else { pax.unwrap_or(size) };
-        let name = long_name.take().unwrap_or_else(|| {
-            let (name, prefix) = (c_str(&b[..100]), c_str(&b[345..500]));
-            // Il prefisso esiste solo in ustar (`ustar\0`); in GNU quei byte sono altro.
-            if &b[257..263] == b"ustar\0" && !prefix.is_empty() { format!("{prefix}/{name}") } else { name }
-        });
-        let is_dir = flag == b'5' || name.ends_with('/');
-        let modified = parse_num(&b[136..148]).filter(|&t| t > 0).and_then(|t| i64::try_from(t).ok()?.checked_mul(1000));
-        // GNU sparse: si salta quanto memorizzato (più i blocchi di mappa), si mostra la dimensione vera.
-        let sparse = flag == b'S';
-        let shown = if sparse { parse_num(&b[483..495]).unwrap_or(data) } else { data };
-        let mut more_map = sparse && b[482] == 1;
-        if let Some(x) = entry(&name, is_dir, shown, modified, path)? {
+    }
+}
+
+/// I dati della voce corrente; finiti prima di `data_len`, l'archivio è troncato (`UnexpectedEof`).
+impl<R: Read> Read for TarWalker<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.entry_left();
+        if left == 0 || buf.is_empty() {
+            return Ok(0);
+        }
+        let want = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+        let n = self.r.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+/// Elenca un TAR da flusso, fino a `limit` voci: la memoria resta limitata da `limit` voci più il tetto sui nomi.
+/// Il totale è noto solo se l'archivio è stato letto tutto entro il limite.
+pub(super) fn walk_tar<R: Read>(r: R, skip: fn(&mut R, u64) -> io::Result<()>, path: &Path, limit: usize) -> Result<ArchiveListing, AppError> {
+    let mut walker = TarWalker::new(r, skip, path);
+    let mut entries = Vec::new();
+    while let Some(h) = walker.next_header()? {
+        if let Some(x) = entry(&h.name, h.is_dir(), h.shown_size, h.modified_ms, path)? {
             if entries.len() == limit {
                 return Ok(ArchiveListing { entries, total: None, truncated: true });
             }
             entries.push(x);
         }
-        while more_map {
-            if !read_block(r, &mut b).map_err(io)? {
-                return Err(bad());
-            }
-            more_map = b[504] == 1;
-        }
-        skip(r, padded(data, path)?).map_err(io)?;
     }
     let total = Some(entries.len() as u64);
     Ok(ArchiveListing { entries, total, truncated: false })
@@ -283,6 +393,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(names(&l), [long.replace('/', "\\").as_str()]);
+    }
+
+    #[test]
+    fn empty_long_name_or_pax_path_is_corrupt() {
+        let x = pax(&[("path", "")]);
+        let e = walk(&[block("x", b'x', x.len() as u64).to_vec(), data(&x), file("a", b"")], 10).unwrap_err();
+        assert_eq!(e.code, ErrorCode::CorruptArchive);
+        let e = walk(&[block("././@LongLink", b'L', 0).to_vec(), file("a", b"")], 10).unwrap_err();
+        assert_eq!(e.code, ErrorCode::CorruptArchive);
     }
 
     #[test]

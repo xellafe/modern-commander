@@ -1,6 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import { forgetHost, forgetPassword, importConnections, winscpCandidates } from "../../ipc/api";
 import type { AppError, Connection, ConnectionView, ImportCandidate, Scheme } from "../../ipc/types";
 import { defaultPort, startLocation, useConnections, validHost } from "../../state/connections";
@@ -53,7 +54,7 @@ export function ConnectionsDialog({ req }: { req: Extract<DialogRequest, { kind:
 
   const run = (op: () => Promise<unknown>) => {
     setError(null);
-    op().catch((e: AppError) => setError(t(`errors.${e?.code ?? "IO"}`)));
+    op().catch((e: AppError) => setError(t(errorKey({ code: e?.code ?? "IO", detail: e?.detail }))));
   };
   const select = (id: string) => {
     setSelId(id);

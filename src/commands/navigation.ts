@@ -4,7 +4,7 @@ import i18n from "../i18n";
 import { listDrives } from "../ipc/api";
 import type { DirSize } from "../ipc/types";
 import { formatSize } from "../lib/format";
-import { dirTarget, folderName, isRemote, joinPath, rootPath, sourceCaps } from "../lib/paths";
+import { dirTarget, folderName, isVirtual, joinPath, rootPath, sourceCaps } from "../lib/paths";
 import { cancelAllAndWait, unfinishedJobs, useJobs } from "../state/jobs";
 import { activeTab, targetGroup, useLayout } from "../state/layout";
 import {
@@ -266,8 +266,8 @@ const DEFS: Def[] = [
     const target = dirTarget(path, cursorRow);
     if (target) return open(target, cursorRow.isParent ? { focus: folderName(path) } : undefined);
     const file = joinPath(path, cursorRow.name);
-    // Un file remoto nel viewer interno (come F3): la shell di Windows non lo raggiunge.
-    if (isRemote(path)) return useLayout.getState().openFileTab(useLayout.getState().activeGroupId, { path: file, mode: "viewer" });
+    // Un file remoto o dentro un archivio nel viewer interno (come F3): la shell di Windows non lo raggiunge.
+    if (isVirtual(path)) return useLayout.getState().openFileTab(useLayout.getState().activeGroupId, { path: file, mode: "viewer" });
     // Un file (anche un collegamento .lnk) si apre col programma associato, come in Explorer.
     return openFile(tabId, file);
   }],

@@ -47,7 +47,9 @@
       "bySize": "By size",
       "unsorted": "Unsorted",
       "drives": "Drives",
-      "thumbs": "Thumbnails"
+      "thumbs": "Thumbnails",
+      "pack": "Pack",
+      "unpack": "Unpack"
     }
   },
   "status": {
@@ -262,7 +264,10 @@
     "mc_CommandPalette": "Command palette",
     "mc_QuickJump": "Quick jump",
     "mc_CopyPath": "Copy path",
-    "cm_FtpConnect": "Remote connections"
+    "cm_FtpConnect": "Remote connections",
+    "mc_OpenArchive": "Open archive as folder",
+    "cm_PackFiles": "Pack into a ZIP",
+    "cm_UnpackFiles": "Unpack archive"
   },
   "errors": {
     "NOT_FOUND": "Item not found.",
@@ -277,12 +282,17 @@
     "INVALID_NAME": "The name is not valid.",
     "FILE_IN_USE": "The file is in use by another program.",
     "UNSUPPORTED": "This item is not supported by the operation.",
+    "UNSUPPORTED_encrypted": "The item is encrypted: password-protected archives are not supported.",
+    "UNSUPPORTED_sparse": "Sparse files inside a TAR archive cannot be extracted.",
+    "UNSUPPORTED_reparse_point": "The item is a link (symbolic link or junction): the operation does not support it.",
+    "UNSUPPORTED_too_many_entries": "The archive has too many entries (over one million).",
     "CANCELLED": "Operation cancelled.",
     "INVALID_REQUEST": "Invalid request.",
     "TOO_LARGE": "The file or folder is too large for this operation.",
     "CHANGED_ON_DISK": "The file was changed on disk by another program.",
     "UNMAPPABLE_CHARS": "The text contains characters the chosen encoding cannot represent.",
     "CORRUPT_ARCHIVE": "The archive is damaged or cannot be read.",
+    "ARCHIVE_TOO_DEMANDING": "This archive needs too much memory to open (dictionary over 256 MB or an index over 128 MB).",
     "AUTH_REQUIRED": "The server requires a password.",
     "AUTH_FAILED": "Authentication failed: wrong user name or password.",
     "CONNECTION_FAILED": "Could not connect to the server, or the connection was lost.",
@@ -295,6 +305,7 @@
     "READ_ONLY_SOURCE": "This source is read-only.",
     "RANGE_UNSUPPORTED": "The server does not allow reading the file in blocks.",
     "ALGORITHM_UNSUPPORTED": "The server offers no supported encryption algorithms.",
+    "EMPTY_ARCHIVE": "The archive is empty: there is nothing to unpack.",
     "IO": "Input/output error."
   },
   "ops": {
@@ -312,6 +323,7 @@
     "copyTo": "Copy {{what}} to:",
     "moveTo": "Move {{what}} to:",
     "sameFolder": "Choose a folder other than the current one.",
+    "unpackSubfolder": "Extract into a subfolder named “{{name}}”",
     "groups": "Groups (1…9)",
     "filter": "Only files matching:",
     "policy": "If the target already exists:",
@@ -346,11 +358,17 @@
     "saveAnyway": "Save anyway",
     "forAll": "For all",
     "mkdirTitle": "New folder",
+    "packTitle": "Pack into a ZIP",
+    "packName": "Pack {{what}} into the archive:",
+    "packDest": "In the folder:",
+    "packDestInvalid": "Choose a folder where files can be written (not inside an archive).",
+    "packExists": "“{{name}}” already exists. Overwrite it, or change the name.",
     "mkdirLabel": "New folder in {{path}} (\\ creates subfolders):",
     "deleteTitle": "Delete",
     "deletePermanentTitle": "Delete permanently",
     "deleteText": "Move {{what}} to the Recycle Bin?",
     "deletePermanentText": "Permanently delete {{what}}? This cannot be undone.",
+    "deleteArchiveNote": "Inside an archive there is no Recycle Bin: the items are removed from the archive for good.",
     "exitTitle": "Exit Modern Commander",
     "exitJobs_one": "{{count}} operation is not finished and will be cancelled.",
     "exitJobs_other": "{{count}} operations are not finished and will be cancelled.",
@@ -368,7 +386,8 @@
       "delete": "Delete",
       "deletePermanent": "Permanent delete",
       "mkdir": "New folder",
-      "rename": "Rename"
+      "rename": "Rename",
+      "pack": "Pack"
     },
     "state": {
       "queued": "queued",

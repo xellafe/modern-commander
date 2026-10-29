@@ -11,4 +11,11 @@ export const initI18n = (language: "en" | "it") =>
     interpolation: { escapeValue: false },
   });
 
+/**
+ * Chiave del messaggio di un errore: per `UNSUPPORTED` con un dettaglio noto (`encrypted`, `sparse`, `reparse_point`,
+ * `too_many_entries`) la sua, con quella del codice come riserva; il `detail` degli altri codici è testo di sistema.
+ */
+export const errorKey = (e: { code: string; detail?: string | null }): string | string[] =>
+  e.code === "UNSUPPORTED" && e.detail ? [`errors.UNSUPPORTED_${e.detail}`, "errors.UNSUPPORTED"] : `errors.${e.code}`;
+
 export default i18n;

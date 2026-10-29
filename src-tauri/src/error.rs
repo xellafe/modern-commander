@@ -32,6 +32,8 @@ pub enum ErrorCode {
     UnmappableChars,
     /// Archivio danneggiato o non leggibile.
     CorruptArchive,
+    /// 7z i cui decoder chiederebbero troppa memoria (dizionario oltre 256 MiB, vedi `archive::sevenz_guard`).
+    ArchiveTooDemanding,
     /// La sorgente remota chiede una password che non è salvata.
     AuthRequired,
     /// Credenziali rifiutate dal server.
@@ -137,6 +139,7 @@ mod tests {
         assert_eq!(s(ErrorCode::ChangedOnDisk), "CHANGED_ON_DISK");
         assert_eq!(s(ErrorCode::UnmappableChars), "UNMAPPABLE_CHARS");
         assert_eq!(s(ErrorCode::CorruptArchive), "CORRUPT_ARCHIVE");
+        assert_eq!(s(ErrorCode::ArchiveTooDemanding), "ARCHIVE_TOO_DEMANDING");
     }
 
     #[test]

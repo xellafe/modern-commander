@@ -8,7 +8,7 @@ use crate::error::{AppError, ErrorCode};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -23,6 +23,9 @@ struct Node {
 
 type Nodes = Arc<Mutex<BTreeMap<String, Node>>>;
 
+/// Vedi `MemProvider::on_write`.
+pub type WriteHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct MemProvider {
     nodes: Nodes,
     /// Byte dopo cui `reader` dà `CONNECTION_FAILED` (se il file è più lungo).
@@ -33,10 +36,19 @@ pub struct MemProvider {
     pub writable_dirs: Option<HashSet<String>>,
     /// `false`: date al minuto, come un server FTP senza `MDTM`.
     pub precise_mtime: bool,
-    /// `true`: `list` e `delete` danno `CONNECTION_FAILED`, come una sessione caduta.
+    /// `false`: niente letture a salti (`Caps::ranged_read`), come un server HTTP senza `Range`.
+    pub ranged_read: bool,
+    /// `true`: `list`, `delete` e l'apertura dei writer danno `CONNECTION_FAILED`, come una sessione caduta.
     pub offline: AtomicBool,
     /// `true`: `list` e `delete` danno `TIMEOUT`, come una sessione bloccata (VPN caduta).
     pub stalled: AtomicBool,
+    /// Byte restituiti da `read_at` e dagli stream di `reader`: quanto si è letto "dalla rete".
+    pub bytes_read: Arc<AtomicU64>,
+    /// `true`: dopo la prima eliminazione ogni `rename` fallisce (`IO`), come una connessione che cade lì.
+    pub fail_rename_after_delete: bool,
+    deleted: AtomicBool,
+    /// Chiamata con il percorso a ogni scrittura di un writer, prima di scrivere (per agire a metà di un upload).
+    pub on_write: Option<WriteHook>,
 }
 
 /// Le connessioni per id.
@@ -78,14 +90,32 @@ impl Read for Broken {
     }
 }
 
+/// Conta i byte letti in `bytes_read`.
+struct Counted<R> {
+    inner: R,
+    count: Arc<AtomicU64>,
+}
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
 /// Scrive direttamente nel nodo: un errore a metà lascia il file incompleto, come su un server vero.
 struct MemWriter {
     nodes: Nodes,
     path: String,
+    on_write: Option<WriteHook>,
 }
 
 impl Write for MemWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(f) = &self.on_write {
+            f(&self.path);
+        }
         let mut nodes = self.nodes.lock().unwrap();
         let node = nodes.get_mut(&self.path).ok_or_else(|| std::io::Error::other(err(ErrorCode::NotFound, &self.path)))?;
         node.data.extend_from_slice(buf);
@@ -110,7 +140,7 @@ impl MemProvider {
 
     pub fn new() -> Self {
         let nodes = BTreeMap::from([("/".to_owned(), Node { dir: true, ..Node::default() })]);
-        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false) }
+        Self { nodes: Arc::new(Mutex::new(nodes)), fail_read_after: None, atomic_replace: true, writable_dirs: None, precise_mtime: true, ranged_read: true, offline: AtomicBool::new(false), stalled: AtomicBool::new(false), bytes_read: Arc::default(), fail_rename_after_delete: false, deleted: AtomicBool::new(false), on_write: None }
     }
 
     /// Crea la cartella e quelle sopra che mancano.
@@ -166,7 +196,7 @@ fn dir_exists(nodes: &BTreeMap<String, Node>, path: &str) -> Result<(), AppError
 
 impl Provider for MemProvider {
     fn caps(&self) -> Caps {
-        Caps { writable: true, atomic_replace: self.atomic_replace, precise_mtime: self.precise_mtime, ranged_read: true }
+        Caps { writable: true, atomic_replace: self.atomic_replace, precise_mtime: self.precise_mtime, ranged_read: self.ranged_read }
     }
 
     fn stat(&self, path: &str) -> Result<Stat, AppError> {
@@ -190,18 +220,21 @@ impl Provider for MemProvider {
         let data = self.file(path)?;
         let start = (offset.min(data.len() as u64)) as usize;
         let end = (start + len as usize).min(data.len());
+        self.bytes_read.fetch_add((end - start) as u64, Ordering::Relaxed);
         Ok(data[start..end].to_vec())
     }
 
     fn reader(&self, path: &str) -> Result<Box<dyn Read + Send>, AppError> {
         let data = self.file(path)?;
-        Ok(match self.fail_read_after {
+        let inner: Box<dyn Read + Send> = match self.fail_read_after {
             Some(n) if n < data.len() as u64 => Box::new(Cursor::new(data[..n as usize].to_vec()).chain(Broken)),
             _ => Box::new(Cursor::new(data)),
-        })
+        };
+        Ok(Box::new(Counted { inner, count: self.bytes_read.clone() }))
     }
 
     fn writer(&self, path: &str, create_new: bool) -> Result<Box<dyn Write + Send>, AppError> {
+        self.online(path)?;
         let mut nodes = self.nodes.lock().unwrap();
         dir_exists(&nodes, parent(path))?;
         match nodes.get_mut(path) {
@@ -216,10 +249,13 @@ impl Provider for MemProvider {
                 nodes.insert(path.to_owned(), Node { modified_ms: Some(now_ms()), ..Node::default() });
             }
         }
-        Ok(Box::new(MemWriter { nodes: self.nodes.clone(), path: path.to_owned() }))
+        Ok(Box::new(MemWriter { nodes: self.nodes.clone(), path: path.to_owned(), on_write: self.on_write.clone() }))
     }
 
     fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), AppError> {
+        if self.fail_rename_after_delete && self.deleted.load(Ordering::SeqCst) {
+            return Err(err(ErrorCode::Io, to));
+        }
         let mut nodes = self.nodes.lock().unwrap();
         if !nodes.contains_key(from) {
             return Err(err(ErrorCode::NotFound, from));
@@ -260,6 +296,7 @@ impl Provider for MemProvider {
             return Err(err(ErrorCode::Io, path)); // cartella non vuota
         }
         nodes.remove(path);
+        self.deleted.store(true, Ordering::SeqCst);
         Ok(())
     }
 

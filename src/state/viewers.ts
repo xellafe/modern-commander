@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { codeUnit, detectEncoding } from "../lib/encoding";
 import { fileKind } from "../lib/format";
+import { isArchive, isRemote } from "../lib/paths";
 import { looksBinary, previewKind } from "../lib/preview";
 import { disposeLineCache } from "./lineCache";
 
@@ -20,6 +21,20 @@ export interface ViewerState {
   /** File remoto: la copia scaricata nella cartella temporanea, da cui il viewer legge tutto. */
   localCopy?: string;
 }
+
+/** Viste che la WebView carica da un file locale: sul remoto prima si scarica il file. */
+export const NEEDS_LOCAL: ViewerMode[] = ["image", "pdf", "video", "audio"];
+
+/**
+ * Il viewer legge da una copia locale: una voce d'archivio si estrae sempre (in ogni modalità), un file remoto solo
+ * per le viste native. `mode` indefinito = lo stato della scheda non esiste ancora.
+ */
+export const needsLocalCopy = (path: string, mode: ViewerMode | undefined, hasCopy: boolean): boolean =>
+  mode !== undefined && !hasCopy && (isArchive(path) || (isRemote(path) && NEEDS_LOCAL.includes(mode)));
+
+/** Le viste native di un file remoto o di una voce d'archivio si scaricano comunque: il campione non serve e leggerlo costerebbe. */
+export const skipsSample = (path: string, native: ViewerMode | null): boolean =>
+  (isRemote(path) || isArchive(path)) && native !== null && NEEDS_LOCAL.includes(native);
 
 /**
  * Vista nativa del file (immagine, PDF, video, audio), se la WebView la mostra. Le immagini che non decodifica

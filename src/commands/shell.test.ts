@@ -122,6 +122,32 @@ test("cm_Edit on a remote tab opens the internal editor even with the external e
   useSettings.setState({ useExternalEditor: false });
 });
 
+test("Edit on a 7z entry opens read-only with no notice; a writable zip entry opens editable; HTTP keeps the notice", async () => {
+  useSettings.setState({ externalEditor: "code.exe", useExternalEditor: true });
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "arc://C:\\w\\a.7z/");
+  setCursor("a.txt");
+  await executeCommand("cm_Edit");
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "arc://C:\\w\\a.7z/a.txt", mode: "editor", readOnly: true });
+  expect(useTabViews.getState().notice).toBeNull();
+  expect(api.openWith).not.toHaveBeenCalled(); // l'editor esterno non si usa mai su un archivio
+
+  useLayout.getState().activateTab("t1");
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "arc://C:\\w\\a.zip/");
+  setCursor("a.txt");
+  await executeCommand("cm_Edit");
+  expect(activeTab(useLayout.getState()).file).toEqual({ path: "arc://C:\\w\\a.zip/a.txt", mode: "editor" });
+
+  useLayout.getState().activateTab("t1");
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a.txt")]);
+  await useTabViews.getState().load("t1", "http://w/x");
+  setCursor("a.txt");
+  await executeCommand("cm_Edit");
+  expect(useTabViews.getState().notice?.code).toBe("READ_ONLY_SOURCE");
+  useSettings.setState({ useExternalEditor: false });
+});
+
 test("cm_Properties uses the marked rows, or the current folder on '..'", async () => {
   vi.mocked(api.showProperties).mockResolvedValue();
   mark("a.txt", "b.txt");

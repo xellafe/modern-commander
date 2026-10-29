@@ -18,7 +18,7 @@ use crate::vfs::router::Vfs;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 
 pub type JobId = u64;
@@ -56,9 +56,10 @@ pub struct JobView {
     pub current: Option<String>,
     /// Media mobile sugli ultimi 2 s.
     pub speed_bps: u64,
-    /// Chiavi di scheduling (`Loc::volume_key`): unità o condivisione in locale, connessione sul remoto.
+    /// Chiavi di scheduling (`Loc::volume_key`): unità o condivisione in locale, connessione sul remoto; per un
+    /// archivio quella dell'archivio (`arc://` + contenitore) e quella del volume del contenitore.
     pub volumes: Vec<String>,
-    /// Cartella di destinazione di Copy/Move (per la barra di stato); `None` per le altre operazioni.
+    /// Cartella di destinazione di Copy/Move/Pack (per la barra di stato); `None` per le altre operazioni.
     pub dest: Option<String>,
     /// Riepilogo finale: un errore per ogni elemento saltato dopo un errore.
     pub errors: Vec<AppError>,
@@ -158,6 +159,8 @@ struct Job {
     reply: Option<PromptReply>,
     last_emit: Instant,
     samples: VecDeque<(Instant, u64)>,
+    /// Chi aspetta la fine del job (`enqueue_and_wait`): riceve la vista finale.
+    ends: Vec<mpsc::Sender<JobView>>,
 }
 
 struct State {
@@ -216,6 +219,11 @@ impl Queue {
         }
         job.view.state = state;
         self.emit(job);
+        if state.is_finished() {
+            for end in job.ends.drain(..) {
+                let _ = end.send(job.view.clone());
+            }
+        }
         self.0.cv.notify_all();
     }
 
@@ -255,7 +263,22 @@ impl Queue {
     }
 
     pub fn enqueue(&self, spec: JobSpec) -> JobId {
-        let mut volumes: Vec<String> = spec.sources.iter().chain(spec.dest.iter()).map(|l| norm(l).volume_key()).collect();
+        self.enqueue_with(spec, None)
+    }
+
+    /// Accoda il job e ne aspetta la fine (anche dietro altri job sugli stessi volumi): la vista finale.
+    pub fn enqueue_and_wait(&self, spec: JobSpec) -> JobView {
+        let (tx, rx) = mpsc::channel();
+        self.enqueue_with(spec, Some(tx));
+        // Un job non finito non esce mai dall'elenco: la vista finale arriva sempre.
+        rx.recv().expect("vista finale del job")
+    }
+
+    fn enqueue_with(&self, spec: JobSpec, end: Option<mpsc::Sender<JobView>>) -> JobId {
+        // Un archivio occupa la sua chiave (`arc://` + contenitore) e anche quella del volume del contenitore: un job
+        // nell'archivio e uno sulla sua unità o connessione non girano insieme.
+        let keys = |l: &Loc| [Some(norm(l).volume_key()), l.archive_container().map(|c| norm(c).volume_key())];
+        let mut volumes: Vec<String> = spec.sources.iter().chain(spec.dest.iter()).flat_map(keys).flatten().collect();
         volumes.sort();
         volumes.dedup();
         let mut st = self.lock();
@@ -273,7 +296,7 @@ impl Queue {
             speed_bps: 0,
             volumes,
             dest: match spec.kind {
-                JobKind::Copy | JobKind::Move => spec.dest.as_ref().map(Loc::to_string),
+                JobKind::Copy | JobKind::Move | JobKind::Pack { .. } => spec.dest.as_ref().map(Loc::to_string),
                 _ => None,
             },
             errors: Vec::new(),
@@ -288,6 +311,7 @@ impl Queue {
             reply: None,
             last_emit: Instant::now(),
             samples: VecDeque::new(),
+            ends: end.into_iter().collect(),
         };
         st.jobs.push(job);
         let job = st.jobs.last_mut().expect("appena inserito");
@@ -400,8 +424,13 @@ fn valid_rename(new: &Loc, dst: &Loc) -> bool {
             };
             new.is_absolute() && n.file_name().is_some() && same_parent && !same_path(&n, &d)
         }
-        // Remoto: già pulito (`Loc::parse`); la stessa cartella vuol dire anche la stessa connessione.
+        // Remoto o d'archivio: già pulito (`Loc::parse`); la stessa cartella vuol dire anche la stessa connessione
+        // (o lo stesso archivio).
         (Loc::Remote { .. }, Loc::Remote { .. }) => new.file_name().is_some() && new.parent() == dst.parent() && new != dst,
+        // `same`: lo stesso contenitore locale può essere scritto in forme diverse (`C:\a.zip`, `c:\A.ZIP`).
+        (Loc::Archive { .. }, Loc::Archive { .. }) => {
+            new.file_name().is_some() && new.parent().zip(dst.parent()).is_some_and(|(a, b)| a.same(&b)) && !new.same(dst)
+        }
         _ => false,
     }
 }
@@ -1586,5 +1615,553 @@ mod tests {
         let id = q.enqueue(rspec(JobKind::Copy, &sources, Some(loc("sftp://m/d")), ConflictPolicy::OverwriteIfNewer));
         assert_eq!(finish(&rx, id).state, Done);
         assert_eq!((m.data("/d/a").unwrap(), m.data("/d/b").unwrap()), (b"vecchio".to_vec(), b"nuovo".to_vec()));
+    }
+
+    #[test]
+    fn valid_rename_inside_one_archive() {
+        let l = |s: &str| Loc::parse(s).unwrap();
+        assert!(valid_rename(&l(r"arc://C:\a.zip/d/y"), &l(r"arc://C:\a.zip/d/x")));
+        assert!(!valid_rename(&l(r"arc://C:\b.zip/d/y"), &l(r"arc://C:\a.zip/d/x")));
+        // Lo stesso contenitore scritto in un'altra forma.
+        assert!(valid_rename(&l(r"arc://C:\a.zip/d/y"), &l(r"arc://c:\A.ZIP/d/x")));
+        assert!(!valid_rename(&l(r"arc://C:\a.zip/d/x"), &l(r"arc://c:\A.ZIP/d/x")));
+    }
+
+    /// ZIP "stored" con le voci date, tutte con la stessa data di modifica.
+    fn zip_file(path: &Path, entries: &[(&str, &[u8])]) {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let t = zip::DateTime::from_date_and_time(2020, 5, 6, 7, 8, 10).unwrap();
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).last_modified_time(t);
+        for (name, data) in entries {
+            w.start_file(*name, o).unwrap();
+            w.write_all(data).unwrap();
+        }
+        std::fs::write(path, w.finish().unwrap().into_inner()).unwrap();
+    }
+
+    fn in_archive(container: &Path, path: &str) -> Loc {
+        Loc::archive(Loc::Local(container.to_path_buf()), path)
+    }
+
+    #[test]
+    fn extract_zip_to_local_with_conflicts() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("conf/a.xml", b"nuovo"), ("conf/b.xml", b"bbb"), ("conf/sub/c.xml", b"ccc"), ("altro.txt", b"x")]);
+        let out = d.path().join("out");
+        std::fs::create_dir_all(out.join("conf")).unwrap();
+        std::fs::write(out.join("conf").join("a.xml"), b"vecchio").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let s = JobSpec {
+            kind: JobKind::Copy,
+            sources: vec![in_archive(&z, "/conf")],
+            dest: Some(Loc::Local(out.clone())),
+            filter: None,
+            policy: ConflictPolicy::Skip,
+        };
+        let id = q.enqueue(s);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 0));
+        assert_eq!(std::fs::read(out.join("conf").join("a.xml")).unwrap(), b"vecchio");
+        assert_eq!(std::fs::read(out.join("conf").join("b.xml")).unwrap(), b"bbb");
+        assert_eq!(std::fs::read(out.join("conf").join("sub").join("c.xml")).unwrap(), b"ccc");
+        assert!(!exists(&out.join("altro.txt")));
+        // La data della voce passa al file estratto.
+        let want = mem::vfs(&[]).remote(&in_archive(&z, "/conf/b.xml"), crate::vfs::provider::Purpose::Browse).unwrap();
+        let want = want.0.stat(&want.1).unwrap().modified_ms.unwrap();
+        let got = std::fs::metadata(out.join("conf").join("b.xml")).unwrap().modified().unwrap();
+        let got = got.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        assert!((got - want).abs() <= 2000, "voce {want}, file {got}");
+    }
+
+    #[test]
+    fn extract_bad_names_are_per_item() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("bad.zip");
+        zip_file(&z, &[("ok.txt", b"ok"), ("XXXup.txt", b"up"), ("a:b.txt", b"ab"), ("CON", b"con")]);
+        let mut bytes = std::fs::read(&z).unwrap();
+        // `ZipWriter` non scrive nomi che risalgono: si sostituiscono dopo (stessa lunghezza).
+        for i in 0..=bytes.len() - 9 {
+            if &bytes[i..i + 9] == b"XXXup.txt" {
+                bytes[i..i + 9].copy_from_slice(b"../up.txt");
+            }
+        }
+        std::fs::write(&z, bytes).unwrap();
+        let out = d.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let sources = ["ok.txt", "up.txt", "a:b.txt", "CON"].iter().map(|n| in_archive(&z, &format!("/{n}"))).collect();
+        let id = q.enqueue(JobSpec { kind: JobKind::Copy, sources, dest: Some(Loc::Local(out.clone())), filter: None, policy: ConflictPolicy::Ask });
+        let p = next_prompt(&rx);
+        reply_error(&q, &p, ErrorAction::Skip, true);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Done, vec![ErrorCode::InvalidName; 3]));
+        assert_eq!(std::fs::read(out.join("ok.txt")).unwrap(), b"ok");
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 1);
+        assert!(!exists(&d.path().join("up.txt")));
+    }
+
+    #[test]
+    fn move_out_of_readonly_archive_fails_per_item() {
+        use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("m.7z");
+        let mut w = ArchiveWriter::create(&z).unwrap();
+        w.push_archive_entry(ArchiveEntry::new_file("a.txt"), Some(&b"alpha"[..])).unwrap();
+        w.push_archive_entry(ArchiveEntry::new_file("b.txt"), Some(&b"beta"[..])).unwrap();
+        w.finish().unwrap();
+        let before = std::fs::read(&z).unwrap();
+        let out = d.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let sources = vec![in_archive(&z, "/a.txt"), in_archive(&z, "/b.txt")];
+        let id = q.enqueue(JobSpec { kind: JobKind::Move, sources, dest: Some(Loc::Local(out.clone())), filter: None, policy: ConflictPolicy::Ask });
+        let p = next_prompt(&rx);
+        let Prompt::Error { error, .. } = &p else { panic!("{p:?}") };
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        reply_error(&q, &p, ErrorAction::Skip, true);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Done, vec![ErrorCode::Unsupported; 2]));
+        assert_eq!(std::fs::read(out.join("a.txt")).unwrap(), b"alpha");
+        assert_eq!(std::fs::read(out.join("b.txt")).unwrap(), b"beta");
+        assert_eq!(std::fs::read(&z).unwrap(), before);
+    }
+
+    #[test]
+    fn extract_from_remote_zip_to_other_remote() {
+        let (m, n) = (Arc::new(MemProvider::new()), Arc::new(MemProvider::new()));
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("x.txt", b"contenuto"), ("y.txt", b"altro")]);
+        m.add_file("/a.zip", &std::fs::read(&z).unwrap());
+        n.add_dir("/dst");
+        let (q, rx) = queue_remote(&[("m", &m), ("n", &n)]);
+        let id = q.enqueue(rspec(JobKind::Copy, &["arc://sftp:%2F%2Fm%2Fa.zip/x.txt"], Some(loc("sftp://n/dst")), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        assert_eq!((n.data("/dst/x.txt").unwrap(), n.data("/dst/y.txt")), (b"contenuto".to_vec(), None));
+    }
+
+    /// Voci di uno ZIP con il loro contenuto (vuoto per le cartelle, che finiscono con `/`).
+    fn zip_entries(bytes: Vec<u8>) -> std::collections::BTreeMap<String, Vec<u8>> {
+        use std::io::Read;
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        (0..z.len())
+            .map(|i| {
+                let mut f = z.by_index(i).unwrap();
+                let mut data = Vec::new();
+                f.read_to_end(&mut data).unwrap();
+                (f.name().unwrap().into_owned(), data)
+            })
+            .collect()
+    }
+
+    fn entries_of(z: &Path) -> Vec<(String, Vec<u8>)> {
+        zip_entries(std::fs::read(z).unwrap()).into_iter().collect()
+    }
+
+    fn e(name: &str, data: &[u8]) -> (String, Vec<u8>) {
+        (name.to_owned(), data.to_vec())
+    }
+
+    fn parts_in(dir: &Path) -> Vec<String> {
+        let names = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
+        names.filter(|n| n.ends_with(crate::ops::exec::PART_SUFFIX)).collect()
+    }
+
+    /// Nomi in una cartella d'archivio, come li elenca il pannello.
+    fn listed(q: &Queue, dir: &Loc) -> Vec<String> {
+        let (p, path) = q.0.vfs.remote(dir, crate::vfs::provider::Purpose::Browse).unwrap();
+        let mut names: Vec<String> = p.list(&path).unwrap().into_iter().map(|s| s.name).collect();
+        names.sort();
+        names
+    }
+
+    fn job(kind: JobKind, sources: Vec<Loc>, dest: Option<Loc>, policy: ConflictPolicy) -> JobSpec {
+        JobSpec { kind, sources, dest, filter: None, policy }
+    }
+
+    #[test]
+    fn copy_into_zip_then_listing_shows_it() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("conf/a.xml", b"vecchio"), ("conf/b.xml", b"bbb"), ("altro.txt", b"x")]);
+        let src = d.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.xml"), b"nuovo").unwrap();
+        std::fs::write(src.join("n.xml"), b"n").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        let sources = vec![Loc::Local(src.join("a.xml")), Loc::Local(src.join("n.xml"))];
+        let id = q.enqueue(job(JobKind::Copy, sources, Some(in_archive(&z, "/conf")), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let Prompt::Conflict { dst, .. } = &p else { panic!("{p:?}") };
+        assert_eq!(dst, &in_archive(&z, "/conf/a.xml").to_string());
+        reply_conflict(&q, &p, Decision::Overwrite, false);
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 0));
+        let want = [e("conf/a.xml", b"nuovo"), e("conf/b.xml", b"bbb"), e("altro.txt", b"x"), e("conf/n.xml", b"n")];
+        let mut want = want.to_vec();
+        want.sort();
+        assert_eq!(entries_of(&z), want);
+        assert_eq!(listed(&q, &in_archive(&z, "/conf")), ["a.xml", "b.xml", "n.xml"]);
+        assert!(parts_in(d.path()).is_empty());
+    }
+
+    #[test]
+    fn archive_job_also_holds_the_container_volume() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("x.txt", b"x")]);
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/a.zip", &std::fs::read(&z).unwrap());
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let remote = loc("arc://sftp:%2F%2Fm%2Fa.zip/x.txt");
+        let out = d.path().join("out");
+        let id = q.enqueue(job(JobKind::Copy, vec![in_archive(&z, "/x.txt"), remote.clone()], Some(Loc::Local(out.clone())), ConflictPolicy::Skip));
+        let mut want = vec![in_archive(&z, "/").volume_key(), Loc::Local(z.clone()).volume_key(), remote.volume_key(), "sftp://m".to_owned()];
+        want.sort();
+        want.dedup();
+        assert_eq!(q.list()[0].volumes, want);
+        finish(&rx, id);
+    }
+
+    #[test]
+    fn editor_save_waits_for_the_job_on_the_same_zip() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("conf/a.xml", b"<a/>"), ("x.txt", b"vecchio")]);
+        std::fs::write(d.path().join("x.txt"), b"nuovo").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        // Un job sullo stesso ZIP, fermo al prompt di conflitto: tiene occupato l'archivio.
+        let first = q.enqueue(job(JobKind::Copy, vec![Loc::Local(d.path().join("x.txt"))], Some(in_archive(&z, "/")), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        let entry = in_archive(&z, "/conf/a.xml");
+        let (q2, e2) = (q.clone(), entry.clone());
+        let save = std::thread::spawn(move || crate::fs::content::archive_write_text_file(&q2, &q2.0.vfs, &e2, "<b/>", "utf-8", false, None, None));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!save.is_finished(), "il salvataggio non aspetta il job sullo stesso ZIP");
+        // Il salvataggio è un job anche lui, in coda dietro il primo.
+        let jobs = q.list();
+        assert_eq!((jobs.len(), jobs[1].state, jobs[1].dest.clone()), (2, Queued, Some(entry.to_string())));
+        reply_conflict(&q, &p, Decision::Overwrite, false);
+        assert_eq!(finish(&rx, first).state, Done);
+        let info = save.join().unwrap().unwrap();
+        assert_eq!(info.size, 4);
+        // Nessuna modifica persa: c'è quella del job e quella del salvataggio.
+        let mut want = vec![e("conf/a.xml", b"<b/>"), e("x.txt", b"nuovo")];
+        want.sort();
+        assert_eq!(entries_of(&z), want);
+    }
+
+    #[test]
+    fn archive_into_itself_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let rel = d.path().join("rel");
+        std::fs::create_dir(&rel).unwrap();
+        let z = rel.join("a.zip");
+        zip_file(&z, &[("a.txt", b"a")]);
+        let before = std::fs::read(&z).unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        // Lo ZIP o la sua cartella dentro lo ZIP stesso (anche scritto in un'altra forma), spostati o copiati.
+        let upper = in_archive(&rel.join("A.ZIP"), "/");
+        for (kind, src, dest) in [
+            (JobKind::Move, z.clone(), in_archive(&z, "/")),
+            (JobKind::Move, rel.clone(), in_archive(&z, "/sub")),
+            (JobKind::Copy, z.clone(), upper),
+            (JobKind::Copy, rel.clone(), in_archive(&z, "/")),
+        ] {
+            let id = q.enqueue(job(kind.clone(), vec![Loc::Local(src.clone())], Some(dest), ConflictPolicy::Overwrite));
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors[0].code), (Failed, ErrorCode::IntoItself), "{kind:?} {src:?}");
+        }
+        let id = q.enqueue(JobSpec { kind: JobKind::Pack { replace: true }, sources: vec![Loc::Local(z.clone())], dest: Some(in_archive(&z, "/")), filter: None, policy: ConflictPolicy::Overwrite });
+        assert_eq!(finish(&rx, id).errors[0].code, ErrorCode::IntoItself);
+        assert_eq!(std::fs::read(&z).unwrap(), before);
+
+        // Lo stesso su un server.
+        let m = Arc::new(MemProvider::new());
+        m.add_dir("/rel");
+        m.add_file("/rel/a.zip", &before);
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        for src in ["sftp://m/rel/a.zip", "sftp://m/rel"] {
+            let id = q.enqueue(rspec(JobKind::Move, &[src], Some(loc("arc://sftp:%2F%2Fm%2Frel%2Fa.zip/")), ConflictPolicy::Overwrite));
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors[0].code), (Failed, ErrorCode::IntoItself), "{src}");
+        }
+        assert_eq!(m.data("/rel/a.zip").unwrap(), before);
+    }
+
+    #[test]
+    fn commit_invalidates_index_cache() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("a.txt", b"a")]);
+        std::fs::write(d.path().join("x.txt"), b"x").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        assert_eq!(listed(&q, &in_archive(&z, "/")), ["a.txt"]);
+        let id = q.enqueue(job(JobKind::Copy, vec![Loc::Local(d.path().join("x.txt"))], Some(in_archive(&z, "/")), ConflictPolicy::Ask));
+        assert_eq!(finish(&rx, id).state, Done);
+        // Senza attesa: il ricontrollo della cache (2 s) non è ancora scaduto.
+        assert_eq!(listed(&q, &in_archive(&z, "/")), ["a.txt", "x.txt"]);
+    }
+
+    #[test]
+    fn delete_mkdir_rename_inside_zip() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("a.txt", b"a"), ("d/1.txt", b"1"), ("d/s/2.txt", b"2"), ("k.txt", b"k")]);
+        let (q, rx) = queue(LocalExecutor);
+        let at = |p: &str| in_archive(&z, p);
+        let del = q.enqueue(job(JobKind::Delete { permanent: true }, vec![at("/d")], None, ConflictPolicy::Ask));
+        let mk = q.enqueue(job(JobKind::Mkdir, vec![at("/n")], None, ConflictPolicy::Ask));
+        let ren = q.enqueue(job(JobKind::Rename, vec![at("/a.txt")], Some(at("/b.txt")), ConflictPolicy::Ask));
+        for id in [del, mk, ren] {
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        }
+        assert_eq!(entries_of(&z), [e("b.txt", b"a"), e("k.txt", b"k"), e("n/", b"")]);
+    }
+
+    #[test]
+    fn move_into_zip_deletes_sources_only_after_commit() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("z.zip");
+        zip_file(&z, &[("a.txt", b"a")]);
+        let bytes = std::fs::read(&z).unwrap();
+        // Connessione caduta: `offline` vale per `list`, `delete` e l'apertura dei writer, e nel job li usa solo
+        // l'upload del commit.
+        let m = Arc::new(MemProvider::new());
+        m.add_file("/z.zip", &bytes);
+        m.offline.store(true, std::sync::atomic::Ordering::SeqCst);
+        let f = d.path().join("f.txt");
+        std::fs::write(&f, b"f").unwrap();
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let move_f = || job(JobKind::Move, vec![Loc::Local(f.clone())], Some(loc("arc://sftp:%2F%2Fm%2Fz.zip/")), ConflictPolicy::Ask);
+        let v = finish(&rx, q.enqueue(move_f()));
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Failed, vec![ErrorCode::ConnectionFailed]));
+        assert!(exists(&f));
+        assert_eq!(m.data("/z.zip").unwrap(), bytes);
+        m.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+        let names: Vec<String> = m.list("/").unwrap().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["z.zip"], "nessun .mcpart");
+        // Con la connessione di nuovo su: commit, poi la sorgente si elimina.
+        assert_eq!(finish(&rx, q.enqueue(move_f())).state, Done);
+        assert!(!exists(&f));
+        assert_eq!(zip_entries(m.data("/z.zip").unwrap()).into_iter().collect::<Vec<_>>(), [e("a.txt", b"a"), e("f.txt", b"f")]);
+    }
+
+    #[test]
+    fn cancel_during_job_leaves_zip_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("a.txt", b"a")]);
+        let before = std::fs::read(&z).unwrap();
+        let sources: Vec<Loc> = ["1.txt", "2.txt", "3.txt"]
+            .iter()
+            .map(|n| {
+                std::fs::write(d.path().join(n), n.as_bytes()).unwrap();
+                Loc::Local(d.path().join(n))
+            })
+            .collect();
+        let (tx, started) = mpsc::channel();
+        let fake = Arc::new(Fake { slow: Some(tx), ..Fake::default() });
+        let (q, rx) = queue_shared(fake.clone());
+        let id = q.enqueue(job(JobKind::Copy, sources, Some(in_archive(&z, "/")), ConflictPolicy::Ask));
+        started.recv_timeout(T).unwrap();
+        started.recv_timeout(T).unwrap(); // copia del secondo file in corso
+        q.cancel(id).unwrap();
+        assert_eq!(finish(&rx, id).state, Cancelled);
+        assert_eq!(std::fs::read(&z).unwrap(), before);
+        assert!(parts_in(d.path()).is_empty());
+        // Le copie andavano nella cartella di lavoro dell'edit, che non c'è più.
+        let work = fake.copy_dsts.lock().unwrap()[0].parent().unwrap().to_path_buf();
+        assert!(work.starts_with(crate::net::temp::dir()) && !work.exists(), "{work:?}");
+    }
+
+    #[test]
+    fn pack_local_folder_to_new_zip() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        std::fs::create_dir_all(p.join("s")).unwrap();
+        std::fs::create_dir(p.join("empty")).unwrap();
+        std::fs::write(p.join("x.txt"), b"x").unwrap();
+        std::fs::write(p.join("s").join("y.txt"), b"y").unwrap();
+        let t = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        std::fs::File::options().write(true).open(p.join("x.txt")).unwrap().set_modified(t).unwrap();
+        let z = d.path().join("new.zip");
+        let (q, rx) = queue(LocalExecutor);
+        let pack = |replace| job(JobKind::Pack { replace }, vec![Loc::Local(p.clone())], Some(in_archive(&z, "/")), ConflictPolicy::Ask);
+        let v = finish(&rx, q.enqueue(pack(false)));
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        let names: Vec<String> = entries_of(&z).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["p/", "p/empty/", "p/s/", "p/s/y.txt", "p/x.txt"]);
+        let (prov, path) = q.0.vfs.remote(&in_archive(&z, "/p/x.txt"), crate::vfs::provider::Purpose::Browse).unwrap();
+        let ms = prov.stat(&path).unwrap().modified_ms.unwrap();
+        assert!((ms - 1_600_000_000_000).abs() <= 2000, "{ms}");
+        // Senza `replace` uno ZIP esistente resta com'era.
+        let before = std::fs::read(&z).unwrap();
+        let v = finish(&rx, q.enqueue(pack(false)));
+        assert_eq!((v.state, v.errors.iter().map(|e| e.code).collect::<Vec<_>>()), (Failed, vec![ErrorCode::AlreadyExists]));
+        assert_eq!(std::fs::read(&z).unwrap(), before);
+        assert!(parts_in(d.path()).is_empty());
+        // Da un altro archivio: la sorgente si legge com'è.
+        let two = d.path().join("two.zip");
+        let v = finish(&rx, q.enqueue(job(JobKind::Pack { replace: false }, vec![in_archive(&z, "/p/x.txt")], Some(in_archive(&two, "/")), ConflictPolicy::Ask)));
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(entries_of(&two), [e("x.txt", b"x")]);
+    }
+
+    #[test]
+    fn pack_to_remote_cancelled_leaves_nothing() {
+        const MARK: &[u8] = b"contenuto di pack_to_remote_cancelled_leaves_nothing";
+        // Alla prima scrittura sul server (l'upload del nuovo ZIP) si annulla il job e si annotano le cartelle di
+        // lavoro con il file preparato di questo test.
+        let slot: Arc<std::sync::OnceLock<Queue>> = Arc::default();
+        let work: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+        let mut m = MemProvider::new();
+        let (s, w) = (slot.clone(), work.clone());
+        m.on_write = Some(Arc::new(move |_| {
+            let dirs = std::fs::read_dir(crate::net::temp::dir()).into_iter().flatten().flatten().map(|e| e.path());
+            w.lock().unwrap().extend(dirs.filter(|p| std::fs::read(p.join("1")).is_ok_and(|b| b == MARK)));
+            let _ = s.get().unwrap().cancel(1);
+        }));
+        let m = Arc::new(m);
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("f.bin"), MARK).unwrap();
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let _ = slot.set(q.clone());
+        let id = q.enqueue(job(JobKind::Pack { replace: true }, vec![Loc::Local(d.path().join("f.bin"))], Some(loc("arc://sftp:%2F%2Fm%2Fout.zip/")), ConflictPolicy::Ask));
+        assert_eq!(id, 1);
+        assert_eq!(finish(&rx, id).state, Cancelled);
+        assert!(m.list("/").unwrap().is_empty(), "né out.zip né .mcpart");
+        let work = work.lock().unwrap();
+        assert!(!work.is_empty() && work.iter().all(|p| !p.exists()), "{work:?}");
+    }
+
+    #[test]
+    fn move_inside_and_out_of_zip() {
+        use std::io::Write;
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default();
+        // Cartelle esplicite: restano voci dello ZIP anche quando il loro contenuto se ne va.
+        for dir in ["conf/", "conf/sub/"] {
+            w.add_directory(dir, o).unwrap();
+        }
+        for (name, data) in [("conf/a.xml", b"a"), ("conf/sub/b.xml", b"b"), ("d/x.txt", b"x"), ("keep.txt", b"k")] {
+            w.start_file(name, o).unwrap();
+            w.write_all(data).unwrap();
+        }
+        std::fs::write(&z, w.finish().unwrap().into_inner()).unwrap();
+        let out = d.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        // Dentro lo stesso ZIP: una rinomina in blocco.
+        let v = finish(&rx, q.enqueue(job(JobKind::Move, vec![in_archive(&z, "/d")], Some(in_archive(&z, "/e")), ConflictPolicy::Ask)));
+        assert_eq!((v.state, v.files_total, v.errors.len()), (Done, 1, 0));
+        // Fuori: le sorgenti e le cartelle rimaste vuote se ne vanno dallo ZIP.
+        let v = finish(&rx, q.enqueue(job(JobKind::Move, vec![in_archive(&z, "/conf")], Some(Loc::Local(out.clone())), ConflictPolicy::Ask)));
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(std::fs::read(out.join("conf").join("sub").join("b.xml")).unwrap(), b"b");
+        assert_eq!(entries_of(&z), [e("e/", b""), e("e/d/x.txt", b"x"), e("keep.txt", b"k")]);
+    }
+
+    #[test]
+    fn move_folder_out_of_remote_zip_commits_once() {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default();
+        for dir in ["conf/", "conf/sub/"] {
+            w.add_directory(dir, o).unwrap();
+        }
+        for (name, data) in [("conf/a.xml", b"a"), ("conf/sub/b.xml", b"b"), ("keep.txt", b"k")] {
+            w.start_file(name, o).unwrap();
+            w.write_all(data).unwrap();
+        }
+        // Ogni riscrittura del contenitore è un upload su un temporaneo diverso.
+        let uploads: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
+        let mut m = MemProvider::new();
+        let u = uploads.clone();
+        m.on_write = Some(Arc::new(move |path| {
+            u.lock().unwrap().insert(path.to_owned());
+        }));
+        let m = Arc::new(m);
+        m.add_file("/a.zip", &w.finish().unwrap().into_inner());
+        let d = tempfile::tempdir().unwrap();
+        let (q, rx) = queue_remote(&[("m", &m)]);
+        let id = q.enqueue(job(JobKind::Move, vec![loc("arc://sftp:%2F%2Fm%2Fa.zip/conf")], Some(Loc::Local(d.path().into())), ConflictPolicy::Ask));
+        let v = finish(&rx, id);
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(std::fs::read(d.path().join("conf").join("sub").join("b.xml")).unwrap(), b"b");
+        assert_eq!(zip_entries(m.data("/a.zip").unwrap()).into_iter().collect::<Vec<_>>(), [e("keep.txt", b"k")]);
+        assert_eq!(uploads.lock().unwrap().len(), 1, "{uploads:?}");
+    }
+
+    #[test]
+    fn same_name_twice_into_one_zip_asks_and_loses_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("a/x.txt", b"da a"), ("b/x.txt", b"da b")]);
+        let (q, rx) = queue(LocalExecutor);
+        let skip_second = |sources: Vec<Loc>, dest: Loc, conflict: &str| {
+            let id = q.enqueue(job(JobKind::Move, sources, Some(dest), ConflictPolicy::Ask));
+            let p = next_prompt(&rx);
+            let Prompt::Conflict { dst, .. } = &p else { panic!("{p:?}") };
+            assert_eq!(dst, conflict);
+            reply_conflict(&q, &p, Decision::Skip, false);
+            let v = finish(&rx, id);
+            assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        };
+        // Dentro lo stesso ZIP: il secondo `x.txt` trova il primo appena spostato.
+        let c = in_archive(&z, "/c");
+        skip_second(vec![in_archive(&z, "/a/x.txt"), in_archive(&z, "/b/x.txt")], c.clone(), &c.join("x.txt").to_string());
+        assert_eq!(entries_of(&z), [e("b/x.txt", b"da b"), e("c/", b""), e("c/x.txt", b"da a")]);
+        // Da due cartelle locali: il secondo trova il primo appena aggiunto, e la sua sorgente resta.
+        let (s1, s2) = (d.path().join("s1"), d.path().join("s2"));
+        for (dir, data) in [(&s1, b"uno"), (&s2, b"due")] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::write(dir.join("f.txt"), data).unwrap();
+        }
+        let sources = vec![Loc::Local(s1.join("f.txt")), Loc::Local(s2.join("f.txt"))];
+        skip_second(sources, in_archive(&z, "/"), &in_archive(&z, "/f.txt").to_string());
+        assert_eq!(entries_of(&z), [e("b/x.txt", b"da b"), e("c/", b""), e("c/x.txt", b"da a"), e("f.txt", b"uno")]);
+        assert!(!exists(&s1.join("f.txt")));
+        assert_eq!(std::fs::read(s2.join("f.txt")).unwrap(), b"due");
+        // Pack con tre sorgenti dallo stesso nome: la politica decide, e il nome nuovo evita anche quelli già aggiunti.
+        let s3 = d.path().join("s3");
+        std::fs::create_dir(&s3).unwrap();
+        std::fs::write(s3.join("f.txt"), b"tre").unwrap();
+        let s4 = d.path().join("s4");
+        std::fs::create_dir(&s4).unwrap();
+        std::fs::write(s4.join("f.txt"), b"quattro").unwrap();
+        let n = d.path().join("n.zip");
+        let sources = [&s2, &s3, &s4].iter().map(|s| Loc::Local(s.join("f.txt"))).collect();
+        let v = finish(&rx, q.enqueue(job(JobKind::Pack { replace: false }, sources, Some(in_archive(&n, "/")), ConflictPolicy::RenameNew)));
+        assert_eq!((v.state, v.errors.len()), (Done, 0), "{v:?}");
+        assert_eq!(entries_of(&n), [e("f (2).txt", b"tre"), e("f (3).txt", b"quattro"), e("f.txt", b"due")]);
+    }
+
+    #[test]
+    fn jobs_on_same_zip_run_in_sequence() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("a.zip");
+        zip_file(&z, &[("a.txt", b"vecchio")]);
+        std::fs::write(d.path().join("a.txt"), b"nuovo").unwrap();
+        let (q, rx) = queue(LocalExecutor);
+        // Il conflitto tiene il primo job in attesa, con lo ZIP occupato.
+        let first = q.enqueue(job(JobKind::Copy, vec![Loc::Local(d.path().join("a.txt"))], Some(in_archive(&z, "/")), ConflictPolicy::Ask));
+        let p = next_prompt(&rx);
+        // Lo stesso ZIP scritto in un'altra forma.
+        let upper = PathBuf::from(z.to_string_lossy().to_uppercase());
+        let second = q.enqueue(job(JobKind::Mkdir, vec![in_archive(&upper, "/n")], None, ConflictPolicy::Ask));
+        let view = |id| q.list().into_iter().find(|j| j.id == id).unwrap();
+        assert!(view(first).volumes.contains(&view(second).volumes[0]), "{:?} {:?}", view(first).volumes, view(second).volumes);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(view(second).state, Queued);
+        reply_conflict(&q, &p, Decision::Overwrite, false);
+        assert_eq!(finish(&rx, first).state, Done);
+        assert_eq!(finish(&rx, second).state, Done);
+        assert_eq!(entries_of(&z), [e("a.txt", b"nuovo"), e("n/", b"")]);
     }
 }

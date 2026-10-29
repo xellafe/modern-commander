@@ -11,6 +11,7 @@ import { ErrorDialog, UnsafeWriteDialog } from "./ErrorDialog";
 import { ExitConfirm } from "./ExitConfirm";
 import { MaskDialog } from "./MaskDialog";
 import { MkdirDialog } from "./MkdirDialog";
+import { PackDialog } from "./PackDialog";
 import { PasswordDialog } from "./PasswordDialog";
 import { SaveErrorDialog } from "./SaveErrorDialog";
 import { TrustDialog } from "./TrustDialog";
@@ -102,6 +103,7 @@ export function DialogHost() {
   switch (dialog?.kind) {
     case "copyMove": return <CopyMoveDialog req={dialog} />;
     case "mkdir": return <MkdirDialog req={dialog} />;
+    case "pack": return <PackDialog req={dialog} />;
     case "delete": return <DeleteConfirm req={dialog} />;
     case "mask": return <MaskDialog req={dialog} />;
     case "exit": return <ExitConfirm req={dialog} />;

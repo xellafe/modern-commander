@@ -15,6 +15,9 @@ export const DEFAULT_KEYMAP: Record<string, string> = {
   'Shift+F8': 'mc_DeletePermanent',
   'Shift+Delete': 'mc_DeletePermanent',
   'Alt+F4': 'cm_Exit',
+  'Alt+F5': 'cm_PackFiles',
+  'Alt+F9': 'cm_UnpackFiles',
+  'Ctrl+PageDown': 'mc_OpenArchive', // senza equivalente in TC
 
   // Cursore (in TC sono tasti fissi, senza id cm_*)
   Up: 'mc_CursorUp',

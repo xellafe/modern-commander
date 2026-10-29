@@ -12,6 +12,8 @@ pub enum JobKind {
     Delete { permanent: bool },
     Mkdir,
     Rename,
+    /// Copia nella radice di uno ZIP nuovo (`dest`); con `replace` sostituisce un file con quel nome.
+    Pack { replace: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +107,9 @@ mod tests {
                    "filter": null, "policy": {"type": "overwriteIfNewer"}})
         );
         assert_eq!(serde_json::from_value::<JobSpec>(v).unwrap(), spec);
+        let pack = JobKind::Pack { replace: true };
+        assert_eq!(serde_json::to_value(&pack).unwrap(), json!({"type": "pack", "replace": true}));
+        assert_eq!(serde_json::from_value::<JobKind>(json!({"type": "pack", "replace": true})).unwrap(), pack);
 
         let r = Decision::Rename(Loc::Local(r"C:\f (2).txt".into()));
         let v = serde_json::to_value(&r).unwrap();

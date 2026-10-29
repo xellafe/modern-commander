@@ -47,7 +47,9 @@
       "bySize": "Per dimensione",
       "unsorted": "Non ordinato",
       "drives": "Unità",
-      "thumbs": "Miniature"
+      "thumbs": "Miniature",
+      "pack": "Comprimi",
+      "unpack": "Estrai"
     }
   },
   "status": {
@@ -262,7 +264,10 @@
     "mc_CommandPalette": "Palette dei comandi",
     "mc_QuickJump": "Salto rapido",
     "mc_CopyPath": "Copia percorso",
-    "cm_FtpConnect": "Connessioni remote"
+    "cm_FtpConnect": "Connessioni remote",
+    "mc_OpenArchive": "Apri l'archivio come cartella",
+    "cm_PackFiles": "Comprimi in uno ZIP",
+    "cm_UnpackFiles": "Estrai l'archivio"
   },
   "errors": {
     "NOT_FOUND": "Elemento non trovato.",
@@ -277,12 +282,17 @@
     "INVALID_NAME": "Il nome non è valido.",
     "FILE_IN_USE": "Il file è in uso da un altro programma.",
     "UNSUPPORTED": "L'operazione non supporta questo elemento.",
+    "UNSUPPORTED_encrypted": "L'elemento è cifrato: gli archivi protetti da password non sono supportati.",
+    "UNSUPPORTED_sparse": "I file sparsi dentro un archivio TAR non si possono estrarre.",
+    "UNSUPPORTED_reparse_point": "L'elemento è un collegamento (simbolico o giunzione): l'operazione non lo supporta.",
+    "UNSUPPORTED_too_many_entries": "L'archivio ha troppe voci (oltre un milione).",
     "CANCELLED": "Operazione annullata.",
     "INVALID_REQUEST": "Richiesta non valida.",
     "TOO_LARGE": "Il file o la cartella è troppo grande per questa operazione.",
     "CHANGED_ON_DISK": "Il file è stato modificato su disco da un altro programma.",
     "UNMAPPABLE_CHARS": "Il testo contiene caratteri che la codifica scelta non sa rappresentare.",
     "CORRUPT_ARCHIVE": "L'archivio è danneggiato o non si può leggere.",
+    "ARCHIVE_TOO_DEMANDING": "Questo archivio richiede troppa memoria per essere aperto (dizionario oltre 256 MB o indice oltre 128 MB).",
     "AUTH_REQUIRED": "Il server chiede una password.",
     "AUTH_FAILED": "Autenticazione non riuscita: utente o password non validi.",
     "CONNECTION_FAILED": "Connessione al server non riuscita o interrotta.",
@@ -295,6 +305,7 @@
     "READ_ONLY_SOURCE": "Questa sorgente è in sola lettura.",
     "RANGE_UNSUPPORTED": "Il server non permette di leggere il file a blocchi.",
     "ALGORITHM_UNSUPPORTED": "Il server non offre algoritmi di cifratura supportati.",
+    "EMPTY_ARCHIVE": "L'archivio è vuoto: non c'è niente da estrarre.",
     "IO": "Errore di input/output."
   },
   "ops": {
@@ -312,6 +323,7 @@
     "copyTo": "Copia {{what}} in:",
     "moveTo": "Sposta {{what}} in:",
     "sameFolder": "Scegli una cartella diversa da quella corrente.",
+    "unpackSubfolder": "Estrai in una sottocartella «{{name}}»",
     "groups": "Gruppi (1…9)",
     "filter": "Solo i file che corrispondono a:",
     "policy": "Se la destinazione esiste già:",
@@ -346,11 +358,17 @@
     "saveAnyway": "Salva lo stesso",
     "forAll": "Per tutti",
     "mkdirTitle": "Nuova cartella",
+    "packTitle": "Comprimi in uno ZIP",
+    "packName": "Comprimi {{what}} nell'archivio:",
+    "packDest": "Nella cartella:",
+    "packDestInvalid": "Scegli una cartella in cui si può scrivere (non dentro un archivio).",
+    "packExists": "«{{name}}» esiste già. Sovrascrivilo o cambia il nome.",
     "mkdirLabel": "Nuova cartella in {{path}} (\\ crea le sottocartelle):",
     "deleteTitle": "Elimina",
     "deletePermanentTitle": "Elimina definitivamente",
     "deleteText": "Spostare {{what}} nel Cestino?",
     "deletePermanentText": "Eliminare definitivamente {{what}}? L'operazione non si può annullare.",
+    "deleteArchiveNote": "Dentro un archivio non c'è il Cestino: gli elementi vengono eliminati definitivamente dall'archivio.",
     "exitTitle": "Esci da Modern Commander",
     "exitJobs_one": "{{count}} operazione non è finita e verrà annullata.",
     "exitJobs_other": "{{count}} operazioni non sono finite e verranno annullate.",
@@ -368,7 +386,8 @@
       "delete": "Eliminazione",
       "deletePermanent": "Eliminazione definitiva",
       "mkdir": "Nuova cartella",
-      "rename": "Rinomina"
+      "rename": "Rinomina",
+      "pack": "Compressione"
     },
     "state": {
       "queued": "in coda",

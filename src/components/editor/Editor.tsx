@@ -1,6 +1,7 @@
 import type { editor } from "monaco-editor";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import { chordFromEvent } from "../../commands/keys";
 import { closeTab } from "../../commands/navigation";
 import { executeCommand } from "../../commands/registry";
@@ -34,11 +35,12 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
   const [error, setError] = useState<AppError | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const instance = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const forceReadOnly = useLayout((s) => !!s.tabs[tabId].file?.readOnly);
   const loaded = !!doc;
   const readOnly = doc?.readOnly ?? false;
 
   useEffect(() => {
-    useEditors.getState().open(tabId, path).catch((e) => setError(toAppError(e)));
+    useEditors.getState().open(tabId, path, forceReadOnly).catch((e) => setError(toAppError(e)));
   }, [tabId, path]);
 
   useEffect(() => {
@@ -131,7 +133,7 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
       {readOnly && <div className="mc-editor-note" role="status">{t("editor.readOnly")}</div>}
       {error ? (
         <div className="mc-editor-note" role="alert">
-          {error.code === "TOO_LARGE" ? t("editor.tooLarge", { size: formatSize(EDITOR_MAX_BYTES, i18n.language) }) : t(`errors.${error.code}`)}
+          {error.code === "TOO_LARGE" ? t("editor.tooLarge", { size: formatSize(EDITOR_MAX_BYTES, i18n.language) }) : t(errorKey(error))}
           {error.path && <span>{error.path}</span>}
         </div>
       ) : (
@@ -139,7 +141,7 @@ export function Editor({ tabId, path }: { tabId: string; path: string }) {
       )}
       {notice && (
         <div className="mc-notice" role="alert">
-          {t(`errors.${notice.code}`)}
+          {t(errorKey(notice))}
           {notice.path && <span>{notice.path}</span>}
         </div>
       )}

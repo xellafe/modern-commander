@@ -189,6 +189,29 @@ pub fn expand_children(spec: &JobSpec, vfs: &Vfs, dir: &FileItem, children: Vec<
     walker.out
 }
 
+/// Posizione del file `l` nel flusso del suo archivio (solido 7z, TAR.GZ): `(contenitore, ordine)`.
+fn stream_key(vfs: &Vfs, l: &Loc) -> Option<(String, u64)> {
+    if !matches!(l, Loc::Archive { .. }) {
+        return None;
+    }
+    let (prov, path) = vfs.remote(l, Purpose::Transfer).ok()?;
+    Some((l.volume_key(), prov.stream_order(&path)?))
+}
+
+/// Se una sorgente è in un archivio a flusso, i file si estraggono nell'ordine del flusso, così lo si decomprime
+/// una volta sola: prima le cartelle (nell'ordine attuale, i genitori restano prima dei figli), poi i file per
+/// `(contenitore, ordine)`, e in fondo, nell'ordine attuale, quelli senza ordine. L'ordinamento è stabile.
+pub(crate) fn stream_sort(items: &mut Vec<FileItem>, vfs: &Vfs) {
+    let keys: Vec<_> = items.iter().map(|i| if i.is_dir { None } else { stream_key(vfs, &i.src) }).collect();
+    if keys.iter().all(Option::is_none) {
+        return;
+    }
+    let mut keyed: Vec<_> = std::mem::take(items).into_iter().zip(keys).collect();
+    // `false < true`: cartelle, poi file con ordine, poi file senza.
+    keyed.sort_by(|(a, ka), (b, kb)| (!a.is_dir, ka.is_none(), ka).cmp(&(!b.is_dir, kb.is_none(), kb)));
+    items.extend(keyed.into_iter().map(|(i, _)| i));
+}
+
 pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
     let first = spec.sources.first().ok_or_else(|| invalid(None))?;
     let filter = filter_of(spec);
@@ -216,6 +239,7 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
             walker.post_order = true;
             // Nel Cestino una cartella va intera, come con la Shell: un elemento per sorgente. Il
             // runner la elenca solo se il Cestino la rifiuta e si sceglie l'eliminazione definitiva.
+            // Un archivio non ha Cestino: le cartelle si elencano subito.
             let whole = !permanent && filter.is_none();
             for s in &spec.sources {
                 // Mai un'intera unità o condivisione.
@@ -223,7 +247,7 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
                     return Err(invalid(Some(s)));
                 }
                 let e = stat(vfs, s)?;
-                if whole {
+                if whole && !matches!(s, Loc::Archive { .. }) {
                     walker.out.push(item(s, None, &e, true));
                 } else {
                     walker.visit(s, None, &e);
@@ -231,9 +255,13 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
             }
             Ok(walker.out)
         }
-        JobKind::Copy | JobKind::Move => {
+        // Pack è una Copy verso la radice di uno ZIP (che può non esistere).
+        JobKind::Copy | JobKind::Move | JobKind::Pack { .. } => {
             let is_move = spec.kind == JobKind::Move;
             let dest = spec.dest.as_ref().ok_or_else(|| invalid(Some(first)))?;
+            if matches!(spec.kind, JobKind::Pack { .. }) && !matches!(dest, Loc::Archive { path, .. } if path == "/") {
+                return Err(invalid(Some(dest)));
+            }
             // Forma comune (`norm`) per i confronti e per costruire le destinazioni.
             let ndest = norm(dest);
             let to_file = file_target(spec, vfs);
@@ -247,12 +275,18 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
                 if !to_file && ndest.is_within(&ns) {
                     return Err(s.error(ErrorCode::IntoItself));
                 }
+                // Dentro un archivio che è la sorgente o sta sotto di essa: il commit sostituirebbe il contenitore
+                // e lo spostamento eliminerebbe poi l'archivio nuovo.
+                if ndest.archive_container().is_some_and(|c| norm(c).is_within(&ns)) {
+                    return Err(s.error(ErrorCode::IntoItself));
+                }
                 if is_move && !to_file && ns.parent().is_some_and(|p| p.same(&ndest)) {
                     return Err(s.error(ErrorCode::SameFile));
                 }
                 // ponytail: stessa unità = stessa lettera/condivisione; un volume montato in una
                 // cartella o un'unità `subst` danno ERROR_NOT_SAME_DEVICE e l'executor ripiega su copia.
-                // Sul remoto la chiave è la connessione: lo spostamento nella stessa è un `Provider::rename`.
+                // Sul remoto la chiave è la connessione: lo spostamento nella stessa è un `Provider::rename`; in un
+                // archivio è il contenitore, e lo spostamento nello stesso è una rinomina nella sua riscrittura.
                 let vol = ns.volume_key();
                 let rename = is_move && filter.is_none() && !vol.is_empty() && vol == ndest.volume_key();
                 checked.push((s, e, dst, rename));
@@ -264,6 +298,7 @@ pub fn expand(spec: &JobSpec, vfs: &Vfs) -> Result<Vec<FileItem>, AppError> {
                     walker.visit(s, Some(dst), &e);
                 }
             }
+            stream_sort(&mut walker.out, vfs);
             Ok(walker.out)
         }
     }
@@ -580,5 +615,98 @@ mod tests {
         let cp = expand(&spec(JobKind::Copy, vec![p.clone()], Some(dest.clone()), None)).unwrap();
         assert_eq!(cp[1], FileItem { src: Loc::Local(link), dst: local(dest.join("p").join("link")), is_dir: true, size: 0, unlisted: false });
         assert_eq!(cp.len(), 2);
+    }
+
+    #[test]
+    fn stream_sort_orders_files_by_archive() {
+        use std::io::Write;
+        let mut b = tar::Builder::new(Vec::new());
+        for (name, data) in [("b/2", &b"22"[..]), ("a/1", &b"1"[..])] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            b.append_data(&mut h, name, data).unwrap();
+        }
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        enc.write_all(&b.into_inner().unwrap()).unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let g = d.path().join("t.tar.gz");
+        std::fs::write(&g, enc.finish().unwrap()).unwrap();
+        let at = |p: &str| Loc::archive(Loc::Local(g.clone()), p);
+        let it = |p: &str, is_dir: bool| FileItem { src: at(p), dst: None, is_dir, size: 0, unlisted: false };
+        let loose = FileItem { src: Loc::Local(d.path().join("z.txt")), dst: None, is_dir: false, size: 0, unlisted: false };
+        // Prima a, poi b: l'ordine d'archivio è `b/2`, `a/1`. I file fuori dall'archivio restano dopo.
+        let mut items = vec![loose.clone(), it("/b", true), it("/a", true), it("/a/1", false), it("/b/2", false)];
+        stream_sort(&mut items, &mem::vfs(&[]));
+        let got: Vec<_> = items.iter().map(|i| i.src.to_string()).collect();
+        let want: Vec<_> = [at("/b"), at("/a"), at("/b/2"), at("/a/1"), loose.src.clone()].iter().map(Loc::to_string).collect();
+        assert_eq!(got, want);
+        // Senza voci a flusso l'elenco non cambia.
+        let mut plain = vec![loose.clone(), it("/b", true)];
+        stream_sort(&mut plain, &mem::vfs(&[]));
+        assert_eq!(plain[0], loose);
+    }
+
+    /// ZIP con `conf/a.xml` e `conf/sub/b.xml`; ritorna il contenitore.
+    fn zip_with_conf(dir: &Path) -> Loc {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for name in ["conf/a.xml", "conf/sub/b.xml"] {
+            w.start_file(name, o).unwrap();
+            w.write_all(b"x").unwrap();
+        }
+        let z = dir.join("a.zip");
+        std::fs::write(&z, w.finish().unwrap().into_inner()).unwrap();
+        Loc::Local(z)
+    }
+
+    fn arc_spec(kind: JobKind, src: Loc, dest: Option<Loc>) -> JobSpec {
+        JobSpec { kind, sources: vec![src], dest, filter: None, policy: ConflictPolicy::Ask }
+    }
+
+    fn names_of(items: &[FileItem]) -> Vec<String> {
+        items.iter().map(|i| i.src.file_name().unwrap()).collect()
+    }
+
+    #[test]
+    fn move_of_an_archive_dir_is_renamed_only_inside_its_archive() {
+        let d = tempfile::tempdir().unwrap();
+        let z = zip_with_conf(d.path());
+        let conf = Loc::archive(z.clone(), "/conf");
+        let out = Loc::Local(d.path().join("out"));
+        let items = expand(&arc_spec(JobKind::Move, conf.clone(), Some(out))).unwrap();
+        assert_eq!(names_of(&items), ["conf", "a.xml", "sub", "b.xml"]);
+        assert!(items.iter().all(|i| !i.unlisted), "{items:?}");
+        // Dentro lo stesso archivio (anche scritto in un'altra forma) la cartella si rinomina in blocco.
+        let upper = Loc::Local(PathBuf::from(z.to_string().to_uppercase()));
+        let items = expand(&arc_spec(JobKind::Move, conf.clone(), Some(Loc::archive(upper, "/altro")))).unwrap();
+        assert_eq!((names_of(&items), items[0].unlisted), (vec!["conf".to_owned()], true));
+    }
+
+    #[test]
+    fn pack_expands_like_copy_into_an_archive_root() {
+        let d = tempfile::tempdir().unwrap();
+        let a = tree(d.path());
+        let root = Loc::archive(Loc::Local(d.path().join("n.zip")), "/");
+        let pack = |dest: Loc| JobSpec { dest: Some(dest), ..spec(JobKind::Pack { replace: true }, vec![a.clone()], None, None) };
+        let items = expand(&pack(root.clone())).unwrap();
+        assert_eq!(names_of(&items), ["a", "x.txt", "s", "y.txt"]);
+        assert_eq!(items[1].dst, Some(root.join("a").join("x.txt")));
+        assert!(!file_target(&pack(root.clone())));
+        // Solo verso la radice di un archivio.
+        for bad in [root.join("a"), Loc::Local(d.path().join("D"))] {
+            assert_eq!(expand(&pack(bad.clone())).unwrap_err().code, ErrorCode::InvalidRequest, "{bad}");
+        }
+    }
+
+    #[test]
+    fn recycle_delete_of_an_archive_dir_is_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let conf = Loc::archive(zip_with_conf(d.path()), "/conf");
+        // Un archivio non ha Cestino: niente elemento unico da elencare dopo, il contenuto è già nell'elenco.
+        let items = expand(&arc_spec(JobKind::Delete { permanent: false }, conf, None)).unwrap();
+        assert_eq!(names_of(&items), ["a.xml", "b.xml", "sub", "conf"]);
+        assert!(items.iter().all(|i| !i.unlisted), "{items:?}");
     }
 }

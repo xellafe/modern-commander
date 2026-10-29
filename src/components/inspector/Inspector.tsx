@@ -1,6 +1,7 @@
 import { Copy } from "lucide-react";
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { errorKey } from "../../i18n";
 import type { HashAlgo } from "../../ipc/types";
 import { formatAttrs, formatDate, formatSize } from "../../lib/format";
 import { loadMonaco, splitForColorize, worthColorizing } from "../../lib/monaco";
@@ -151,7 +152,7 @@ function PreviewView({ preview }: { preview: Preview | null }) {
       );
     case "none": return null;
     case "binary": return <div className="mc-viewer-note">{t("inspector.binary")}</div>;
-    case "error": return <div className="mc-viewer-note" role="alert">{t(`errors.${preview.code}`)}</div>;
+    case "error": return <div className="mc-viewer-note" role="alert">{t(errorKey(preview))}</div>;
   }
 }
 

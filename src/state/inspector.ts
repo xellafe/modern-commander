@@ -3,11 +3,11 @@
 // il bersaglio per cui è partito è ancora quello corrente (`token`). Al cambio si annulla tutto ciò che è in corso.
 import { create } from "zustand";
 import { ansiEncoding, calcHash, cancelRequest, fileInfo, listArchive, nextRequestId, readChunk } from "../ipc/api";
-import type { ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } from "../ipc/types";
+import type { AppError, ArchiveListing, DirSize, Drive, ErrorCode, FileInfo, HashAlgo } from "../ipc/types";
 import { detectEncoding } from "../lib/encoding";
 import { renderMarkdown } from "../lib/markdown";
 import { languageFor, loadMonaco } from "../lib/monaco";
-import { folderName, isRemote, sourceCaps } from "../lib/paths";
+import { folderName, isRemote, isVirtual, sourceCaps } from "../lib/paths";
 import { looksBinary, previewKind } from "../lib/preview";
 import { cancelTabSizes, computeDirSize } from "./sizeRequests";
 
@@ -20,6 +20,9 @@ export const ARCHIVE_LIMIT = 500;
  * centinaia di byte può dichiarare intestazioni e dizionari da GB. Con il cursore che corre non deve mai partire da solo.
  */
 const ON_DEMAND = /\.7z$/i;
+
+/** Archivi remoti che l'ispettore può elencare (il 7z solo su richiesta, vedi `ON_DEMAND`). */
+const REMOTE_LISTABLE = /\.(zip|7z)$/i;
 
 /** Proprietario fittizio dei calcoli di dimensione dell'ispettore (`cancelTabSizes`). */
 const OWNER = "inspector";
@@ -38,7 +41,7 @@ export type Preview =
   /** Archivio non elencato da solo (7z, vedi `ON_DEMAND`): si elenca con `requestArchive`. */
   | { kind: "archiveOnDemand" }
   | { kind: "binary" }
-  | { kind: "error"; code: ErrorCode };
+  | { kind: "error"; code: ErrorCode; detail?: string | null };
 
 export interface InspectorTarget {
   path: string;
@@ -77,6 +80,9 @@ function cancelWork() {
 const toCode = (e: unknown): ErrorCode =>
   e && typeof e === "object" && "code" in e ? (e as { code: ErrorCode }).code : "IO";
 
+/** Anteprima d'errore: codice e, se c'è, `detail` (vedi `errorKey`). */
+const toError = (e: unknown): Preview => ({ kind: "error", code: toCode(e), detail: (e as Partial<AppError> | null)?.detail ?? undefined });
+
 /** Avvia una richiesta annullabile: l'id resta in `requests` finché non finisce. */
 async function tracked<T>(run: (id: number) => Promise<T>): Promise<T> {
   const id = nextRequestId();
@@ -113,8 +119,10 @@ async function load(t: InspectorTarget, my: number) {
     }
     const name = folderName(t.path);
     const kind = previewKind(name);
-    // Sul remoto solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni movimento.
-    if (isRemote(t.path) && kind !== null && kind !== "markdown") return patch({ preview: { kind: "none" } });
+    // Sul remoto e negli archivi solo l'anteprima testuale: immagini, PDF, media e archivi richiederebbero un download a ogni
+    // movimento. Fa eccezione un ZIP o 7z remoto, che il backend elenca dall'indice (TAR e TAR.GZ remoti non si elencano).
+    const listable = kind === "archive" && isRemote(t.path) && REMOTE_LISTABLE.test(name);
+    if (isVirtual(t.path) && kind !== null && kind !== "markdown" && !listable) return patch({ preview: { kind: "none" } });
     if (kind === "image" || kind === "pdf" || kind === "video" || kind === "audio") {
       return patch({ preview: { kind, path: t.path } });
     }
@@ -133,7 +141,7 @@ async function load(t: InspectorTarget, my: number) {
     if (kind === "markdown") return patch({ preview: { kind: "markdown", html: await renderMarkdown(read), truncated } });
     patch({ preview: { kind: "text", text: read, language, truncated } });
   } catch (e) {
-    patch({ preview: { kind: "error", code: toCode(e) } });
+    patch({ preview: toError(e) });
   }
 }
 
@@ -160,7 +168,7 @@ export const useInspector = create<InspectorState>((set, get) => ({
     set({ preview: { kind: "loading" } });
     tracked((id) => listArchive(id, target.path, ARCHIVE_LIMIT)).then(
       (listing) => my === token && set({ preview: { kind: "archive", listing } }),
-      (e) => my === token && set({ preview: { kind: "error", code: toCode(e) } }),
+      (e) => my === token && set({ preview: toError(e) }),
     );
   },
   requestHash: (algo) => {
