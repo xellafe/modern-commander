@@ -81,7 +81,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 | Invio / Ctrl+PgDn | Apre l'archivio sotto il cursore come cartella (ZIP, 7z, TAR, TAR.GZ), anche su un server |
 | Backspace dalla radice | Torna alla cartella che contiene l'archivio |
 | Alt+F5 | Crea uno ZIP dalla selezione nella cartella dell'altro gruppo (anche su un server) |
-| Alt+F9 | Estrae l'archivio sotto il cursore, col dialogo della copia, in una sottocartella con il nome dell'archivio |
+| Alt+F9 | Estrae l'archivio sotto il cursore col dialogo della copia; una casella (attiva di default) mette i file in una sottocartella con il nome dell'archivio. Dentro un archivio estrae l'archivio intero |
 | F5, F6, F7, F8, Shift+F6, F4 | Dentro uno ZIP: aggiungere, spostare, creare cartelle, eliminare (F8 è sempre definitivo), rinominare, modificare un file (il salvataggio sostituisce la voce con un job della coda, visibile in Operazioni) |
 
 - **Sola lettura**: 7z, TAR e TAR.GZ si sfogliano ed estraggono, ma non si modificano; F4 su di essi apre in sola lettura.
@@ -95,7 +95,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks    # + int
 - L'indice di un TAR tiene in memoria circa 3 volte i byte dei nomi (tetto: 128 MiB di nomi).
 - Un TAR.GZ remoto si scarica per intero; ZIP e 7z remoti si leggono a intervalli.
 - La modifica di un archivio non passa dall'helper elevato: dove serve l'elevazione fallisce.
-- Uno ZIP locale aperto in un altro programma non si sostituisce (`ACCESS_DENIED`, originale intatto).
+- Uno ZIP locale aperto in un altro programma non si sostituisce (`ACCESS_DENIED` dopo circa 2 s di tentativi, originale intatto).
 - Su FTP/SFTP senza rinomina atomica la sostituzione di uno ZIP elimina l'originale prima della rinomina finale.
 - Verifiche manuali e limiti noti: [docs/superpowers/fase-3b-follow-up.md](docs/superpowers/fase-3b-follow-up.md).
 

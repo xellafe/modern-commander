@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { toggleUnpackFolder } from "../../commands/archives";
 import { mustChangeDest, resolveDest, startCopyMove } from "../../commands/fileOps";
 import type { ConflictPolicy } from "../../ipc/types";
 import { useUi, type DialogRequest } from "../../state/ui";
@@ -12,6 +13,15 @@ export function CopyMoveDialog({ req }: { req: Extract<DialogRequest, { kind: "c
   const { t } = useTranslation();
   const what = useWhat(req.sources);
   const [dest, setDest] = useState(req.dest);
+  // Alt+F9: la sottocartella col nome dell'archivio, attiva all'apertura (la destinazione proposta la contiene).
+  const [sub, setSub] = useState(true);
+  const toggleSub = (on: boolean) => {
+    setSub(on);
+    if (req.unpackFolder) setDest(toggleUnpackFolder(dest, req.unpackFolder, on));
+  };
+  // La cartella di un gruppo come destinazione: con la casella attiva, più la sottocartella (scelta con 1…9 o col clic).
+  const inGroup = (path: string) => (req.unpackFolder && sub ? toggleUnpackFolder(path, req.unpackFolder, true) : path);
+  const pick = (path: string) => setDest(inGroup(path));
   const [filter, setFilter] = useState("");
   const [policy, setPolicy] = useState(req.policy);
   const close = useUi.getState().closeDialog;
@@ -31,7 +41,7 @@ export function CopyMoveDialog({ req }: { req: Extract<DialogRequest, { kind: "c
     const target = req.targets.find((g) => String(g.n) === e.key);
     if (target) {
       e.preventDefault();
-      setDest(target.path);
+      pick(target.path);
     }
   };
 
@@ -52,11 +62,17 @@ export function CopyMoveDialog({ req }: { req: Extract<DialogRequest, { kind: "c
             data-autofocus={req.targets.length ? undefined : true} />
         </label>
         {unchanged && <div className="mc-field-hint">{t("ops.sameFolder")}</div>}
+        {req.unpackFolder && (
+          <label className="mc-check">
+            <input type="checkbox" checked={sub} onChange={(e) => toggleSub(e.target.checked)} />
+            {t("ops.unpackSubfolder", { name: req.unpackFolder })}
+          </label>
+        )}
         {req.targets.length > 0 && (
           <div className="mc-targets" role="listbox" aria-label={t("ops.groups")} tabIndex={0} data-autofocus>
             {req.targets.map((g) => (
-              <div key={g.groupId} role="option" aria-selected={g.path === dest}
-                className={`mc-target${g.path === dest ? " sel" : ""}`} onClick={() => setDest(g.path)}>
+              <div key={g.groupId} role="option" aria-selected={inGroup(g.path) === dest}
+                className={`mc-target${inGroup(g.path) === dest ? " sel" : ""}`} onClick={() => pick(g.path)}>
                 <kbd>{g.n <= 9 ? g.n : ""}</kbd>
                 <span>{g.path}</span>
               </div>

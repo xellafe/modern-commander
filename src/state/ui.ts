@@ -31,6 +31,8 @@ export type DialogRequest =
       requireChange: boolean;
       targets: CopyTarget[];
       policy: ConflictPolicy["type"];
+      /** Alt+F9: sottocartella col nome dell'archivio, che una casella aggiunge o toglie dalla destinazione. */
+      unpackFolder?: string;
     }
   | { kind: "mkdir"; tabId: string; path: string }
   /** Alt+F5: crea uno ZIP con le `sources`; `name` e `destDir` sono la proposta, modificabile. */

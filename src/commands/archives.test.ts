@@ -6,7 +6,7 @@ import type { Entry } from "../ipc/types";
 import { initialLayout, useLayout } from "../state/layout";
 import { useTabViews } from "../state/tabViews";
 import { useUi } from "../state/ui";
-import { ARCHIVE_COMMAND_IDS, packSubmit, registerArchiveCommands } from "./archives";
+import { ARCHIVE_COMMAND_IDS, packSubmit, registerArchiveCommands, toggleUnpackFolder } from "./archives";
 import { executeCommand } from "./registry";
 import { DEFAULT_KEYMAP } from "./tcKeymap";
 
@@ -145,6 +145,36 @@ test("unpack of an empty archive shows a notice, of a non-archive does nothing",
   await executeCommand("cm_UnpackFiles");
   expect(api.listDir).toHaveBeenCalledTimes(1); // solo il caricamento della scheda
   expect(useUi.getState().dialog).toBeNull();
+});
+
+test("the unpack subfolder checkbox adds or removes the archive name from the destination", () => {
+  expect(toggleUnpackFolder("D:\\out\\a\\", "a", false)).toBe("D:\\out\\");
+  expect(toggleUnpackFolder("D:\\out\\", "a", true)).toBe("D:\\out\\a\\");
+  expect(toggleUnpackFolder("D:\\out", "a", true)).toBe("D:\\out\\a\\");
+  // Già nello stato chiesto, o con una destinazione scritta a mano che non finisce col nome: invariata.
+  expect(toggleUnpackFolder("D:\\out\\a\\", "a", true)).toBe("D:\\out\\a\\");
+  expect(toggleUnpackFolder("D:\\altro\\", "a", false)).toBe("D:\\altro\\");
+  expect(toggleUnpackFolder("D:\\out\\A\\", "a", false)).toBe("D:\\out\\"); // Windows: maiuscole indifferenti
+  expect(toggleUnpackFolder("sftp://w/rel/a/", "a", false)).toBe("sftp://w/rel/");
+  expect(toggleUnpackFolder("sftp://w/rel/A/", "a", false)).toBe("sftp://w/rel/A/"); // POSIX: distinte
+  expect(toggleUnpackFolder("sftp://w/rel", "a", true)).toBe("sftp://w/rel/a/");
+});
+
+test("unpack offers the subfolder option, on by default", async () => {
+  await setup("C:\\w", "D:\\out", [f("a.zip"), f("n.txt")]);
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("a")]);
+  await executeCommand("cm_UnpackFiles");
+  expect(useUi.getState().dialog).toMatchObject({ kind: "copyMove", dest: "D:\\out\\a\\", unpackFolder: "a" });
+});
+
+test("unpack inside an archive extracts the whole current archive", async () => {
+  await setup("arc://C:\\w\\a.zip/conf", "D:\\out", [f("x.xml"), f("b.zip")]);
+  vi.mocked(api.listDir).mockResolvedValueOnce([f("conf", true), f("n.txt")]);
+  await executeCommand("cm_UnpackFiles");
+  expect(api.listDir).toHaveBeenLastCalledWith("arc://C:\\w\\a.zip/");
+  expect(useUi.getState().dialog).toMatchObject({
+    kind: "copyMove", move: false, sources: ["arc://C:\\w\\a.zip/conf", "arc://C:\\w\\a.zip/n.txt"], dest: "D:\\out\\a\\",
+  });
 });
 
 test("unpack from an archive on a server keeps the encoded container in the sources", async () => {

@@ -323,6 +323,7 @@
     "copyTo": "Copia {{what}} in:",
     "moveTo": "Sposta {{what}} in:",
     "sameFolder": "Scegli una cartella diversa da quella corrente.",
+    "unpackSubfolder": "Estrai in una sottocartella «{{name}}»",
     "groups": "Gruppi (1…9)",
     "filter": "Solo i file che corrispondono a:",
     "policy": "Se la destinazione esiste già:",

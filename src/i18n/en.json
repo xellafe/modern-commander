@@ -323,6 +323,7 @@
     "copyTo": "Copy {{what}} to:",
     "moveTo": "Move {{what}} to:",
     "sameFolder": "Choose a folder other than the current one.",
+    "unpackSubfolder": "Extract into a subfolder named “{{name}}”",
     "groups": "Groups (1…9)",
     "filter": "Only files matching:",
     "policy": "If the target already exists:",

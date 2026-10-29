@@ -1,6 +1,6 @@
 // Comandi sugli archivi (fase 3b, Task 10): apri come cartella, crea uno ZIP, estrai.
 import { fileInfo, listDir } from "../ipc/api";
-import { dirTarget, folderName, formatArchive, isArchive, isVirtual, joinPath, sourceCaps } from "../lib/paths";
+import { dirTarget, folderName, formatArchive, isArchive, isVirtual, joinPath, parseArchive, sourceCaps } from "../lib/paths";
 import { useLayout } from "../state/layout";
 import { activeTabContext, useTabViews } from "../state/tabViews";
 import { useUi, type DialogRequest } from "../state/ui";
@@ -62,8 +62,15 @@ export async function packSubmit(
   return "queued";
 }
 
+/** Dentro un archivio: l'archivio stesso, intero (non si aprono archivi annidati, quindi "estrai" vuol dire questo). */
+function currentArchive() {
+  const { tabId, path } = activeTabContext();
+  const a = parseArchive(path);
+  return a && { tabId, path, name: folderName(a.container), root: formatArchive(a.container) };
+}
+
 async function unpack() {
-  const a = archiveUnderCursor();
+  const a = archiveUnderCursor() ?? currentArchive();
   if (!a) return;
   // Gruppo di destinazione e cartella di partenza presi subito: durante l'attesa l'utente può cambiare scheda o gruppo.
   const t = copyTargets(useLayout.getState());
@@ -78,14 +85,27 @@ async function unpack() {
     views().showNotice(a.tabId, { code: "EMPTY_ARCHIVE" });
     return;
   }
-  // Il separatore finale dice al backend che la destinazione è una cartella, anche con una sola voce.
-  const dest = joinPath(t.dest, unpackFolder(a.name)) + (isVirtual(t.dest) ? "/" : "\\");
+  const folder = unpackFolder(a.name);
   // La radice di un archivio non è mai una sorgente: lo sono le sue voci.
   useUi.getState().openDialog({
     kind: "copyMove", move: false, sources: entries.map((e) => joinPath(a.root, e.name)), from: a.path,
-    dest: sourceCaps(t.dest).write ? dest : "",
-    requireChange: false, targets: t.targets, policy: "ask",
+    dest: sourceCaps(t.dest).write ? toggleUnpackFolder(t.dest, folder, true) : "",
+    requireChange: false, targets: t.targets, policy: "ask", unpackFolder: folder,
   });
+}
+
+/**
+ * Casella "estrai in una sottocartella" del dialogo di Alt+F9: aggiunge o toglie `folder` in fondo alla destinazione,
+ * che così mostra sempre dove finiranno i file. Una destinazione scritta a mano che non finisce con `folder` non si
+ * tocca togliendo la spunta. Il separatore finale dice al backend che è una cartella, anche con una sola voce.
+ */
+export function toggleUnpackFolder(dest: string, folder: string, on: boolean): string {
+  const sep = isVirtual(dest) ? "/" : "\\";
+  const base = dest.endsWith(sep) ? dest.slice(0, -1) : dest;
+  const last = base.slice(base.lastIndexOf(sep) + 1);
+  const has = isVirtual(dest) ? last === folder : last.toLowerCase() === folder.toLowerCase();
+  if (on) return (has ? base : joinPath(base, folder)) + sep;
+  return has ? base.slice(0, -last.length) : dest;
 }
 
 const DEFS: [string, Command["run"]][] = [
