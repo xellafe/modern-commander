@@ -97,6 +97,10 @@ pub async fn list_drives()-> Result<Vec<drives::Drive>, AppError> {
 pub async fn file_info(vfs: State<'_, Arc<Vfs>>, path: String) -> Result<content::FileInfo, AppError> {
     match Loc::parse(&path)? {
         Loc::Local(p) => blocking(move || content::file_info(&p)).await?,
+        loc @ Loc::Archive { .. } => {
+            let vfs = vfs.inner().clone();
+            blocking(move || content::archive_file_info(&vfs, &loc)).await?
+        }
         loc => on_remote(&vfs, loc, content::remote_file_info).await,
     }
 }

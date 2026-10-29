@@ -81,6 +81,20 @@ pub fn remote_file_info(p: &dyn Provider, path: &str) -> Result<FileInfo, AppErr
     })
 }
 
+/// `file_info` di una voce d'archivio. Le date DOS di uno ZIP sono a 2 s, ma il salvataggio dell'editor controlla
+/// anche dimensione e data del contenitore: la data è affidabile quanto quella del contenitore (sempre in locale, la
+/// precisione del server sul remoto), così F4 non chiede conferma come per un FTP senza `MDTM`.
+pub fn archive_file_info(vfs: &Vfs, loc: &Loc) -> Result<FileInfo, AppError> {
+    let Loc::Archive { container, .. } = loc else { return Err(AppError::new(ErrorCode::InvalidRequest, None)) };
+    let (p, path) = vfs.remote(loc, Purpose::Browse)?;
+    let info = remote_file_info(&*p, &path)?;
+    let mtime_reliable = match &**container {
+        Loc::Local(_) => true,
+        c => vfs.remote(c, Purpose::Browse)?.0.caps().precise_mtime,
+    };
+    Ok(FileInfo { mtime_reliable, ..info })
+}
+
 /// Fino a `len` byte da `offset`; oltre la fine del file il risultato è più corto o vuoto.
 pub fn read_chunk(path: &Path, offset: u64, len: u32) -> Result<Vec<u8>, AppError> {
     if len > MAX_CHUNK {
@@ -350,8 +364,7 @@ pub fn archive_write_text_file(
         (JobState::Cancelled, _) => return Err(loc.error(ErrorCode::Cancelled)),
         (_, e) => return Err(e.unwrap_or_else(|| loc.error(ErrorCode::Io))),
     }
-    let (p, path) = vfs.remote(loc, Purpose::Browse)?;
-    remote_file_info(&*p, &path)
+    archive_file_info(vfs, loc)
 }
 
 #[cfg(test)]
@@ -668,6 +681,26 @@ mod tests {
         let v = Arc::new(crate::vfs::mem::vfs(&[]));
         let elevate: crate::ops::queue::Elevate = Arc::new(|| panic!("helper elevato non previsto"));
         (Queue::new(Arc::new(crate::ops::exec::LocalExecutor), elevate, v.clone(), Arc::new(|_| {})), v)
+    }
+
+    #[test]
+    fn archive_entry_date_is_as_reliable_as_its_container() {
+        let d = tempfile::tempdir().unwrap();
+        let (_z, loc) = zip_with_xml(d.path());
+        let (q, v) = queue();
+        // Le date DOS sono a 2 s, ma il salvataggio controlla anche dimensione e data del contenitore: su un disco
+        // locale l'editor non deve chiedere conferma come per un server FTP senza date precise.
+        assert!(archive_file_info(&v, &loc).unwrap().mtime_reliable);
+        let info = archive_write_text_file(&q, &v, &loc, "x", "utf-8", false, None, None).unwrap();
+        assert!(info.mtime_reliable);
+        // Sul remoto vale la precisione del server del contenitore.
+        let mut m = crate::vfs::mem::MemProvider::new();
+        m.precise_mtime = false;
+        let m = std::sync::Arc::new(m);
+        m.add_file("/t.zip", &std::fs::read(d.path().join("t.zip")).unwrap());
+        let rv = crate::vfs::mem::vfs(&[("m", &m)]);
+        let remote = Loc::archive(Loc::parse("ftp://m/t.zip").unwrap(), "/conf/a.xml");
+        assert!(!archive_file_info(&rv, &remote).unwrap().mtime_reliable);
     }
 
     #[test]

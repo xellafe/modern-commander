@@ -118,6 +118,19 @@ function upsert(job: JobView) {
   // Ogni nuovo job apre il pannello sulla scheda Operazioni.
   if (isNew && job.state.type === "queued") useUi.setState({ bottomPanelVisible: true, bottomPanelTab: "operations" });
   if (ended) reloadRemoteTabs(job);
+  if (ended) showRefusal(job);
+}
+
+/**
+ * Un job rifiutato prima di cominciare (dentro se stesso, sorgente sparita...) non ha avuto prompt: l'errore va anche
+ * nella scheda attiva, non solo nella vista Operazioni.
+ */
+function showRefusal(job: JobView) {
+  const [e] = job.errors;
+  if (job.state.type !== "failed" || job.filesTotal > 0 || !e) return;
+  const l = useLayout.getState();
+  const tabId = l.groups.find((g) => g.id === l.activeGroupId)?.activeTabId;
+  if (tabId) useTabViews.getState().showNotice(tabId, e);
 }
 
 /** Eventi della coda e stato iniziale (anche dopo il ricaricamento della webview: prompt compresi). */

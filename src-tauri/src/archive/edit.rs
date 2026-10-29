@@ -183,11 +183,9 @@ impl ZipEdit {
                 let r = write_zip(file, &tmp, entries, source.as_deref(), &container, progress).and_then(|_| {
                     // Il contenitore non resta aperto dall'indice in cache mentre lo si sostituisce: Windows non
                     // sostituisce un file aperto, neanche con la condivisione in eliminazione.
-                    // ponytail: una lettura in corso nello stesso istante (estrazione, F3) lo tiene aperto e la
-                    // rinomina fallisce con `ACCESS_DENIED`, originale intatto; servirebbe la rinomina POSIX.
                     drop(source);
                     vfs.archives().invalidate(&container);
-                    LocalProvider.rename(&tmp.to_string_lossy(), &path, self.replace)
+                    replace_when_free(&tmp.to_string_lossy(), &path, self.replace)
                 });
                 if r.is_err() {
                     let _ = std::fs::remove_file(to_extended(&tmp));
@@ -199,6 +197,24 @@ impl ZipEdit {
                 let written = write_zip(create(&tmp)?, &tmp, entries, source.as_deref(), &container, progress)?;
                 install(vfs, &container, &tmp, self.replace, &mut |n| progress(written + n))
             }
+        }
+    }
+}
+
+/// Rinomina locale di `tmp` sul contenitore. Windows non sostituisce un file aperto: una lettura breve dello stesso
+/// ZIP in quel momento (l'ispettore che lo rielenca perché il `.mcpart` ha fatto ricaricare la cartella, un'anteprima,
+/// l'antivirus sul file appena scritto) darebbe `ACCESS_DENIED`. Si riprova per un paio di secondi, oltre `IDLE`.
+// ponytail: una lettura lunga (estrazione in corso) supera l'attesa e resta `ACCESS_DENIED`, originale intatto; la
+// rinomina POSIX (FileRenameInfoEx) eviterebbe l'attesa sui volumi NTFS locali.
+fn replace_when_free(tmp: &str, path: &str, replace: bool) -> Result<(), AppError> {
+    let mut left = 20;
+    loop {
+        match LocalProvider.rename(tmp, path, replace) {
+            Err(e) if left > 0 && matches!(e.code, ErrorCode::AccessDenied | ErrorCode::FileInUse) => {
+                left -= 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            r => return r,
         }
     }
 }
@@ -556,6 +572,27 @@ mod tests {
         }
         assert_eq!(std::fs::read(&z).unwrap(), orig);
         assert!(parts_in(d.path()).is_empty());
+    }
+
+    #[test]
+    fn commit_waits_for_a_reader_still_reading_the_zip() {
+        let (_d, z) = local_zip();
+        let v = vfs(&[]);
+        let c = Loc::Local(z.clone());
+        let mut e = ZipEdit::open(&v, &c).unwrap();
+        let s = e.stage_file().unwrap();
+        std::fs::write(&s, b"nuovo").unwrap();
+        e.put("/new.txt", s, None);
+        // Una lettura in corso nello stesso istante: il `.mcpart` accanto allo ZIP fa ricaricare la cartella e
+        // l'ispettore rilegge lo ZIP mentre lo si sostituisce. Windows rifiuta la sostituzione finché è aperto.
+        let reader = crate::fs::content::open_shared(&z).unwrap();
+        let held = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(reader);
+        });
+        e.commit(&v, &mut |_| true).unwrap();
+        held.join().unwrap();
+        assert!(names(std::fs::read(&z).unwrap()).contains(&"new.txt".to_string()));
     }
 
     #[test]

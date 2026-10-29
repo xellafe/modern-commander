@@ -114,6 +114,23 @@ test("a job that finishes reloads every open archive tab, even for a job on loca
   expect(reload.mock.calls).toEqual([["a"]]);
 });
 
+test("a job refused before it starts shows its error in the active tab, not only in Operations", async () => {
+  let emit!: (j: JobView) => void;
+  vi.mocked(api.listJobs).mockResolvedValue([]);
+  vi.mocked(api.onJobUpdated).mockImplementation(async (cb) => ((emit = cb), () => {}));
+  await initJobs();
+  useLayout.setState({ tabs: { t: { id: "t", path: "C:\\" } }, groups: [{ id: "g", tabIds: ["t"], activeTabId: "t" }], activeGroupId: "g" });
+  const showNotice = vi.fn();
+  useTabViews.setState({ reload: vi.fn(async () => {}), showNotice });
+  const into = { code: "INTO_ITSELF", path: "C:\\rel\\a.zip", detail: null } as const;
+  emit({ ...withState(10, "failed"), filesTotal: 0, errors: [into] });
+  expect(showNotice).toHaveBeenCalledWith("t", into);
+  // Un job fallito dopo aver lavorato degli elementi ha già mostrato i suoi errori nei prompt.
+  showNotice.mockClear();
+  emit({ ...withState(11, "failed"), filesTotal: 3, errors: [into] });
+  expect(showNotice).not.toHaveBeenCalled();
+});
+
 test("a job that finishes reloads the tabs on its remote connections, once", async () => {
   let emit!: (j: JobView) => void;
   vi.mocked(api.listJobs).mockResolvedValue([]);
